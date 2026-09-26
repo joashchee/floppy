@@ -6,6 +6,25 @@ All notable changes to Floppy are recorded here. Format loosely follows
 Update this file whenever a change lands. A short bullet is enough, dated
 against the day the change was made.
 
+## Unreleased
+
+- **App versions** (2026-09-27): Floppy tells DOS app versions, and
+  different apps with the same program name (`WORD.EXE`), apart.
+  - Each DOS app's programs are fingerprinted (size and SHA-256). One
+    that matches a row of the new "Known versions" table in
+    `docs/app-handlers.md` is recognized as that app and version.
+  - After a session with an app Floppy only knows by its program's
+    name, it asks "Which app was this?". The app's details have the
+    same choice (**Is** and **Version**), and the library list shows
+    each app's identity.
+  - Keep several versions side by side, and mark one the **favorite**:
+    "Open with" puts it first, even for a document last opened in
+    another version. Import Apps Disc brings each version in once.
+  - Test results record the confirmed app, version and fingerprint, so
+    two `WORD.EXE`s keep separate records. Test reports are version 2,
+    and `merge-handler-tests.py` adds confirmed versions to Known
+    versions, reporting any fingerprint already listed as something else.
+
 ## 0.3.0 (2026-09-27)
 
 - **Basilisk II is bundled** (2026-09-27): the classic Mac works out of

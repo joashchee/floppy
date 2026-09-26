@@ -15,7 +15,7 @@ Floppy runs. Floppy uses it three ways:
 Floppy never downloads or ships an app (rule 3): only the user's own
 copies are found.
 
-**Last checked: 2026-09-26.** Re-check entries marked *believed* when
+**Last checked: 2026-09-27.** Re-check entries marked *believed* when
 you can, and update the date and the check log at the bottom.
 
 **The code copy** is `HANDLERS` in `src-tauri/src/handlers.rs`. Keep the
@@ -52,6 +52,24 @@ wanted-apps list asks for.
 
 A document whose extension several apps open (`.DOC`: WordPerfect and
 Word) is offered to each of them.
+
+### Versions, and programs that share a name
+
+A DOS program keeps its name from version to version (`WP.EXE` is
+WordPerfect 4.2 to 6.2), and different apps use the same name
+(`WORD.EXE`). So a name is only a guess. Floppy settles what an app is
+in one of two ways:
+
+- **By fingerprint:** one of its programs matches a row of
+  [Known versions](#known-versions) by size and SHA-256.
+- **By the user:** after a session with an app that isn't settled yet,
+  whose program is named like one above, Floppy asks "Which app was
+  this?". The same choice is in the app's details (**Is** and
+  **Version**).
+
+The library keeps any number of versions of an app side by side. One of
+them can be the **favorite**, which documents of its types open with,
+even a document last opened in another version.
 
 ## Classic Mac
 
@@ -123,6 +141,29 @@ yet.
 | PageStream | `PageStream` | its own documents | believed |
 | MultiView | `MultiView` | IFF `ILBM` `8SVX` `FTXT`, AmigaGuide | believed (part of Workbench 3) |
 
+## Known versions
+
+Handler versions known by their program's fingerprint: size in bytes and
+SHA-256 of the program file. A new import whose program matches a row is
+identified as that app and version without asking.
+
+Rows come from test reports (`scripts/merge-handler-tests.py`, below):
+a result for an app the user said was, for example, WordPerfect 5.1
+carries that program's fingerprint, and merging it adds or updates the
+row. Worked and Failed are totals across its tests, over all file types.
+A version that has failed more often than it worked is still listed,
+since it's still that version. Only fingerprints are published, never
+the program itself (rule 3).
+
+Floppy reads this table straight from this file (`handlers.rs`,
+`known_versions`), so there's no code copy to keep in step. A unit test
+fails if a row doesn't parse or names an app that isn't above.
+
+<!-- versions:start -->
+| Guest | App | Version | Program | Size | SHA-256 | Worked | Failed | Last tested |
+|---|---|---|---|---|---|---|---|---|
+<!-- versions:end -->
+
 ## Tested in Floppy
 
 Whether an app opened a file type correctly in its emulator, from users'
@@ -140,11 +181,15 @@ Each report is merged once (its ID is recorded below). The script adds a
 check-log row, and suggests *believed* entries that tests now back up.
 Reports carry no document names, only the file type. Counts are totals
 across all merged reports. An entry that failed more often than it
-worked needs a look before it's trusted.
+worked needs a look before it's trusted. The App column is the handler
+only when the user or a fingerprint confirmed it; otherwise it's the
+app's name in that user's library, and the version is blank. Results
+with a confirmed app, a version and a fingerprint also go into
+[Known versions](#known-versions).
 
 <!-- tested:start -->
-| Guest | App | Program | File type | Worked | Failed | Last tested | Notes |
-|---|---|---|---|---|---|---|---|
+| Guest | App | Version | Program | File type | Worked | Failed | Last tested | Notes |
+|---|---|---|---|---|---|---|---|---|
 <!-- tested:end -->
 <!-- merged-reports: -->
 
@@ -181,13 +226,16 @@ WP.EXE
 - Every file named like a program above is imported as an app of that
   guest. DOS and Amiga apps are imported with their folder. A Mac app is
   imported with its folder, and its `._` files restore the forks.
-- Apps already in the library are skipped, and each app is imported
-  once, even when the disc holds copies from several drives.
+- A DOS app is imported once per version: a copy whose program is byte
+  for byte one already in the library, or already imported from the
+  disc, is skipped, and a different version comes in beside it. Mac and
+  Amiga apps are imported once, and not when the library has them.
 
 ## Check log
 
 | Date | What was checked | Result |
 |---|---|---|
+| 2026-09-27 | Added version tracking: the Known versions table, and a Version column in Tested in Floppy | No versions known yet. They arrive with version 2 test reports, which carry fingerprints. |
 | 2026-09-26 | Mac type/creator codes (whitefiles.org list), Amiga IFF FORM registry (AmigaOS wiki), DOS program names (DOS Days, WPDOS, PCjs, Internet Archive, WinWorld), Quattro Pro and OctaMED formats | Table above. DOS programs for Word, Works, dBASE, Paradox, Deluxe Paint, PC Paintbrush, AutoCAD, Turbo Pascal and Quattro Pro, and most Amiga program names, are still *believed*. |
 
 ## Sources

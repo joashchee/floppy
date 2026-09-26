@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 use walkdir::WalkDir;
 
-use crate::handlers::HANDLERS;
+use crate::handlers;
 use crate::verify::{self, Tally};
 use crate::library::{GuestOs, LibraryApp, LibraryDoc};
 
@@ -30,6 +30,10 @@ pub struct Opener {
     pub app_name: String,
     /// Relative to the app's folder, `/`-separated.
     pub program: String,
+    /// The app's version, when known.
+    pub version: Option<String>,
+    /// The favorite version of its handler (library.rs).
+    pub favorite: bool,
     /// Why it's offered: "WordPerfect opens .WP5 files", or the user said so.
     pub why: String,
     /// How often it opened this file type correctly, and how often not,
@@ -46,49 +50,69 @@ fn base_of(program: &str) -> String {
     program.rsplit('/').next().unwrap_or(program).to_ascii_uppercase()
 }
 
-/// The library's DOS apps that can open `file`, the one the document last
-/// opened with first, then ones the user said open its type, then the
-/// well-known table's. Within each, apps that opened this type correctly
-/// come first, and an app that has failed with it more often than it
-/// worked goes last whatever its rank.
+/// The handler an app is that opens `.ext`, and the program to run. An
+/// app whose identity is settled uses just that (none, if it isn't a
+/// handler). Otherwise its program names are the only clue, which the
+/// reason says.
+fn known_opener(app: &LibraryApp, ext: &str) -> Option<(String, String)> {
+    if let Some(identity) = &app.identity {
+        let h = handlers::find(GuestOs::Dos, identity.handler.as_deref()?)?;
+        let program = handlers::handler_program(app, h)?;
+        return h.exts.contains(&ext).then(|| (program.clone(), format!("{} opens .{ext} files.", h.name)));
+    }
+    app.programs.iter().find_map(|p| {
+        let h = handlers::candidates(GuestOs::Dos, p).into_iter().find(|h| h.exts.contains(&ext))?;
+        Some((p.clone(), format!("{} opens .{ext} files. Floppy is going by the name {}, so say which app this is in its details.", h.name, base_of(p))))
+    })
+}
+
+/// The library's DOS apps that can open `file`, best first:
+/// 1. the app the document last opened with, or its handler's favorite
+///    version when the user has picked another since;
+/// 2. apps the user said open its type;
+/// 3. apps the well-known table says do.
+///
+/// Within each, the favorite version of a handler comes before its other
+/// versions, then apps that opened this type correctly. An app that has
+/// failed with it more often than it worked goes last whatever its rank.
 pub fn dos_openers(file: &str, remembered: Option<&str>, apps: &[LibraryApp], tests: &[Tally]) -> Vec<Opener> {
     let ext = ext_of(file);
     if ext.is_empty() {
         return Vec::new();
     }
+    let dos: Vec<&LibraryApp> = apps.iter().filter(|a| a.os == GuestOs::Dos).collect();
+    // The favorite of the remembered app's handler stands in for it.
+    let first = remembered.map(|id| {
+        dos.iter()
+            .find(|a| a.id == id)
+            .and_then(|r| r.handler())
+            .and_then(|h| dos.iter().find(|a| a.favorite && a.handler() == Some(h)))
+            .map_or(id, |f| f.id.as_str())
+    });
     let mut out: Vec<(u8, Opener)> = Vec::new();
-    for app in apps.iter().filter(|a| a.os == GuestOs::Dos) {
+    for app in dos {
         let said = app.opens.iter().any(|e| e.eq_ignore_ascii_case(&ext));
-        let known = app.programs.iter().find_map(|p| {
-            HANDLERS
-                .iter()
-                .filter(|h| h.os == GuestOs::Dos)
-                .find(|h| h.programs.contains(&base_of(p).as_str()) && h.exts.contains(&ext.as_str()))
-                .map(|h| (p, h))
-        });
-        let opener = match (said, known) {
-            (true, _) => app.program.clone().or_else(|| app.programs.first().cloned()).map(|program| {
-                (1, Opener { app_id: app.id.clone(), app_name: app.name.clone(), program, why: format!("You said {} opens .{ext} files.", app.name), worked: 0, failed: 0 })
-            }),
-            (false, Some((p, k))) => {
-                Some((2, Opener { app_id: app.id.clone(), app_name: app.name.clone(), program: p.clone(), why: format!("{} opens .{ext} files.", k.name), worked: 0, failed: 0 }))
-            }
-            _ => None,
+        let chosen = if said {
+            app.program.clone().or_else(|| app.programs.first().cloned()).map(|p| (1, p, format!("You said {} opens .{ext} files.", app.name)))
+        } else {
+            known_opener(app, &ext).map(|(p, why)| (2, p, why))
         };
-        if let Some((rank, mut o)) = opener {
-            (o.worked, o.failed) = verify::record_for(tests, GuestOs::Dos, base_of(&o.program).as_str(), &format!(".{ext}"));
-            let rank = if o.failed > o.worked {
-                3
-            } else if remembered == Some(o.app_id.as_str()) {
-                0
-            } else {
-                rank
-            };
-            out.push((rank, o));
-        }
+        let Some((rank, program, why)) = chosen else { continue };
+        let sha256 = app.program_ids.get(&program).map(|id| id.sha256.as_str());
+        let (worked, failed) = verify::record_for(tests, GuestOs::Dos, &base_of(&program), sha256, &format!(".{ext}"));
+        let rank = if failed > worked {
+            3
+        } else if first == Some(app.id.as_str()) {
+            0
+        } else {
+            rank
+        };
+        let version = app.identity.as_ref().and_then(|i| i.version.clone());
+        out.push((rank, Opener { app_id: app.id.clone(), app_name: app.name.clone(), program, version, favorite: app.favorite, why, worked, failed }));
     }
     out.sort_by(|a, b| {
         a.0.cmp(&b.0)
+            .then_with(|| b.1.favorite.cmp(&a.1.favorite))
             .then_with(|| b.1.worked.cmp(&a.1.worked))
             .then_with(|| a.1.app_name.to_lowercase().cmp(&b.1.app_name.to_lowercase()))
     });
@@ -152,6 +176,7 @@ pub fn changes(before: &Snapshot, after: &Snapshot) -> Vec<Change> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::library::{IdentifiedBy, Identity};
     use crate::testutil::TempDir;
 
     fn app(id: &str, name: &str, programs: &[&str], opens: &[&str]) -> LibraryApp {
@@ -165,6 +190,9 @@ mod tests {
             source_name: name.into(),
             added: 0,
             opens: opens.iter().map(|e| e.to_string()).collect(),
+            program_ids: Default::default(),
+            identity: None,
+            favorite: false,
         }
     }
 
@@ -185,7 +213,8 @@ mod tests {
         assert!(names("PHOTO.JPG", None).is_empty());
         assert!(names("README", None).is_empty());
         let wp = &dos_openers("A.WP5", None, &apps, &[])[0];
-        assert_eq!((wp.program.as_str(), wp.why.as_str()), ("WP.EXE", "WordPerfect opens .WP5 files."));
+        assert_eq!(wp.program, "WP.EXE");
+        assert!(wp.why.starts_with("WordPerfect opens .WP5 files. Floppy is going by the name WP.EXE"), "{}", wp.why);
         assert_eq!(dos_openers("A.TXT", None, &apps, &[])[0].program, "BIN/ED.COM");
 
         // Test results: an app that worked with .DOC moves up; one that
@@ -193,7 +222,11 @@ mod tests {
         let tally = |program: &str, worked, failed| Tally {
             os: GuestOs::Dos,
             app: program.into(),
+            confirmed: false,
+            version: None,
             program: program.into(),
+            size: None,
+            sha256: None,
             file_type: ".DOC".into(),
             worked,
             failed,
@@ -205,6 +238,38 @@ mod tests {
         let ranked = dos_openers("LETTER.DOC", Some("ed"), &apps, &tests);
         assert_eq!(ranked.iter().map(|o| o.app_id.as_str()).collect::<Vec<_>>(), ["wp", "word", "ed"]);
         assert_eq!((ranked[0].worked, ranked[0].failed), (2, 0));
+    }
+
+    fn known(mut a: LibraryApp, handler: Option<&str>, version: &str, favorite: bool) -> LibraryApp {
+        a.identity = Some(Identity { handler: handler.map(String::from), version: Some(version.into()), by: IdentifiedBy::User });
+        a.favorite = favorite;
+        a
+    }
+
+    #[test]
+    fn several_versions_open_with_the_favorite_first() {
+        let apps = vec![
+            known(app("wp50", "WordPerfect 5.0", &["WP.EXE"], &[]), Some("WordPerfect"), "5.0", false),
+            known(app("wp51", "WordPerfect 5.1", &["WP.EXE"], &[]), Some("WordPerfect"), "5.1", true),
+            known(app("wp60", "WordPerfect 6.0", &["WPWIN/WP.EXE"], &[]), Some("WordPerfect"), "6.0", false),
+        ];
+        let ids = |remembered| dos_openers("A.WP5", remembered, &apps, &[]).into_iter().map(|o| o.app_id).collect::<Vec<_>>();
+        assert_eq!(ids(None), ["wp51", "wp50", "wp60"]);
+        // A document last opened in 5.0 opens in the favorite now.
+        assert_eq!(ids(Some("wp50")), ["wp51", "wp50", "wp60"]);
+        let o = &dos_openers("A.WP5", None, &apps, &[])[0];
+        assert_eq!((o.version.as_deref(), o.favorite, o.why.as_str()), (Some("5.1"), true, "WordPerfect opens .WP5 files."));
+        assert_eq!(dos_openers("A.WP5", None, &apps, &[])[2].program, "WPWIN/WP.EXE");
+    }
+
+    #[test]
+    fn a_program_named_like_a_handler_that_isnt_one_opens_nothing() {
+        let apps = vec![
+            known(app("word", "WORD (a game)", &["WORD.EXE"], &[]), None, "", false),
+            known(app("msword", "Word 5.5", &["WORD.EXE"], &[]), Some("Microsoft Word (DOS)"), "5.5", false),
+        ];
+        let ids: Vec<String> = dos_openers("LETTER.DOC", None, &apps, &[]).into_iter().map(|o| o.app_id).collect();
+        assert_eq!(ids, ["msword"]);
     }
 
     #[test]

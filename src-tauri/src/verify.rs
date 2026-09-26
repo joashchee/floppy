@@ -5,9 +5,12 @@
 //! `scripts/merge-handler-tests.py` merges reports into
 //! `docs/app-handlers.md`'s "Tested in Floppy" table.
 //!
-//! A result records the guest, the app (and the handler it is, when
-//! known), the program, the file type, the outcome, an optional note, and
-//! the date. It never records the document's name or contents.
+//! A result records the guest, the app (and the handler and version it
+//! is, when the user or a known fingerprint settled that), the program
+//! and its size and SHA-256, the file type, the outcome, an optional
+//! note, and the date. It never records the document's name or contents.
+//! The fingerprint is what lets a merged report add the version to
+//! `docs/app-handlers.md`'s "Known versions" table.
 
 use std::collections::BTreeMap;
 
@@ -27,11 +30,22 @@ pub enum Outcome {
 #[serde(rename_all = "camelCase")]
 pub struct Pending {
     pub os: GuestOs,
+    /// The library app. Its identity is read when the answer is
+    /// recorded, so one confirmed after the session counts.
+    #[serde(default)]
+    pub app_id: String,
     pub app_name: String,
     /// The program's file name (`WP.EXE`).
     pub program: String,
-    /// The handler this app is (handlers.rs), when it's a known one.
+    /// The handler this app is (handlers.rs), when it's known.
     pub handler: Option<String>,
+    #[serde(default)]
+    pub version: Option<String>,
+    /// The program's fingerprint, when Floppy has it.
+    #[serde(default)]
+    pub size: Option<u64>,
+    #[serde(default)]
+    pub sha256: Option<String>,
     /// `.WP5`, a Mac type code, or `(none)`.
     pub file_type: String,
     /// The document's name, for the question only. Not stored.
@@ -46,6 +60,12 @@ pub struct Verification {
     pub app_name: String,
     pub program: String,
     pub handler: Option<String>,
+    #[serde(default)]
+    pub version: Option<String>,
+    #[serde(default)]
+    pub size: Option<u64>,
+    #[serde(default)]
+    pub sha256: Option<String>,
     pub file_type: String,
     pub outcome: Outcome,
     pub note: Option<String>,
@@ -54,14 +74,23 @@ pub struct Verification {
     pub floppy_version: String,
 }
 
-/// Every answer for one guest + app + file type.
+/// Every answer for one guest + app + version + program + file type.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Tally {
     pub os: GuestOs,
     /// The handler's name when known, else the app's.
     pub app: String,
+    /// Whether `app` is a handler the user or a fingerprint confirmed.
+    #[serde(default)]
+    pub confirmed: bool,
+    #[serde(default)]
+    pub version: Option<String>,
     pub program: String,
+    #[serde(default)]
+    pub size: Option<u64>,
+    #[serde(default)]
+    pub sha256: Option<String>,
     pub file_type: String,
     pub worked: u32,
     pub failed: u32,
@@ -103,6 +132,9 @@ pub fn record(library: &Library, pending: &Pending, outcome: Outcome, note: Opti
         app_name: pending.app_name.clone(),
         program: pending.program.clone(),
         handler: pending.handler.clone(),
+        version: pending.version.clone(),
+        size: pending.size,
+        sha256: pending.sha256.clone(),
         file_type: pending.file_type.clone(),
         outcome,
         note,
@@ -118,16 +150,28 @@ pub fn tallies(library: &Library) -> Vec<Tally> {
 }
 
 pub fn tally(all: &[Verification]) -> Vec<Tally> {
-    let mut map: BTreeMap<(String, String, String, String), Tally> = BTreeMap::new();
+    type Key = (String, String, String, String, String, String);
+    let mut map: BTreeMap<Key, Tally> = BTreeMap::new();
     let mut sorted: Vec<&Verification> = all.iter().collect();
     sorted.sort_by_key(|v| v.when);
     for v in sorted {
         let app = v.handler.clone().unwrap_or_else(|| v.app_name.clone());
-        let key = (format!("{:?}", v.os), app.to_lowercase(), v.program.to_ascii_uppercase(), v.file_type.to_ascii_uppercase());
+        let key = (
+            format!("{:?}", v.os),
+            app.to_lowercase(),
+            v.version.clone().unwrap_or_default(),
+            v.program.to_ascii_uppercase(),
+            v.sha256.clone().unwrap_or_default(),
+            v.file_type.to_ascii_uppercase(),
+        );
         let t = map.entry(key).or_insert_with(|| Tally {
             os: v.os,
             app,
+            confirmed: v.handler.is_some(),
+            version: v.version.clone(),
             program: v.program.clone(),
+            size: v.size,
+            sha256: v.sha256.clone(),
             file_type: v.file_type.clone(),
             worked: 0,
             failed: 0,
@@ -150,11 +194,18 @@ pub fn tally(all: &[Verification]) -> Vec<Tally> {
     map.into_values().collect()
 }
 
-/// A program's record for a file type: (worked, failed).
-pub fn record_for(tallies: &[Tally], os: GuestOs, program: &str, file_type: &str) -> (u32, u32) {
+/// A program's record for a file type: (worked, failed). With its
+/// SHA-256, only answers about that exact program count, plus older ones
+/// recorded without a fingerprint under its name. Two apps that share a
+/// program name (`WORD.EXE`) keep separate records that way.
+pub fn record_for(tallies: &[Tally], os: GuestOs, program: &str, sha256: Option<&str>, file_type: &str) -> (u32, u32) {
     tallies
         .iter()
         .filter(|t| t.os == os && t.program.eq_ignore_ascii_case(program) && t.file_type.eq_ignore_ascii_case(file_type))
+        .filter(|t| match (sha256, t.sha256.as_deref()) {
+            (Some(want), Some(had)) => want.eq_ignore_ascii_case(had),
+            _ => true,
+        })
         .fold((0, 0), |(w, f), t| (w + t.worked, f + t.failed))
 }
 
@@ -184,7 +235,8 @@ pub fn report(library: &Library) -> Report {
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
     Report {
         format: "floppy-handler-tests".into(),
-        version: 1,
+        // 2: tallies carry confirmed, version, size and sha256.
+        version: 2,
         id: format!("{:x}-{:x}", now.as_nanos(), std::process::id()),
         floppy_version: env!("CARGO_PKG_VERSION").to_string(),
         exported: now.as_secs(),
@@ -200,9 +252,13 @@ mod tests {
     fn pending(program: &str, file_type: &str) -> Pending {
         Pending {
             os: GuestOs::Dos,
+            app_id: "dos-wp51".into(),
             app_name: "WordPerfect 5.1".into(),
             program: program.into(),
             handler: Some("WordPerfect".into()),
+            version: Some("5.1".into()),
+            size: Some(4),
+            sha256: Some("aa".repeat(32)),
             file_type: file_type.into(),
             document: "Letter to Bank.wp5".into(),
         }
@@ -222,13 +278,36 @@ mod tests {
         assert_eq!((wp5.app.as_str(), wp5.worked, wp5.failed, wp5.last_outcome), ("WordPerfect", 2, 1, Outcome::Failed));
         // Notes are trimmed, and kept to one table-safe line.
         assert_eq!(wp5.notes, ["fine", "garbled   tables"]);
-        assert_eq!(record_for(&all, GuestOs::Dos, "wp.exe", ".doc"), (0, 1));
+        assert_eq!(record_for(&all, GuestOs::Dos, "wp.exe", None, ".doc"), (0, 1));
+        assert_eq!((wp5.version.as_deref(), wp5.confirmed, wp5.size), (Some("5.1"), true, Some(4)));
         // The document's name is never stored.
         let raw = std::fs::read_to_string(lib.verifications_path()).unwrap();
         assert!(!raw.contains("Letter to Bank"));
         assert_eq!(report(&lib).tallies, all);
         forget_all(&lib).unwrap();
         assert!(tallies(&lib).is_empty());
+    }
+
+    #[test]
+    fn same_named_programs_keep_separate_records() {
+        let t = TempDir::new();
+        let lib = Library::new(t.path().join("lib"));
+        let word = |sha: &str, handler: Option<&str>| Pending {
+            app_id: format!("dos-{sha}"),
+            app_name: "WORD".into(),
+            handler: handler.map(String::from),
+            version: None,
+            sha256: Some(sha.repeat(64)),
+            ..pending("WORD.EXE", ".DOC")
+        };
+        record(&lib, &word("a", Some("Microsoft Word (DOS)")), Outcome::Worked, None).unwrap();
+        record(&lib, &word("b", None), Outcome::Failed, None).unwrap();
+        let all = tallies(&lib);
+        assert_eq!(all.len(), 2);
+        assert_eq!(record_for(&all, GuestOs::Dos, "WORD.EXE", Some(&"a".repeat(64)), ".DOC"), (1, 0));
+        assert_eq!(record_for(&all, GuestOs::Dos, "WORD.EXE", Some(&"b".repeat(64)), ".DOC"), (0, 1));
+        let other = all.iter().find(|t| !t.confirmed).unwrap();
+        assert_eq!(other.app, "WORD", "an app nobody identified is filed under its own name");
     }
 
     #[test]

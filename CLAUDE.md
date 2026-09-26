@@ -9,7 +9,8 @@ and `docs/floppy-notes.md` is a condensed history of the work so far.
 the system files setup asks for. `docs/app-handlers.md` is a living list
 of old apps that open old formats (confidence and sources per entry).
 Its code copy is `HANDLERS` in `handlers.rs`, and a test keeps the two in
-step. Re-check it and update its date when
+step. Its "Known versions" table (program fingerprints) has no code
+copy: `handlers.rs` reads it straight from the document. Re-check it and update its date when
 touching setup.
 
 This repo is public. Anything about closed-source sister apps (where
@@ -132,12 +133,24 @@ gitignored `CLAUDE.local.md`, never in committed files.
   extensions, Mac creator and type codes, and Amiga IFF types. It drives
   document matching (`documents.rs`), the wanted-apps list, and Import
   Apps Disc.
+- **Versions and identity:** a program's name is only a guess (versions
+  share `WP.EXE`, different apps share `WORD.EXE`). Each DOS app keeps
+  its programs' size and SHA-256 (`program_ids`, backfilled by
+  `list_apps` for older libraries) and an `identity`: handler and
+  version, set when a program matches a "Known versions" row (`hash`)
+  or by the user (`user`). Unsettled apps whose program is named like a
+  handler get "Which app was this?" after a session (`identify_ask`),
+  and the details panel has **Is** and **Version**. The library holds
+  any number of versions. One per handler can be the `favorite`, which
+  "Open with" puts first, even for a document last opened in another
+  version.
 - **Save Wanted-Apps List…** writes the missing-files list format for
   every handler not in the library, plus `#gather: folder` (bring each
   matched file's folder) and `#forks: appledouble` (keep Mac forks as
   `._` files). **Import Apps Disc…** imports each handler found on the
-  disc with its folder, once, nearest the root first, skipping ones
-  already in the library.
+  disc with its folder, nearest the root first. DOS apps come in once
+  per version (by program fingerprint), beside any already there. Mac
+  and Amiga apps come in once, skipping ones already in the library.
 
 ## Asking Diskette (`request.rs`)
 
@@ -164,15 +177,20 @@ gitignored `CLAUDE.local.md`, never in committed files.
 
 - After each document session Floppy asks "Did <app> open <document>
   correctly?" (Worked / Didn't Work, optional note). Answers go in
-  `library/verifications.json`, keyed by guest, app (or handler),
-  program and file type, never the document's name.
+  `library/verifications.json`, keyed by guest, app (the handler only
+  when confirmed), version, program and its SHA-256, and file type,
+  never the document's name. The identity is read when the answer is
+  recorded, so one confirmed after the session counts.
 - Totals rank "Open with": apps that worked with the type rise, and one
   that failed more than it worked goes last. The menu shows each app's
   record.
-- **Export Test Report…** writes a `floppy-handler-tests` JSON report,
-  only when asked (rule 4). `scripts/merge-handler-tests.py` merges
-  reports into `docs/app-handlers.md`'s "Tested in Floppy" table, once
-  per report ID, and suggests *believed* entries to promote.
+- **Export Test Report…** writes a `floppy-handler-tests` JSON report
+  (version 2: with version and fingerprint), only when asked (rule 4).
+  `scripts/merge-handler-tests.py` merges reports into
+  `docs/app-handlers.md`'s "Tested in Floppy" table, once per report ID,
+  adds confirmed versions with fingerprints to "Known versions" (a
+  fingerprint already listed as something else is reported, not
+  changed), and suggests *believed* entries to promote.
 
 ## How DOS mode works
 

@@ -455,3 +455,7 @@ button.icontext-btn .btn-icon { display: inline-flex; width: 14px; height: 14px;
 .about-emulators li:last-child { border-bottom: none; }
 .about-emulators li span:last-child { color: var(--muted); font-family: var(--font-mono); font-size: 12px; }
 .about-emulators li span.warn { color: var(--warn); }
+/* A checkbox with its sentence, in a details panel */
+.field-check { display: flex; align-items: flex-start; gap: 8px; font-size: 13px; color: var(--text); line-height: 1.4; }
+.field-check input[type="checkbox"] { flex-shrink: 0; width: 15px; height: 15px; margin: 2px 0 0; accent-color: var(--accent); }
+.dialog-box .field { margin-top: 12px; }

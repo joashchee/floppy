@@ -19,6 +19,43 @@ export interface LibraryApp {
   added: number;
   /** Document extensions the user says this app opens (uppercase, no dot). */
   opens: string[];
+  /** Each program's fingerprint, keyed like `programs` (DOS). */
+  programIds: Record<string, { size: number; sha256: string }>;
+  /** Which handler app this is and its version, once known; null until then. */
+  identity: AppIdentity | null;
+  /** The version its handler's documents open with. */
+  favorite: boolean;
+}
+
+/** library.rs `Identity`. `handler: null` means it isn't one of the known apps. */
+export interface AppIdentity {
+  handler: string | null;
+  version: string | null;
+  /** "hash": a program matched a known version; "user": the user said. */
+  by: "hash" | "user";
+}
+
+/** handlers.rs `HandlerInfo`: a known app that opens old files. */
+export interface HandlerInfo {
+  name: string;
+  programs: string[];
+  exts: string[];
+  /** Versions known by fingerprint. */
+  versions: string[];
+}
+
+/** Handlers an app might be, going by its program names alone. */
+export function handlerCandidates(app: LibraryApp, handlers: HandlerInfo[]): HandlerInfo[] {
+  const names = app.programs.map((p) => p.split("/").pop()!.toUpperCase());
+  return handlers.filter((h) => h.programs.some((p) => names.includes(p.toUpperCase())));
+}
+
+/** An app's identity for a list row: "WordPerfect 5.1", "WordPerfect?", or "". */
+export function identityLabel(app: LibraryApp, handlers: HandlerInfo[]): string {
+  const id = app.identity;
+  if (id) return id.handler ? [id.handler, id.version].filter(Boolean).join(" ") : "";
+  const guess = handlerCandidates(app, handlers);
+  return guess.length ? `${guess.map((h) => h.name).join(" or ")}?` : "";
 }
 
 /** library.rs `LibraryDoc`: an old file to open in an app that made it. */
@@ -38,6 +75,9 @@ export interface Opener {
   appId: string;
   appName: string;
   program: string;
+  version: string | null;
+  /** The favorite version of its app. */
+  favorite: boolean;
   why: string;
   /** How often it opened this file type correctly, and how often not (verify.rs). */
   worked: number;
@@ -47,9 +87,13 @@ export interface Opener {
 /** verify.rs `Pending`: what to ask after a document session. */
 export interface PendingVerification {
   os: GuestOs;
+  appId: string;
   appName: string;
   program: string;
   handler: string | null;
+  version: string | null;
+  size: number | null;
+  sha256: string | null;
   fileType: string;
   document: string;
 }
@@ -57,8 +101,13 @@ export interface PendingVerification {
 /** verify.rs `Tally`: every answer for one app and file type. */
 export interface HandlerTest {
   os: GuestOs;
+  /** The known app when confirmed, else the app's own name. */
   app: string;
+  confirmed: boolean;
+  version: string | null;
   program: string;
+  size: number | null;
+  sha256: string | null;
   fileType: string;
   worked: number;
   failed: number;
@@ -81,6 +130,18 @@ export interface SessionReport {
   changes: { path: string; name: string; new: boolean }[];
   /** For a document session: what to ask the user about. */
   verify: PendingVerification | null;
+  /** Which app it was, when that isn't settled yet. */
+  identify: IdentifyAsk | null;
+}
+
+/** commands.rs `IdentifyAsk`: a program named like a known app ran; which app was it? */
+export interface IdentifyAsk {
+  appId: string;
+  appName: string;
+  /** The program's file name (`WORD.EXE`). */
+  program: string;
+  /** Known apps with a program of that name. */
+  candidates: string[];
 }
 
 /** A document's path as DOS sees it. */

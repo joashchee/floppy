@@ -31,6 +31,9 @@ import {
   guestPath,
   type GuestOs,
   type GuestStatus,
+  handlerCandidates,
+  type HandlerInfo,
+  identityLabel,
   type LibraryApp,
   type CdImport,
   dosPath,
@@ -206,6 +209,11 @@ function App() {
   const [selectedDocId, setSelectedDocId] = useState<string | null>(null);
   const [session, setSession] = useState<SessionReport | null>(null);
   const [verifyNote, setVerifyNote] = useState("");
+  // Known DOS apps that open old files (handlers.rs), for "Is" menus.
+  const [dosHandlers, setDosHandlers] = useState<HandlerInfo[]>([]);
+  // The after-session "Which app was this?" answer being chosen.
+  const [identifyChoice, setIdentifyChoice] = useState("");
+  const [identifyVersion, setIdentifyVersion] = useState("");
   const [tests, setTests] = useState<HandlerTest[]>([]);
   const [confirmRemove, setConfirmRemove] = useState<LibraryApp | null>(null);
   const [gearOpen, setGearOpen] = useState(false);
@@ -343,6 +351,16 @@ function App() {
     setSelectedId(null);
     setSelectedDocId(doc.id);
   }
+
+  useEffect(() => {
+    invoke<HandlerInfo[]>("handler_catalog", { os: "dos" }).then(setDosHandlers, () => {});
+  }, []);
+
+  // A new "Which app was this?" question starts on the likeliest answer.
+  useEffect(() => {
+    setIdentifyChoice(session?.identify?.candidates[0] ?? "");
+    setIdentifyVersion("");
+  }, [session?.identify]);
 
   useEffect(() => {
     void (async () => {
@@ -580,6 +598,53 @@ function App() {
     } catch (e) {
       fail(e);
     }
+  }
+
+  /** Says which known app (and version) an app is; null: not confirmed yet. */
+  async function setIdentity(app: LibraryApp, identity: { handler: string | null; version: string | null } | null) {
+    try {
+      await invoke("set_app_identity", { id: app.id, identity });
+      await refresh();
+    } catch (e) {
+      fail(e);
+    }
+  }
+
+  /** Makes an app the version its app's documents open with. */
+  async function makeFavorite(app: LibraryApp) {
+    try {
+      await invoke("set_favorite_app", { id: app.id });
+      await refresh();
+      setMessage(`${app.identity?.handler ?? app.name} documents now open with ${app.name}.`);
+    } catch (e) {
+      fail(e);
+    }
+  }
+
+  /** Answers (or puts off) the after-session "Which app was this?". */
+  async function answerIdentify(confirm: boolean) {
+    const ask = session?.identify;
+    if (!ask || !session) return;
+    if (confirm) {
+      const handler = identifyChoice === OTHER_APP ? null : identifyChoice;
+      try {
+        await invoke("set_app_identity", {
+          id: ask.appId,
+          identity: { handler, version: handler ? identifyVersion.trim() || null : null },
+        });
+        await refresh();
+        setMessage(
+          handler
+            ? `Noted: ${ask.appName} is ${[handler, identifyVersion.trim()].filter(Boolean).join(" ")}.`
+            : `Noted: ${ask.appName} isn't one of the apps Floppy knows.`,
+        );
+      } catch (e) {
+        fail(e);
+        return;
+      }
+    }
+    const rest = { ...session, identify: null };
+    setSession(rest.changes.length || rest.verify ? rest : null);
   }
 
   async function chooseSystemFile(kind: "rom" | "boot", directory: boolean) {
@@ -1200,8 +1265,16 @@ function App() {
                     <span className="row-icon">{ui.icon()}</span>
                     <span className="row-main">
                       <span className="row-name">{app.name}</span>
-                      <span className="row-meta">{guestPath(app, app.program)}</span>
+                      <span className="row-meta">
+                        {guestPath(app, app.program)}
+                        {app.os === "dos" && identityLabel(app, dosHandlers) ? ` · ${identityLabel(app, dosHandlers)}` : ""}
+                      </span>
                     </span>
+                    {app.favorite && (
+                      <span className="status-pill" title={`${app.identity?.handler} documents open with this version`}>
+                        Favorite
+                      </span>
+                    )}
                     {running.has(app.id) && <span className="status-pill running">Running</span>}
                   </button>
                 </li>
@@ -1286,6 +1359,15 @@ function App() {
                 </select>
               </label>
               {selected.os === "dos" && (
+                <IdentityFields
+                  app={selected}
+                  apps={apps}
+                  handlers={dosHandlers}
+                  onIdentity={(identity) => void setIdentity(selected, identity)}
+                  onFavorite={() => void makeFavorite(selected)}
+                />
+              )}
+              {selected.os === "dos" && (
                 <label className="field">
                   <span className="field-label">Also opens</span>
                   <input
@@ -1356,6 +1438,62 @@ function App() {
         </section>
       </div>
 
+      <Dialog
+        open={!!session?.identify}
+        onClose={() => void answerIdentify(false)}
+        title="Which app was this?"
+        actions={
+          <>
+            <button type="button" onClick={() => void answerIdentify(false)}>
+              Ask Later
+            </button>
+            <button type="button" className="primary" onClick={() => void answerIdentify(true)}>
+              Confirm
+            </button>
+          </>
+        }
+      >
+        {session?.identify && (
+          <>
+            <p>
+              {session.identify.appName} ran {session.identify.program}.{" "}
+              {session.identify.candidates.length > 1
+                ? "Several apps have a program by that name"
+                : "Other apps can have a program by that name too, and versions share it"}
+              , so Floppy asks once. Documents then open in the right app, and test results count for it.
+            </p>
+            <label className="field">
+              <span className="field-label">It was</span>
+              <select value={identifyChoice} onChange={(e) => setIdentifyChoice(e.target.value)}>
+                {session.identify.candidates.map((c) => (
+                  <option key={c} value={c}>
+                    {c}
+                  </option>
+                ))}
+                <option value={OTHER_APP}>Something else</option>
+              </select>
+            </label>
+            {identifyChoice !== OTHER_APP && (
+              <label className="field">
+                <span className="field-label">Version (if you know it)</span>
+                <input
+                  type="text"
+                  list="identify-versions"
+                  placeholder="e.g. 5.1"
+                  value={identifyVersion}
+                  onChange={(e) => setIdentifyVersion(e.target.value)}
+                />
+                <datalist id="identify-versions">
+                  {dosHandlers
+                    .find((h) => h.name === identifyChoice)
+                    ?.versions.map((v) => <option key={v} value={v} />)}
+                </datalist>
+              </label>
+            )}
+          </>
+        )}
+      </Dialog>
+
       <Dialog open={aboutOpen} onClose={() => setAboutOpen(false)} title={`About Floppy v${__APP_VERSION__}`}>
         <p>Run the old apps your files need, in the OS they were made for.</p>
         <ul className="about-emulators">
@@ -1414,6 +1552,108 @@ function App() {
         )}
       </div>
     </main>
+  );
+}
+
+/** The "Is" menu's value for an app that isn't one of the known ones. */
+const OTHER_APP = "\u0000other";
+
+/** What a DOS app is (which known app, which version), and whether its app's documents open with it. */
+function IdentityFields({
+  app,
+  apps,
+  handlers,
+  onIdentity,
+  onFavorite,
+}: {
+  app: LibraryApp;
+  apps: LibraryApp[];
+  handlers: HandlerInfo[];
+  onIdentity: (identity: { handler: string | null; version: string | null } | null) => void;
+  onFavorite: () => void;
+}) {
+  const id = app.identity;
+  const handler = id?.handler ?? null;
+  const candidates = handlerCandidates(app, handlers);
+  const others = handlers.filter((h) => !candidates.includes(h));
+  const versions = handlers.find((h) => h.name === handler)?.versions ?? [];
+  const siblings = handler ? apps.filter((a) => a.os === app.os && a.identity?.handler === handler) : [];
+  const note = !id
+    ? candidates.length
+      ? "Floppy is going by its program names only. Say which app this is, so documents open in the right one and test results count for it."
+      : null
+    : id.by === "hash"
+      ? "Recognized: one of its programs matches a known version exactly."
+      : !handler
+        ? "Not one of the known apps, so it opens only the file types in Also opens."
+        : null;
+  return (
+    <>
+      <label className="field">
+        <span className="field-label">Is</span>
+        <select
+          value={!id ? "" : (handler ?? OTHER_APP)}
+          onChange={(e) => {
+            const v = e.target.value;
+            onIdentity(v === "" ? null : { handler: v === OTHER_APP ? null : v, version: v === handler ? (id?.version ?? null) : null });
+          }}
+        >
+          {!id && <option value="">Not confirmed yet</option>}
+          {candidates.length > 0 && (
+            <optgroup label="Named like its programs">
+              {candidates.map((h) => (
+                <option key={h.name} value={h.name}>
+                  {h.name}
+                </option>
+              ))}
+            </optgroup>
+          )}
+          <optgroup label="Other apps that open old files">
+            {others.map((h) => (
+              <option key={h.name} value={h.name}>
+                {h.name}
+              </option>
+            ))}
+          </optgroup>
+          <option value={OTHER_APP}>Something else</option>
+        </select>
+        {note && <span className="system-note">{note}</span>}
+      </label>
+      {handler && (
+        <label className="field">
+          <span className="field-label">Version</span>
+          <input
+            key={`${app.id}-${id?.version ?? ""}`}
+            type="text"
+            list={`versions-${app.id}`}
+            placeholder="e.g. 5.1"
+            defaultValue={id?.version ?? ""}
+            onBlur={(e) => {
+              const v = e.currentTarget.value.trim();
+              if (v !== (id?.version ?? "")) onIdentity({ handler, version: v || null });
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") e.currentTarget.blur();
+            }}
+          />
+          <datalist id={`versions-${app.id}`}>
+            {versions.map((v) => (
+              <option key={v} value={v} />
+            ))}
+          </datalist>
+        </label>
+      )}
+      {handler && siblings.length > 1 && (
+        <label className="field-check">
+          <input type="checkbox" checked={app.favorite} disabled={app.favorite} onChange={onFavorite} />
+          <span>
+            {app.favorite
+              ? `Favorite: ${handler} documents open with this version.`
+              : `Make this the favorite: open ${handler} documents with this version.`}
+          </span>
+        </label>
+      )}
+    </>
   );
 }
 
@@ -1484,7 +1724,7 @@ function DocumentDetails({
           <select value={choice} onChange={(e) => setChoice(Number(e.target.value))}>
             {openers.map((o, i) => (
               <option key={`${o.appId}-${o.program}`} value={i}>
-                {o.appName} ({o.program}){testLabel(o)}
+                {`${o.appName}${o.version && !o.appName.includes(o.version) ? ` ${o.version}` : ""} (${o.program})${o.favorite ? " · favorite" : ""}${testLabel(o)}`}
               </option>
             ))}
           </select>

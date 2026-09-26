@@ -151,6 +151,8 @@
   caret-color: var(--dos-white);
 }
 :root[data-theme="ansiapps"] .field-label { color: var(--dos-lightcyan); }
+/* On a gray dialog, labels are blue like its other text accents */
+:root[data-theme="ansiapps"] .dialog-box .field-label { color: var(--dos-blue); }
 
 /* Progress: a black track with a solid block fill */
 :root[data-theme="ansiapps"] .progress-bar { height: 16px; background: var(--dos-black); border: none; }

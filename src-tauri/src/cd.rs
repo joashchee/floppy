@@ -452,7 +452,7 @@ fn fill_slots(library: &Library, candidates: &[Candidate]) -> Result<Filled, Str
 }
 
 
-fn sha256_of(path: &Path) -> std::io::Result<String> {
+pub fn sha256_of(path: &Path) -> std::io::Result<String> {
     use sha2::Digest;
     use std::io::Read;
     let mut f = std::fs::File::open(path)?;

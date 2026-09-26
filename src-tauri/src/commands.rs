@@ -105,9 +105,44 @@ fn kickstart_note(path: &Path) -> Option<String> {
     }
 }
 
+/// The library's apps. DOS apps imported before Floppy fingerprinted
+/// programs get their fingerprints here, once.
 #[tauri::command]
-pub fn list_apps(state: State<AppState>) -> Result<Vec<LibraryApp>, String> {
-    state.library.list()
+pub async fn list_apps(app: AppHandle) -> Result<Vec<LibraryApp>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let library = &app.state::<AppState>().library;
+        library.backfill_program_ids()?;
+        library.list()
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// What the user says an app is.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IdentityInput {
+    /// A handler's name, or `None` for an app that isn't one.
+    handler: Option<String>,
+    version: Option<String>,
+}
+
+/// Says which handler an app is and its version (`None`: not known yet).
+#[tauri::command]
+pub fn set_app_identity(state: State<AppState>, id: String, identity: Option<IdentityInput>) -> Result<LibraryApp, String> {
+    state.library.set_identity(&id, identity.map(|i| (i.handler, i.version)))
+}
+
+/// Makes an app the version its handler's documents open with.
+#[tauri::command]
+pub fn set_favorite_app(state: State<AppState>, id: String) -> Result<LibraryApp, String> {
+    state.library.set_favorite(&id)
+}
+
+/// Every handler for a guest, with the versions known by fingerprint.
+#[tauri::command]
+pub fn handler_catalog(os: String) -> Result<Vec<handlers::HandlerInfo>, String> {
+    Ok(handlers::catalog(GuestOs::parse(&os).ok_or("Unknown guest OS.")?))
 }
 
 /// Copying a big folder takes a while, so this runs off the main thread.
@@ -276,10 +311,22 @@ pub fn take_opened_files(opened: State<request::Opened>) -> Vec<String> {
     std::mem::take(&mut *opened.0.lock().unwrap_or_else(|p| p.into_inner())).into_iter().map(|p| p.to_string_lossy().into_owned()).collect()
 }
 
-/// Records whether an app opened a document's file type correctly.
+/// Records whether an app opened a document's file type correctly. The
+/// app's identity is read now, so one the user confirmed after the
+/// session is what's recorded.
 #[tauri::command]
 pub fn record_verification(state: State<AppState>, pending: verify::Pending, worked: bool, note: Option<String>) -> Result<(), String> {
     let outcome = if worked { verify::Outcome::Worked } else { verify::Outcome::Failed };
+    let pending = match state.library.get(&pending.app_id) {
+        Ok(entry) => {
+            let program = entry.programs.iter().find(|p| p.rsplit('/').next() == Some(pending.program.as_str())).cloned();
+            match program {
+                Some(p) => verify_pending(&entry, &p, pending.file_type, pending.document),
+                None => pending,
+            }
+        }
+        Err(_) => pending,
+    };
     verify::record(&state.library, &pending, outcome, note.as_deref())
 }
 
@@ -454,15 +501,54 @@ pub fn open_document(app: AppHandle, state: State<AppState>, id: String, app_id:
     }
     state.library.set_opens_with(&id, &app_id)?;
     let args = documents::dos_path(&doc);
-    let pending = verify::Pending {
-        os: doc.os,
-        app_name: entry.name.clone(),
-        program: program.rsplit('/').next().unwrap_or(&program).to_string(),
-        handler: handlers::handler_for(doc.os, &program).map(|h| h.name.to_string()),
-        file_type: verify::dos_file_type(&doc.file),
-        document: doc.name.clone(),
-    };
+    let pending = verify_pending(&entry, &program, verify::dos_file_type(&doc.file), doc.name.clone());
     start(app, &state, entry, Some(program), Some(args), Some((doc, pending)))
+}
+
+/// What to ask about a session: the app as it's known now, with its
+/// program's fingerprint. The handler is only ever a confirmed one.
+fn verify_pending(entry: &LibraryApp, program: &str, file_type: String, document: String) -> verify::Pending {
+    let identity = entry.identity.as_ref();
+    let id = entry.program_ids.get(program);
+    verify::Pending {
+        os: entry.os,
+        app_id: entry.id.clone(),
+        app_name: entry.name.clone(),
+        program: program.rsplit('/').next().unwrap_or(program).to_string(),
+        handler: identity.and_then(|i| i.handler.clone()),
+        version: identity.and_then(|i| i.version.clone()),
+        size: id.map(|i| i.size),
+        sha256: id.map(|i| i.sha256.clone()),
+        file_type,
+        document,
+    }
+}
+
+/// After a session, when the app isn't identified yet but the program
+/// that ran is named like a known handler's: what to ask the user it was.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+struct IdentifyAsk {
+    app_id: String,
+    app_name: String,
+    /// The program's file name (`WORD.EXE`).
+    program: String,
+    /// Handlers with a program of that name, the likeliest first.
+    candidates: Vec<String>,
+}
+
+fn identify_ask(entry: &LibraryApp, program: Option<&str>) -> Option<IdentifyAsk> {
+    let program = program?;
+    if entry.os != GuestOs::Dos || entry.identity.is_some() {
+        return None;
+    }
+    let candidates: Vec<String> = handlers::candidates(entry.os, program).iter().map(|h| h.name.to_string()).collect();
+    (!candidates.is_empty()).then(|| IdentifyAsk {
+        app_id: entry.id.clone(),
+        app_name: entry.name.clone(),
+        program: program.rsplit('/').next().unwrap_or(program).to_string(),
+        candidates,
+    })
 }
 
 /// What a DOS session saved, sent as `session-ended` when DOSBox quits.
@@ -476,6 +562,8 @@ struct SessionReport {
     changes: Vec<SessionChange>,
     /// For a document session: what to ask the user about (verify.rs).
     verify: Option<verify::Pending>,
+    /// Which app it was, when that isn't settled yet.
+    identify: Option<IdentifyAsk>,
 }
 
 #[derive(Serialize, Clone)]
@@ -507,6 +595,7 @@ fn start(
     let chosen = emulator::chosen(&state.library, emu);
     let (bin, _) = emu.locate(app.path().resource_dir().ok().as_deref(), chosen.as_deref()).ok_or(emu.missing_message())?;
     let conf_path = write_launch_config(&state.library, &entry, program.as_deref(), args.as_deref())?;
+    let ran = program.clone();
     let os_root = state.library.os_root(entry.os);
     let before = (entry.os == GuestOs::Dos).then(|| documents::snapshot(&os_root));
 
@@ -521,15 +610,18 @@ fn start(
             let library = &app.state::<AppState>().library;
             let changes = documents::changes(&before, &documents::snapshot(&os_root));
             let _ = library.adopt_documents(entry.os);
+            // Identified during the session, in its details, needn't be asked.
+            let now = library.get(&entry.id).unwrap_or_else(|_| entry.clone());
+            let identify = identify_ask(&now, ran.as_deref());
             // A document session always reports, to ask whether it worked.
-            if !changes.is_empty() || document.is_some() {
+            if !changes.is_empty() || document.is_some() || identify.is_some() {
                 let docs = library.documents().unwrap_or_default();
                 let changes = changes.into_iter().map(|c: Change| SessionChange { name: display_name(&docs, entry.os, &c.path), path: c.path, new: c.new }).collect();
                 let (document, verify) = match document {
                     Some((d, p)) => (Some(d.name), Some(p)),
                     None => (None, None),
                 };
-                let report = SessionReport { os: entry.os, app_name: entry.name.clone(), document, changes, verify };
+                let report = SessionReport { os: entry.os, app_name: entry.name.clone(), document, changes, verify, identify };
                 let _ = app.emit("session-ended", report);
             }
         }
@@ -642,6 +734,35 @@ pub fn export_file(state: State<AppState>, os: String, path: String, dest_dir: S
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn word(identity: Option<crate::library::Identity>) -> LibraryApp {
+        LibraryApp {
+            id: "dos-word".into(),
+            os: GuestOs::Dos,
+            name: "WORD".into(),
+            dir: "WORD".into(),
+            program: Some("WORD.EXE".into()),
+            programs: vec!["WORD.EXE".into(), "SETUP.EXE".into()],
+            source_name: "WORD".into(),
+            added: 0,
+            opens: vec![],
+            program_ids: Default::default(),
+            identity,
+            favorite: false,
+        }
+    }
+
+    #[test]
+    fn asks_what_a_program_named_like_a_handler_was() {
+        let ask = identify_ask(&word(None), Some("WORD.EXE")).unwrap();
+        assert_eq!((ask.program.as_str(), ask.candidates.as_slice()), ("WORD.EXE", &["Microsoft Word (DOS)".to_string()][..]));
+        // Not for a program no handler is named like, a DOS prompt, or an
+        // app already identified.
+        assert!(identify_ask(&word(None), Some("SETUP.EXE")).is_none());
+        assert!(identify_ask(&word(None), None).is_none());
+        let known = crate::library::Identity { handler: None, version: None, by: crate::library::IdentifiedBy::User };
+        assert!(identify_ask(&word(Some(known)), Some("WORD.EXE")).is_none());
+    }
 
     #[test]
     fn one_mac_or_amiga_at_a_time_but_many_dos_apps() {

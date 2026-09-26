@@ -20,7 +20,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
 
-use crate::{amiga, documents, dos, mac};
+use crate::{amiga, cd, documents, dos, handlers, mac};
 
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 #[serde(rename_all = "kebab-case")]
@@ -96,6 +96,53 @@ pub struct LibraryApp {
     /// dot), on top of the well-known ones (documents.rs).
     #[serde(default)]
     pub opens: Vec<String>,
+    /// Each program's size and SHA-256, keyed like `programs`. They tell
+    /// versions apart, and apps whose programs share a name (DOS only).
+    #[serde(default)]
+    pub program_ids: BTreeMap<String, ProgramId>,
+    /// Which handler app this is, and its version, once known
+    /// (handlers.rs). `None` until a program matches a known version or
+    /// the user says.
+    #[serde(default)]
+    pub identity: Option<Identity>,
+    /// The version to open its handler's documents with, when the library
+    /// has several. At most one app per handler has it.
+    #[serde(default)]
+    pub favorite: bool,
+}
+
+impl LibraryApp {
+    /// The handler this app is known to be. `None` when it isn't known
+    /// yet, or is known not to be one.
+    pub fn handler(&self) -> Option<&str> {
+        self.identity.as_ref().and_then(|i| i.handler.as_deref())
+    }
+}
+
+/// A program file's fingerprint.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct ProgramId {
+    pub size: u64,
+    pub sha256: String,
+}
+
+/// What an app is: a handler (by its name in `HANDLERS`) and version,
+/// or `handler: None` for an app that isn't one of them.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct Identity {
+    pub handler: Option<String>,
+    pub version: Option<String>,
+    pub by: IdentifiedBy,
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum IdentifiedBy {
+    /// A program matched a known version's SHA-256 (`docs/app-handlers.md`).
+    Hash,
+    /// The user said, after a session or in the app's details.
+    User,
 }
 
 /// An old file in the library, to open in an app that made it
@@ -345,6 +392,9 @@ impl Library {
             });
         }
 
+        let program_ids = if os == GuestOs::Dos { program_ids(&content, &programs) } else { BTreeMap::new() };
+        let identity = handlers::identify(os, &program_ids, handlers::known_versions());
+
         let os_root = self.os_root(os);
         fs::create_dir_all(&os_root).map_err(|e| e.to_string())?;
         let mut taken: HashSet<String> = fs::read_dir(&os_root)
@@ -375,10 +425,75 @@ impl Library {
             source_name: src_name,
             added: SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0),
             opens: Vec::new(),
+            program_ids,
+            identity,
+            favorite: false,
         };
         m.apps.push(app.clone());
         self.save(&m)?;
         Ok(app)
+    }
+
+    /// Fingerprints the programs of DOS apps imported before Floppy kept
+    /// fingerprints, and recognizes any that match a known version.
+    /// Cheap once done: only apps without fingerprints are read.
+    pub fn backfill_program_ids(&self) -> Result<(), String> {
+        let _g = self.guard();
+        let mut m = self.load()?;
+        let mut changed = false;
+        for app in m.apps.iter_mut().filter(|a| a.os == GuestOs::Dos && a.program_ids.is_empty() && !a.programs.is_empty()) {
+            if !app.os.is_own_dir_name(&app.dir) {
+                continue;
+            }
+            app.program_ids = program_ids(&self.os_root(app.os).join(&app.dir), &app.programs);
+            if app.identity.is_none() {
+                app.identity = handlers::identify(app.os, &app.program_ids, handlers::known_versions());
+            }
+            changed |= !app.program_ids.is_empty();
+        }
+        if changed {
+            self.save(&m)?;
+        }
+        Ok(())
+    }
+
+    /// Says what an app is (`None`: not known yet), as the user confirmed
+    /// it. A handler must be one of its guest's in `HANDLERS`. Changing
+    /// the handler drops the app's favorite mark.
+    pub fn set_identity(&self, id: &str, identity: Option<(Option<String>, Option<String>)>) -> Result<LibraryApp, String> {
+        self.update(id, |a| {
+            let identity = match identity {
+                None => None,
+                Some((handler, version)) => {
+                    let handler = match handler.as_deref().map(str::trim).filter(|h| !h.is_empty()) {
+                        Some(h) => Some(handlers::find(a.os, h).ok_or_else(|| format!("{h} isn't a known {} app.", guest_label(a.os)))?.name.to_string()),
+                        None => None,
+                    };
+                    let version = version.map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
+                    Some(Identity { version: version.filter(|_| handler.is_some()), handler, by: IdentifiedBy::User })
+                }
+            };
+            if a.handler() != identity.as_ref().and_then(|i| i.handler.as_deref()) {
+                a.favorite = false;
+            }
+            a.identity = identity;
+            Ok(())
+        })
+    }
+
+    /// Makes an app the version its handler's documents open with, in
+    /// place of any other.
+    pub fn set_favorite(&self, id: &str) -> Result<LibraryApp, String> {
+        let _g = self.guard();
+        let mut m = self.load()?;
+        let app = m.apps.iter().find(|a| a.id == id).ok_or("That app is no longer in the library.")?;
+        let (os, handler) = (app.os, app.handler().ok_or("Say which app this is first.")?.to_string());
+        for a in m.apps.iter_mut().filter(|a| a.os == os && a.handler() == Some(handler.as_str())) {
+            a.favorite = a.id == id;
+        }
+        let out = m.apps.iter().find(|a| a.id == id).cloned().expect("found above");
+        self.save(&m)?;
+        Ok(out)
     }
 
     /// Says which document extensions an app opens, on top of the
@@ -676,6 +791,19 @@ fn remove_any(path: &Path) -> io::Result<()> {
 
 /// `name`, or `name 2`, `name 3`… (kept within `max` characters), whichever
 /// isn't in `taken` (uppercase names).
+/// Fingerprints of `programs` (relative to `dir`). A program that can't be
+/// read is left out.
+fn program_ids(dir: &Path, programs: &[String]) -> BTreeMap<String, ProgramId> {
+    programs
+        .iter()
+        .filter_map(|p| {
+            let path = dir.join(p);
+            let size = fs::metadata(&path).ok()?.len();
+            Some((p.clone(), ProgramId { size, sha256: cd::sha256_of(&path).ok()? }))
+        })
+        .collect()
+}
+
 fn unique_name(name: &str, taken: &HashSet<String>, max: usize) -> String {
     if !taken.contains(&name.to_uppercase()) {
         return name.to_string();
@@ -815,6 +943,61 @@ mod tests {
     }
 
     #[test]
+    fn dos_apps_are_fingerprinted_identified_and_given_a_favorite() {
+        let t = TempDir::new();
+        let lib = Library::new(t.path().join("lib"));
+        let mut ids = Vec::new();
+        for (dir, exe) in [("WP50", "MZ five"), ("WP51", "MZ five-one")] {
+            let src = t.path().join(dir);
+            fs::create_dir_all(&src).unwrap();
+            fs::write(src.join("WP.EXE"), exe).unwrap();
+            let app = lib.import(GuestOs::Dos, &src).unwrap();
+            let id = &app.program_ids["WP.EXE"];
+            assert_eq!(id.size, exe.len() as u64);
+            assert_eq!(id.sha256.len(), 64);
+            assert!(app.identity.is_none(), "its fingerprint isn't a known version");
+            ids.push(app.id);
+        }
+        // Say what they are.
+        let wp50 = lib.set_identity(&ids[0], Some((Some("wordperfect".into()), Some(" 5.0 ".into())))).unwrap();
+        let identity = wp50.identity.unwrap();
+        assert_eq!((identity.handler.as_deref(), identity.version.as_deref(), identity.by), (Some("WordPerfect"), Some("5.0"), IdentifiedBy::User));
+        lib.set_identity(&ids[1], Some((Some("WordPerfect".into()), Some("5.1".into())))).unwrap();
+        assert!(lib.set_identity(&ids[1], Some((Some("WordBlaster".into()), None))).is_err());
+
+        // One favorite per handler.
+        lib.set_favorite(&ids[0]).unwrap();
+        lib.set_favorite(&ids[1]).unwrap();
+        let favs: Vec<bool> = lib.list().unwrap().iter().map(|a| a.favorite).collect();
+        assert_eq!(favs, [false, true]);
+        // Saying it's another app drops its favorite mark; an app that
+        // isn't a handler can't be one.
+        let other = lib.set_identity(&ids[1], Some((None, Some("7".into())))).unwrap();
+        assert!(!other.favorite);
+        assert_eq!(other.identity.as_ref().map(|i| (i.handler.is_none(), i.version.is_none())), Some((true, true)));
+        assert!(lib.set_favorite(&ids[1]).is_err());
+        assert!(lib.set_identity(&ids[1], None).unwrap().identity.is_none());
+    }
+
+    #[test]
+    fn older_apps_get_fingerprints_once() {
+        let t = TempDir::new();
+        let lib = Library::new(t.path().join("lib"));
+        let src = t.path().join("WP51");
+        fs::create_dir_all(&src).unwrap();
+        fs::write(src.join("WP.EXE"), "MZ").unwrap();
+        let app = lib.import(GuestOs::Dos, &src).unwrap();
+        // As a library from before fingerprints had it.
+        lib.update(&app.id, |a| {
+            a.program_ids.clear();
+            Ok(())
+        })
+        .unwrap();
+        lib.backfill_program_ids().unwrap();
+        assert_eq!(lib.get(&app.id).unwrap().program_ids["WP.EXE"].size, 2);
+    }
+
+    #[test]
     fn imports_zip_with_wrapper_folder() {
         let t = TempDir::new();
         let zip = t.path().join("wp51.zip");
@@ -923,6 +1106,9 @@ mod tests {
             source_name: "x".into(),
             added: 0,
             opens: vec![],
+            program_ids: BTreeMap::new(),
+            identity: None,
+            favorite: false,
         }];
         assert_eq!(unique_id(GuestOs::MacClassic, "My App", &apps), "mac-my-app-2");
         assert_eq!(unique_id(GuestOs::MacClassic, "Café", &apps), "mac-caf-");
