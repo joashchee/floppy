@@ -131,15 +131,89 @@ pub fn find(os: GuestOs, name: &str) -> Option<&'static Handler> {
 }
 
 /// Every handler with a program named like `program` (a path or file
-/// name): what it might be, going by its name alone.
+/// name): what it might be, going by its name alone. Program names users
+/// confirmed (in "Known versions") count too.
 pub fn candidates(os: GuestOs, program: &str) -> Vec<&'static Handler> {
     let name = base_name(program);
-    HANDLERS.iter().filter(|h| h.os == os && h.programs.iter().any(|p| p.eq_ignore_ascii_case(name))).collect()
+    HANDLERS
+        .iter()
+        .filter(|h| h.os == os)
+        .filter(|h| {
+            h.programs.iter().any(|p| p.eq_ignore_ascii_case(name))
+                || known_versions().iter().any(|k| k.os == os && k.app == h.name && k.program.eq_ignore_ascii_case(name))
+        })
+        .collect()
+}
+
+/// Whether `h` opens `.ext` documents: from the table above, or reported
+/// by users (the "Reported file types" table).
+pub fn opens_ext(h: &Handler, ext: &str) -> bool {
+    h.exts.iter().any(|e| e.eq_ignore_ascii_case(ext)) || reported_ext(h.os, h.name, ext)
+}
+
+/// Whether users reported that the handler `app` opens `.ext` documents.
+pub fn reported_ext(os: GuestOs, app: &str, ext: &str) -> bool {
+    reported_file_types().iter().any(|r| r.os == os && r.app == app && r.ext.eq_ignore_ascii_case(ext))
+}
+
+/// A document extension users said a handler opens, from the "Reported
+/// file types" table in `docs/app-handlers.md` (merged findings).
+#[derive(Clone, Debug, PartialEq)]
+pub struct ReportedFileType {
+    pub os: GuestOs,
+    pub app: String,
+    /// Uppercase, no dot.
+    pub ext: String,
+    pub reports: u32,
+}
+
+pub fn reported_file_types() -> &'static [ReportedFileType] {
+    static REPORTED: OnceLock<Vec<ReportedFileType>> = OnceLock::new();
+    REPORTED.get_or_init(|| parse_reported_file_types(include_str!("../../docs/app-handlers.md")).unwrap_or_default())
+}
+
+/// The rows of a table between `<!-- <name>:start -->` and
+/// `<!-- <name>:end -->`, header and separator skipped, as trimmed cells
+/// without backticks. Merged findings maintain these tables.
+pub fn table_rows(doc: &str, name: &str) -> Result<Vec<Vec<String>>, String> {
+    let open = format!("<!-- {name}:start -->");
+    let close = format!("<!-- {name}:end -->");
+    let start = doc.find(&open).ok_or(format!("no {name}:start marker"))?;
+    let end = doc[start..].find(&close).ok_or(format!("no {name}:end marker"))? + start;
+    Ok(doc[start..end]
+        .lines()
+        .skip(1)
+        .filter(|l| l.trim_start().starts_with('|'))
+        .skip(2)
+        .map(|l| l.trim().trim_matches('|').split('|').map(|c| c.trim().trim_matches('`').to_string()).collect())
+        .collect())
+}
+
+pub fn guest_from_label(label: &str) -> Option<GuestOs> {
+    [GuestOs::Dos, GuestOs::MacClassic, GuestOs::Amiga].into_iter().find(|os| crate::library::guest_label(*os) == label)
+}
+
+/// `| Guest | App | Extension | Reports | Last reported |`.
+fn parse_reported_file_types(doc: &str) -> Result<Vec<ReportedFileType>, String> {
+    table_rows(doc, "filetypes")?
+        .into_iter()
+        .map(|cells| {
+            let [guest, app, ext, reports, _last] = &cells[..] else {
+                return Err(format!("a reported file type needs 5 cells: {cells:?}"));
+            };
+            Ok(ReportedFileType {
+                os: guest_from_label(guest).ok_or(format!("unknown guest {guest:?}"))?,
+                app: app.clone(),
+                ext: ext.trim_start_matches('.').to_ascii_uppercase(),
+                reports: reports.parse().map_err(|_| format!("not a number {reports:?}"))?,
+            })
+        })
+        .collect()
 }
 
 /// A version of a handler, known by its program's fingerprint. From the
 /// "Known versions" table in `docs/app-handlers.md`, which test reports
-/// fill (`scripts/merge-handler-tests.py`).
+/// fill (findings.rs, `scripts/merge-findings.py`).
 #[derive(Serialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct KnownVersion {
@@ -166,20 +240,13 @@ pub fn known_versions() -> &'static [KnownVersion] {
 /// Last tested |`. A row that doesn't parse is an error, so a bad merge
 /// fails the tests rather than quietly dropping a version.
 fn parse_known_versions(doc: &str) -> Result<Vec<KnownVersion>, String> {
-    let start = doc.find("<!-- versions:start -->").ok_or("no versions:start marker")?;
-    let end = doc[start..].find("<!-- versions:end -->").ok_or("no versions:end marker")? + start;
     let mut out = Vec::new();
-    for line in doc[start..end].lines().skip(1).filter(|l| l.trim_start().starts_with('|')).skip(2) {
-        let cells: Vec<&str> = line.trim().trim_matches('|').split('|').map(|c| c.trim().trim_matches('`')).collect();
-        let [guest, app, version, program, size, sha256, worked, failed, _last] = cells[..] else {
+    for cells in table_rows(doc, "versions")? {
+        let line = cells.join(" | ");
+        let [guest, app, version, program, size, sha256, worked, failed, _last] = &cells.iter().map(String::as_str).collect::<Vec<_>>()[..] else {
             return Err(format!("a known-versions row needs 9 cells: {line}"));
         };
-        let os = match guest {
-            "DOS" => GuestOs::Dos,
-            "Classic Mac" => GuestOs::MacClassic,
-            "Amiga" => GuestOs::Amiga,
-            _ => return Err(format!("unknown guest {guest:?}: {line}")),
-        };
+        let os = guest_from_label(guest).ok_or(format!("unknown guest {guest:?}: {line}"))?;
         if sha256.len() != 64 || !sha256.bytes().all(|b| b.is_ascii_hexdigit()) {
             return Err(format!("not a SHA-256: {line}"));
         }
@@ -444,6 +511,10 @@ mod tests {
             assert!(find(k.os, &k.app).is_some(), "{} {} isn't a handler above", k.app, k.version);
             assert!(!k.version.is_empty(), "{}: a known version needs its version", k.app);
         }
+        for r in parse_reported_file_types(doc).expect("docs/app-handlers.md's Reported file types table") {
+            let h = find(r.os, &r.app).unwrap_or_else(|| panic!("{} isn't a handler above", r.app));
+            assert!(!h.exts.contains(&r.ext.as_str()), "{} .{} is in the table above already", r.app, r.ext);
+        }
         let mut shas: Vec<&str> = known.iter().map(|k| k.sha256.as_str()).collect();
         shas.sort();
         let n = shas.len();
@@ -470,6 +541,18 @@ mod tests {
         // A bad row fails loudly.
         assert!(parse_known_versions(&SAMPLE.replace("| 3 |", "| x |")).is_err());
         assert!(parse_known_versions(&SAMPLE.replace("ABAB", "ZZ")).is_err());
+    }
+
+    #[test]
+    fn reported_file_types_parse() {
+        let doc = "<!-- filetypes:start -->
+| Guest | App | Extension | Reports | Last reported |
+|---|---|---|---|---|
+| DOS | WordPerfect | .TXT | 2 | 2026-09-27 |
+<!-- filetypes:end -->";
+        let r = parse_reported_file_types(doc).unwrap();
+        assert_eq!(r, [ReportedFileType { os: GuestOs::Dos, app: "WordPerfect".into(), ext: "TXT".into(), reports: 2 }]);
+        assert!(parse_reported_file_types(&doc.replace("| 2 |", "| two |")).is_err());
     }
 
     #[test]

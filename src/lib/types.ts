@@ -25,6 +25,12 @@ export interface LibraryApp {
   identity: AppIdentity | null;
   /** The version its handler's documents open with. */
   favorite: boolean;
+  /** What the user noted going wrong running it. */
+  errors: string;
+  /** The user renamed it, so Is and Version leave its name alone. */
+  namedByUser: boolean;
+  /** Share its errors in Export Findings, though it isn't a known app. */
+  shareErrors: boolean;
 }
 
 /** library.rs `Identity`. `handler: null` means it isn't one of the known apps. */
@@ -114,6 +120,17 @@ export interface HandlerTest {
   lastTested: number;
   lastOutcome: "worked" | "failed";
   notes: string[];
+}
+
+/** findings.rs `Summary`: what Export Findings would share, new since the last export. */
+export interface FindingsSummary {
+  handlerTests: number;
+  identities: number;
+  fileTypes: number;
+  systemFiles: number;
+  appErrors: number;
+  /** Unix seconds of the last export, if any. */
+  lastExported: number | null;
 }
 
 /** commands.rs `ImportedItem`. */

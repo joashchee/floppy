@@ -125,6 +125,13 @@ impl Slot {
         }
     }
 
+    /// Copies users reported working that the published lists miss
+    /// ("Reported by users" in `docs/legal-setupfiles.md`, from merged
+    /// findings, findings.rs).
+    fn reported(self) -> impl Iterator<Item = &'static ReportedFile> {
+        reported_files().iter().filter(move |r| r.slot == self)
+    }
+
     /// Names these files are commonly stored under: emulator and Amiga
     /// Forever conventions, checksum-named Mac ROM dumps, and TOSEC names.
     fn names(self) -> &'static [&'static str] {
@@ -164,6 +171,47 @@ impl Slot {
             ],
         }
     }
+}
+
+/// Whether a copy with this SHA-1 is already known for `slot`: published
+/// or reported by users.
+pub fn is_known(slot: Slot, sha1: &str) -> bool {
+    slot.known().iter().any(|f| f.sha1.eq_ignore_ascii_case(sha1)) || slot.reported().any(|r| r.sha1.eq_ignore_ascii_case(sha1))
+}
+
+/// A setup file users reported, by size and SHA-1.
+#[derive(Debug, PartialEq)]
+pub struct ReportedFile {
+    pub slot: Slot,
+    pub what: String,
+    pub size: u64,
+    pub sha1: String,
+}
+
+fn reported_files() -> &'static [ReportedFile] {
+    static REPORTED: std::sync::OnceLock<Vec<ReportedFile>> = std::sync::OnceLock::new();
+    REPORTED.get_or_init(|| parse_reported_files(include_str!("../../docs/legal-setupfiles.md")).unwrap_or_default())
+}
+
+/// `| Slot | What | Size | SHA-1 | Reports | Last reported |`.
+fn parse_reported_files(doc: &str) -> Result<Vec<ReportedFile>, String> {
+    crate::handlers::table_rows(doc, "reported")?
+        .into_iter()
+        .map(|cells| {
+            let [slot, what, size, sha1, _reports, _last] = &cells[..] else {
+                return Err(format!("a reported file needs 6 cells: {cells:?}"));
+            };
+            if sha1.len() != 40 || !sha1.bytes().all(|b| b.is_ascii_hexdigit()) {
+                return Err(format!("not a SHA-1: {sha1}"));
+            }
+            Ok(ReportedFile {
+                slot: Slot::from_label(slot).ok_or(format!("unknown slot {slot:?}"))?,
+                what: what.clone(),
+                size: size.replace(',', "").parse().map_err(|_| format!("not a size: {size}"))?,
+                sha1: sha1.to_ascii_lowercase(),
+            })
+        })
+        .collect()
 }
 
 /// Slots the user hasn't filled yet.
@@ -211,6 +259,11 @@ pub fn missing_list(slots: &[Slot], ignored: &[IgnoredFile]) -> Option<MissingLi
         out.push("# Known-good copies, found by content under any name:".into());
         for f in slot.known() {
             out.push(format!("# {}", f.label));
+            out.push(format!("\t{}\t{}", f.size, f.sha1));
+            lines.push((out.len(), *slot));
+        }
+        for f in slot.reported() {
+            out.push(format!("# {} (reported by Floppy users)", f.what));
             out.push(format!("\t{}\t{}", f.size, f.sha1));
             lines.push((out.len(), *slot));
         }
@@ -709,6 +762,24 @@ mod tests {
     }
 
     #[test]
+    fn reported_setup_files_parse_and_count_as_known() {
+        let doc = include_str!("../../docs/legal-setupfiles.md");
+        for r in parse_reported_files(doc).expect("docs/legal-setupfiles.md's Reported by users table") {
+            assert!(!r.slot.known().iter().any(|k| k.sha1 == r.sha1), "{} is published already", r.what);
+        }
+        let sample = "<!-- reported:start -->
+| Slot | What | Size | SHA-1 | Reports | Last reported |
+|---|---|---|---|---|---|
+| Kickstart ROM | Kickstart 3.1 (40.68) | 524,288 | `00112233445566778899aabbccddeeff00112233` | 1 | 2026-09-27 |
+<!-- reported:end -->";
+        let r = parse_reported_files(sample).unwrap();
+        assert_eq!((r[0].slot, r[0].size), (Slot::Kickstart, 524_288));
+        assert!(parse_reported_files(&sample.replace("Kickstart ROM |", "Toaster |")).is_err());
+        assert!(is_known(Slot::MacRom, known_files::MAC_ROMS[0].sha1));
+        assert!(!is_known(Slot::MacRom, &"0".repeat(40)));
+    }
+
+    #[test]
     fn list_names_only_missing_slots() {
         assert!(missing_list(&[], &[]).is_none());
         let list = missing_list(&[Slot::Kickstart], &[]).unwrap().text;
@@ -732,10 +803,14 @@ mod tests {
                 _ => panic!("bad line {line:?}"),
             }
         }
-        assert_eq!(content, known_files::KICKSTARTS.len());
+        // Published copies, plus any users reported (docs/legal-setupfiles.md).
+        assert_eq!(content, known_files::KICKSTARTS.len() + Slot::Kickstart.reported().count());
         let mac = missing_list(&[Slot::MacRom, Slot::MacBoot], &[]).unwrap().text;
         assert!(mac.contains("\n\t1048576\tf2a9ce387019bf272c6e3459d961b30f28942ac5\n"));
-        assert_eq!(mac.matches("\n\t").count(), known_files::MAC_ROMS.len() + known_files::MAC_BOOT_DISKS.len());
+        assert_eq!(
+            mac.matches("\n\t").count(),
+            known_files::MAC_ROMS.len() + known_files::MAC_BOOT_DISKS.len() + Slot::MacRom.reported().count() + Slot::MacBoot.reported().count()
+        );
         // System 7.5.3's installed disk, and a Workbench boot disk, are found by content too.
         assert!(mac.contains("\n# System 7.5.3, installed (25 MB)\n\t26214400\tda2239b83e572d7f594d1b7af050f5bc3f6fae84\n"));
         let wb = missing_list(&[Slot::Workbench], &[]).unwrap().text;

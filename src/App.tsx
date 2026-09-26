@@ -40,7 +40,7 @@ import {
   type ImportedItem,
   type LibraryDoc,
   type Opener,
-  type HandlerTest,
+  type FindingsSummary,
   type SessionReport,
   type MediaProgress,
   type OldMedia,
@@ -127,18 +127,49 @@ function basiliskTitle(s: GuestStatus | undefined): string {
   }
 }
 
+function findingsTotal(f: FindingsSummary): number {
+  return f.handlerTests + f.identities + f.fileTypes + f.systemFiles + f.appErrors;
+}
+
+/** "3 test results, 1 app version": what a findings export holds. */
+function describeFindings(f: FindingsSummary): string {
+  const part = (n: number, one: string, many: string) => (n ? `${n} ${n === 1 ? one : many}` : "");
+  return (
+    [
+      part(f.handlerTests, "test result", "test results"),
+      part(f.identities, "app you identified", "apps you identified"),
+      part(f.fileTypes, "file type you added", "file types you added"),
+      part(f.systemFiles, "unlisted setup file", "unlisted setup files"),
+      part(f.appErrors, "app's errors", "apps' errors"),
+    ]
+      .filter(Boolean)
+      .join(", ") || "nothing yet"
+  );
+}
+
+/** " Last exported 27 Sep 2026.", or nothing before the first export. */
+function lastExported(f: FindingsSummary): string {
+  if (!f.lastExported) return "";
+  const when = new Date(f.lastExported * 1000).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
+  return ` Last exported ${when}.`;
+}
+
 /** Where a drag over the window will drop: an app import, or setup files. */
 type DropZone = "app" | "setup";
 
 /** Labels of the Mac and Amiga system files still missing (cd.rs `missing_slots`). */
-function missingSetupFiles(statuses: GuestStatus[]): string[] {
+/** The system files `guest` still needs: none for DOS, whose DOS comes with DOSBox. */
+function missingSetupFiles(statuses: GuestStatus[], guest: GuestOs): string[] {
+  const s = statuses.find((x) => x.os === guest);
+  if (!s) return [];
   const out: string[] = [];
-  const mac = statuses.find((s) => s.os === "mac-classic");
-  const amiga = statuses.find((s) => s.os === "amiga");
-  if (mac && !mac.system.rom) out.push("Mac ROM");
-  if (mac && !mac.system.boot) out.push("Mac startup disk");
-  if (amiga && !amiga.system.rom) out.push("Kickstart ROM");
-  if (amiga && !amiga.system.boot) out.push("Workbench disk");
+  if (guest === "mac-classic") {
+    if (!s.system.rom) out.push("Mac ROM");
+    if (!s.system.boot) out.push("Mac startup disk");
+  } else if (guest === "amiga") {
+    if (!s.system.rom) out.push("Kickstart ROM");
+    if (!s.system.boot) out.push("Workbench disk");
+  }
   return out;
 }
 
@@ -214,7 +245,8 @@ function App() {
   // The after-session "Which app was this?" answer being chosen.
   const [identifyChoice, setIdentifyChoice] = useState("");
   const [identifyVersion, setIdentifyVersion] = useState("");
-  const [tests, setTests] = useState<HandlerTest[]>([]);
+  // What Export Findings would share, counted when the gear menu opens.
+  const [findings, setFindings] = useState<FindingsSummary | null>(null);
   const [confirmRemove, setConfirmRemove] = useState<LibraryApp | null>(null);
   const [gearOpen, setGearOpen] = useState(false);
   const [disketteRunning, setDisketteRunning] = useState(false);
@@ -239,7 +271,8 @@ function App() {
   );
   const selectedDoc = guestDocs.find((d) => d.id === selectedDocId) ?? null;
   const guestRunning = apps.some((a) => a.os === guest && running.has(a.id));
-  const missingSetup = useMemo(() => missingSetupFiles(statuses), [statuses]);
+  // Only the selected guest's: the setup strip and drop target show on its tab alone.
+  const missingSetup = useMemo(() => missingSetupFiles(statuses, guest), [statuses, guest]);
   const setupNeeded = missingSetup.length > 0;
   const requestTotal = request.setup + request.apps;
 
@@ -286,6 +319,10 @@ function App() {
     };
   }, [gearOpen]);
 
+  useEffect(() => {
+    if (gearOpen) invoke<FindingsSummary>("findings_summary").then(setFindings, () => setFindings(null));
+  }, [gearOpen]);
+
   /** Runs a gear-menu item, closing the menu first. */
   function fromGear(action: () => void) {
     setGearOpen(false);
@@ -300,7 +337,6 @@ function App() {
     const list = await invoke<LibraryApp[]>("list_apps");
     setApps(list);
     setDocuments(await invoke<LibraryDoc[]>("list_documents"));
-    setTests(await invoke<HandlerTest[]>("handler_tests"));
     return list;
   }
 
@@ -747,17 +783,20 @@ function App() {
     }
   }
 
-  /** Saves the test results as a report, for scripts/merge-handler-tests.py. Nothing leaves otherwise. */
-  async function exportTests() {
+  /** Saves what Floppy has learned as a zip, for scripts/merge-findings.py. Nothing leaves otherwise. */
+  async function exportFindings() {
+    const date = new Date().toISOString().slice(0, 10);
     const path = await save({
-      title: "Export the handler test report",
-      defaultPath: "Floppy handler tests.json",
-      filters: [{ name: "JSON", extensions: ["json"] }],
+      title: "Export Findings",
+      defaultPath: `Floppy findings ${date}.zip`,
+      filters: [{ name: "Zip", extensions: ["zip"] }],
     });
     if (!path) return;
     try {
-      const n = await invoke<number>("export_handler_tests", { path });
-      setMessage(`Exported ${n} tested ${n === 1 ? "combination" : "combinations"} to ${baseName(path)}. No document names are in it.`);
+      const n = await invoke<FindingsSummary>("export_findings", { path });
+      setMessage(
+        `Saved ${baseName(path)}: ${describeFindings(n)}. It holds no documents, files or file names. Send it to Floppy's maintainers so the next release knows it too.`,
+      );
     } catch (e) {
       fail(e);
     }
@@ -896,6 +935,27 @@ function App() {
     }
   }
 
+  /** Keeps what went wrong running an app, for the user and Export Findings. */
+  async function setAppErrors(app: LibraryApp, errors: string) {
+    if (errors.trim() === app.errors) return;
+    try {
+      await invoke("set_app_errors", { id: app.id, errors });
+      await refresh();
+    } catch (e) {
+      fail(e);
+    }
+  }
+
+  /** Whether an app Floppy doesn't know shares its errors in Export Findings. */
+  async function setShareErrors(app: LibraryApp, share: boolean) {
+    try {
+      await invoke("set_app_share_errors", { id: app.id, share });
+      await refresh();
+    } catch (e) {
+      fail(e);
+    }
+  }
+
   async function commitName(app: LibraryApp) {
     const name = nameDraft.trim();
     if (!name || name === app.name) {
@@ -1017,12 +1077,18 @@ function App() {
               <button
                 type="button"
                 className="menu-item"
-                disabled={tests.length === 0}
-                title="Which apps opened which file types, from your answers. For docs/app-handlers.md; no document names."
-                onClick={() => fromGear(() => void exportTests())}
+                disabled={!findings || findingsTotal(findings) === 0}
+                title={
+                  findings && findingsTotal(findings) > 0
+                    ? `New since the last export: ${describeFindings(findings)}, as a zip for Floppy's maintainers. No documents, files or file names.${lastExported(findings)}`
+                    : findings?.lastExported
+                      ? `Nothing new since the last export.${lastExported(findings)}`
+                      : "Nothing to share yet: test results, apps you identified, file types you added, unlisted ROMs and apps' errors show up here."
+                }
+                onClick={() => fromGear(() => void exportFindings())}
               >
                 <ExportIcon />
-                <span>Export Test Report{tests.length > 0 ? ` (${tests.length})` : ""}…</span>
+                <span>Export Findings{findings && findingsTotal(findings) > 0 ? ` (${findingsTotal(findings)})` : ""}…</span>
               </button>
               <div className="menu-sep" />
               <button type="button" className="menu-item" onClick={() => fromGear(() => setAboutOpen(true))}>
@@ -1380,6 +1446,40 @@ function App() {
                       if (e.key === "Enter") e.currentTarget.blur();
                     }}
                   />
+                </label>
+              )}
+              <label className="field">
+                <span className="field-label">Errors</span>
+                <textarea
+                  key={`${selected.id}-${selected.errors}`}
+                  rows={2}
+                  maxLength={4000}
+                  placeholder="What goes wrong running it, if anything"
+                  defaultValue={selected.errors}
+                  onBlur={(e) => void setAppErrors(selected, e.currentTarget.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Escape") {
+                      e.currentTarget.value = selected.errors;
+                      e.currentTarget.blur();
+                    }
+                  }}
+                />
+                {selected.errors && selected.identity?.handler && (
+                  <span className="system-note">Goes in Export Findings, so Floppy's maintainers can look into it.</span>
+                )}
+              </label>
+              {selected.errors && !selected.identity?.handler && (
+                <label className="field-check">
+                  <input
+                    type="checkbox"
+                    checked={selected.shareErrors}
+                    onChange={(e) => void setShareErrors(selected, e.currentTarget.checked)}
+                  />
+                  <span>
+                    Share in Export Findings, to help Floppy improve. It goes with this app's name ("{selected.name}") and its
+                    program's name and fingerprint.
+                    {selected.os === "dos" && " Or set Is, if it's one of the known apps."}
+                  </span>
                 </label>
               )}
               <dl className="details-grid">

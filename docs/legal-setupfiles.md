@@ -124,6 +124,27 @@ check log. To add a Mac startup disk, add it to the script's
 `MAC_BOOT_DISKS`. A user-reported ROM dump that's missing goes in the
 same way, once its source publishes the hash.
 
+### Reported by users
+
+Copies Floppy users set up that none of the sources above list, from
+merged findings (Floppy's **Export Findings…**, then
+`scripts/merge-findings.py`). Floppy reads this table straight from this
+file (`cd.rs`) and adds each row to the missing-files list like the
+published ones, so every release looks for them too. Only ROMs and
+Workbench floppies are reported: startup disks and hard-disk files
+change as they're used, so their hashes say nothing.
+
+A row means someone's Floppy recognized the file by its contents and
+had it set up, not that anyone checked the dump. Floppy still checks
+every file's contents on import, so a wrong row costs a wasted copy at
+worst. Once a published source lists the same hash, the merge script
+drops the row, since `known_files.rs` has it.
+
+<!-- reported:start -->
+| Slot | What | Size | SHA-1 | Reports | Last reported |
+|---|---|---|---|---|---|
+<!-- reported:end -->
+
 ## Emulators
 
 All three emulators are bundled with Floppy on macOS. Basilisk II is

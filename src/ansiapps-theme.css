@@ -143,6 +143,7 @@
 /* Text fields and pickers: black strips, the DOS command-line look */
 :root[data-theme="ansiapps"] .field input,
 :root[data-theme="ansiapps"] .field select,
+:root[data-theme="ansiapps"] .field textarea,
 :root[data-theme="ansiapps"] .system-row select,
 :root[data-theme="ansiapps"] .verify-row input {
   background: var(--dos-black);

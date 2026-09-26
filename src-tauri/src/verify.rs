@@ -1,8 +1,8 @@
 //! Handler verification: whether an app actually opened a file type,
 //! from the user's answers after each document session. Results stay in
 //! `library/verifications.json`. They rank the "Open with" choices, and
-//! leave only when the user exports a report (rule 4: no telemetry).
-//! `scripts/merge-handler-tests.py` merges reports into
+//! leave only when the user exports findings (findings.rs; rule 4: no
+//! telemetry). `scripts/merge-findings.py` merges them into
 //! `docs/app-handlers.md`'s "Tested in Floppy" table.
 //!
 //! A result records the guest, the app (and the handler and version it
@@ -72,6 +72,10 @@ pub struct Verification {
     /// Unix seconds.
     pub when: u64,
     pub floppy_version: String,
+    /// Already in an Export Findings zip, so a later one leaves it out
+    /// (merged counts add up).
+    #[serde(default)]
+    pub exported: bool,
 }
 
 /// Every answer for one guest + app + version + program + file type.
@@ -140,13 +144,37 @@ pub fn record(library: &Library, pending: &Pending, outcome: Outcome, note: Opti
         note,
         when: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0),
         floppy_version: env!("CARGO_PKG_VERSION").to_string(),
+        exported: false,
     });
     save(library, &all)
 }
 
-/// Every answer, totalled per guest + app + program + file type, sorted.
+/// Every answer, totalled per guest + app + version + program + file
+/// type, sorted.
 pub fn tallies(library: &Library) -> Vec<Tally> {
     tally(&load(library))
+}
+
+/// The answers no Export Findings has shared yet, totalled, and how many
+/// answers there were in all (for `mark_exported`).
+pub fn unexported(library: &Library) -> (Vec<Tally>, usize) {
+    let all = load(library);
+    let new: Vec<Verification> = all.iter().filter(|v| !v.exported).cloned().collect();
+    (tally(&new), all.len())
+}
+
+/// Marks the first `count` answers as exported: the ones `unexported`
+/// saw, answers being only ever added at the end.
+pub fn mark_exported(library: &Library, count: usize) -> Result<(), String> {
+    let mut all = load(library);
+    if all.len() < count {
+        return Ok(()); // Forgotten since.
+    }
+    let mut changed = false;
+    for v in &mut all[..count] {
+        changed |= !std::mem::replace(&mut v.exported, true);
+    }
+    if changed { save(library, &all) } else { Ok(()) }
 }
 
 pub fn tally(all: &[Verification]) -> Vec<Tally> {
@@ -217,33 +245,6 @@ pub fn forget_all(library: &Library) -> Result<(), String> {
     }
 }
 
-/// A report the user chose to export, for `scripts/merge-handler-tests.py`.
-#[derive(Serialize, Deserialize, Debug)]
-#[serde(rename_all = "camelCase")]
-pub struct Report {
-    pub format: String,
-    pub version: u32,
-    /// Unique per export, so merging a report twice doesn't count twice.
-    pub id: String,
-    pub floppy_version: String,
-    /// Unix seconds.
-    pub exported: u64,
-    pub tallies: Vec<Tally>,
-}
-
-pub fn report(library: &Library) -> Report {
-    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
-    Report {
-        format: "floppy-handler-tests".into(),
-        // 2: tallies carry confirmed, version, size and sha256.
-        version: 2,
-        id: format!("{:x}-{:x}", now.as_nanos(), std::process::id()),
-        floppy_version: env!("CARGO_PKG_VERSION").to_string(),
-        exported: now.as_secs(),
-        tallies: tallies(library),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -283,9 +284,24 @@ mod tests {
         // The document's name is never stored.
         let raw = std::fs::read_to_string(lib.verifications_path()).unwrap();
         assert!(!raw.contains("Letter to Bank"));
-        assert_eq!(report(&lib).tallies, all);
         forget_all(&lib).unwrap();
         assert!(tallies(&lib).is_empty());
+    }
+
+    #[test]
+    fn exported_answers_stay_counted_but_leave_once() {
+        let t = TempDir::new();
+        let lib = Library::new(t.path().join("lib"));
+        record(&lib, &pending("WP.EXE", ".WP5"), Outcome::Worked, None).unwrap();
+        record(&lib, &pending("WP.EXE", ".WP5"), Outcome::Worked, None).unwrap();
+        let (new, seen) = unexported(&lib);
+        assert_eq!((new[0].worked, seen), (2, 2));
+        // One more arrives while the zip is written: it isn't marked.
+        record(&lib, &pending("WP.EXE", ".WP5"), Outcome::Failed, None).unwrap();
+        mark_exported(&lib, seen).unwrap();
+        let (new, _) = unexported(&lib);
+        assert_eq!((new.len(), new[0].worked, new[0].failed), (1, 0, 1));
+        assert_eq!((tallies(&lib)[0].worked, tallies(&lib)[0].failed), (2, 1), "Open with still counts them all");
     }
 
     #[test]

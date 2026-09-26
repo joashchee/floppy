@@ -147,7 +147,8 @@ Handler versions known by their program's fingerprint: size in bytes and
 SHA-256 of the program file. A new import whose program matches a row is
 identified as that app and version without asking.
 
-Rows come from test reports (`scripts/merge-handler-tests.py`, below):
+Rows come from findings (**Export Findings…** in Floppy's gear menu,
+merged with `scripts/merge-findings.py`):
 a result for an app the user said was, for example, WordPerfect 5.1
 carries that program's fingerprint, and merging it adds or updates the
 row. Worked and Failed are totals across its tests, over all file types.
@@ -164,20 +165,54 @@ fails if a row doesn't parse or names an app that isn't above.
 |---|---|---|---|---|---|---|---|---|
 <!-- versions:end -->
 
+## Reported file types
+
+File types Floppy users say a known app opens, beyond the tables above:
+extensions they added to the app's **Also opens** once they'd confirmed
+which app it is. From merged findings (**Export Findings…**, then
+`scripts/merge-findings.py`). Floppy reads this table straight from
+this file, so every release offers these apps for these types, with
+"Floppy users report that…" as the reason. Reports counts the findings
+files that said so. Move an entry into the app's row above once it's
+checked, and delete it here (a unit test fails while it's in both).
+
+<!-- filetypes:start -->
+| Guest | App | Extension | Reports | Last reported |
+|---|---|---|---|---|
+<!-- filetypes:end -->
+
+## Reported problems
+
+What Floppy users wrote in an app's **Errors** field in the details
+panel, per app, version and program (its file name and the start of its
+SHA-256, when Floppy had it). A known app's errors are shared with the
+findings; another app's only when the user ticked Share, and it's listed
+as "<its name in their library> (unidentified)". From merged findings. Floppy doesn't read
+this table: it's for whoever looks into why an app misbehaves in its
+emulator (per-app DOSBox settings, a missing driver, a bad copy). Users
+typed these, so check a row before acting on it. Delete a row once it's
+dealt with.
+
+<!-- problems:start -->
+| Guest | App | Version | Program | Errors | Reported |
+|---|---|---|---|---|---|
+<!-- problems:end -->
+
 ## Tested in Floppy
 
 Whether an app opened a file type correctly in its emulator, from users'
 answers. After each document session Floppy asks "Did it open
 correctly?" and keeps the answer locally (`verify.rs`,
 `library/verifications.json`). The answers rank the "Open with" choices.
-Nothing leaves the machine until the user chooses **Export Test
-Report…**. To merge reports into this table, run:
+Nothing leaves the machine until the user chooses **Export Findings…**,
+which saves them (with the other findings, `findings.rs`) as a zip. To
+merge findings into this document, run:
 
 ```sh
-scripts/merge-handler-tests.py "Floppy handler tests.json" [more reports…]
+scripts/merge-findings.py "Floppy findings 2026-09-27.zip" [more…]
 ```
 
-Each report is merged once (its ID is recorded below). The script adds a
+Each findings file is merged once (its ID is recorded below). The script adds a
 check-log row, and suggests *believed* entries that tests now back up.
 Reports carry no document names, only the file type. Counts are totals
 across all merged reports. An entry that failed more often than it

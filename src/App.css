@@ -345,7 +345,8 @@ button.icontext-btn .btn-icon { display: inline-flex; width: 14px; height: 14px;
   color: var(--muted);
 }
 .field input,
-.field select {
+.field select,
+.field textarea {
   width: 100%;
   background: var(--panel-2);
   border: 1px solid var(--line);
@@ -355,6 +356,7 @@ button.icontext-btn .btn-icon { display: inline-flex; width: 14px; height: 14px;
   font-size: 13px;
 }
 .field input { font-family: var(--font-ui); }
+.field textarea { font-family: var(--font-ui); resize: vertical; min-height: 44px; }
 .field select { font-family: var(--font-mono); }
 .field select:focus { outline: 2px solid var(--accent-dim); outline-offset: 1px; }
 .detail-actions { display: flex; flex-wrap: wrap; gap: 8px; }

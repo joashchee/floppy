@@ -12,6 +12,7 @@ use crate::documents::{self, Change, Opener};
 use crate::library::{GuestOs, GuestSystem, Library, LibraryApp, LibraryDoc, SystemFile};
 use crate::cd::{self, CdImport};
 use crate::discs;
+use crate::findings;
 use crate::handlers;
 use crate::request;
 use crate::verify;
@@ -336,16 +337,31 @@ pub fn handler_tests(state: State<AppState>) -> Vec<verify::Tally> {
     verify::tallies(&state.library)
 }
 
-/// Writes a handler test report to `path`, for
-/// `scripts/merge-handler-tests.py`. Only when the user asks: nothing
-/// leaves the machine otherwise.
+/// How much Export Findings would share (findings.rs), for the gear menu.
 #[tauri::command]
-pub fn export_handler_tests(state: State<AppState>, path: String) -> Result<usize, String> {
-    let report = verify::report(&state.library);
-    let n = report.tallies.len();
-    let json = serde_json::to_vec_pretty(&report).map_err(|e| e.to_string())?;
-    std::fs::write(&path, json).map_err(|e| format!("Couldn't save the report: {e}"))?;
-    Ok(n)
+pub async fn findings_summary(app: AppHandle) -> Result<findings::Summary, String> {
+    tauri::async_runtime::spawn_blocking(move || findings::summary(&app.state::<AppState>().library))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Writes what this Floppy has learned since the last export to a zip at
+/// `path`, for `scripts/merge-findings.py`, and remembers it went. Only
+/// when the user asks: nothing leaves the machine otherwise.
+#[tauri::command]
+pub async fn export_findings(app: AppHandle, path: String) -> Result<findings::Summary, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let library = &app.state::<AppState>().library;
+        let found = findings::collect(library)?;
+        if found.is_empty() {
+            return Err("Nothing new to share since the last export.".to_string());
+        }
+        findings::write_zip(&found, Path::new(&path))?;
+        findings::mark_exported(library, &found)?;
+        Ok(found.summary())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -689,6 +705,18 @@ pub fn remove_document(state: State<AppState>, id: String) -> Result<(), String>
     state.library.remove_document(&id)
 }
 
+/// Keeps the user's note of what goes wrong running an app.
+#[tauri::command]
+pub fn set_app_errors(state: State<AppState>, id: String, errors: String) -> Result<LibraryApp, String> {
+    state.library.set_errors(&id, &errors)
+}
+
+/// Whether an app Floppy doesn't know shares its errors in Export Findings.
+#[tauri::command]
+pub fn set_app_share_errors(state: State<AppState>, id: String, share: bool) -> Result<LibraryApp, String> {
+    state.library.set_share_errors(&id, share)
+}
+
 /// Says which document extensions an app opens.
 #[tauri::command]
 pub fn set_app_opens(state: State<AppState>, id: String, exts: Vec<String>) -> Result<LibraryApp, String> {
@@ -749,6 +777,9 @@ mod tests {
             program_ids: Default::default(),
             identity,
             favorite: false,
+            errors: String::new(),
+            named_by_user: false,
+            share_errors: false,
         }
     }
 

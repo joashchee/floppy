@@ -8,6 +8,7 @@ mod dos;
 #[cfg(test)]
 mod e2e;
 mod emulator;
+mod findings;
 mod handlers;
 mod known_files;
 mod library;
@@ -84,7 +85,10 @@ pub fn run() {
             commands::import_files_disc,
             commands::record_verification,
             commands::handler_tests,
-            commands::export_handler_tests,
+            commands::findings_summary,
+            commands::export_findings,
+            commands::set_app_errors,
+            commands::set_app_share_errors,
             commands::forget_handler_tests,
             commands::write_wanted_apps,
             commands::import_apps_disc,

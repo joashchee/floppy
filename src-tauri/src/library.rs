@@ -109,6 +109,16 @@ pub struct LibraryApp {
     /// has several. At most one app per handler has it.
     #[serde(default)]
     pub favorite: bool,
+    /// Problems the user noted running it, for Export Findings.
+    #[serde(default)]
+    pub errors: String,
+    /// The user renamed it, so saying what it is keeps their name.
+    #[serde(default)]
+    pub named_by_user: bool,
+    /// The user chose to share its errors in Export Findings though it
+    /// isn't a known app (so its name goes too). Known apps' always go.
+    #[serde(default)]
+    pub share_errors: bool,
 }
 
 impl LibraryApp {
@@ -117,7 +127,20 @@ impl LibraryApp {
     pub fn handler(&self) -> Option<&str> {
         self.identity.as_ref().and_then(|i| i.handler.as_deref())
     }
+
+    /// Takes its identity, and the name that says it ("WordPerfect 5.1").
+    /// An app that isn't a known one, or one the user named, keeps its
+    /// name.
+    fn identify_as(&mut self, identity: Option<Identity>) {
+        if let Some(name) = identity.as_ref().and_then(Identity::name).filter(|_| !self.named_by_user) {
+            self.name = name;
+        }
+        self.identity = identity;
+    }
 }
+
+/// The longest Errors note kept.
+const MAX_ERRORS: usize = 4000;
 
 /// A program file's fingerprint.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -134,6 +157,20 @@ pub struct Identity {
     pub handler: Option<String>,
     pub version: Option<String>,
     pub by: IdentifiedBy,
+}
+
+impl Identity {
+    /// The app's name for it: the handler and version, the version before
+    /// a trailing qualifier ("Microsoft Word 5.5 (DOS)"). `None` for an
+    /// app that isn't a known one.
+    pub fn name(&self) -> Option<String> {
+        let handler = self.handler.as_deref()?;
+        let Some(version) = self.version.as_deref().filter(|v| !v.is_empty()) else { return Some(handler.to_string()) };
+        Some(match handler.rsplit_once(" (") {
+            Some((base, qualifier)) if handler.ends_with(')') => format!("{base} {version} ({qualifier}"),
+            _ => format!("{handler} {version}"),
+        })
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
@@ -240,6 +277,11 @@ impl Library {
         self.root.join("verifications.json")
     }
 
+    /// What Export Findings has already shared (findings.rs).
+    pub fn findings_path(&self) -> PathBuf {
+        self.root.join("findings.json")
+    }
+
     /// Emulators the user located themselves (emulator.rs).
     pub fn emulators_path(&self) -> PathBuf {
         self.root.join("emulators.json")
@@ -313,6 +355,7 @@ impl Library {
         }
         self.update(id, |a| {
             a.name = name.to_string();
+            a.named_by_user = true;
             Ok(())
         })
     }
@@ -415,7 +458,7 @@ impl Library {
         // The folder name was free on disk, so an entry still naming it is
         // stale (its folder was deleted outside Floppy).
         m.apps.retain(|a| !(a.os == os && a.dir == dir));
-        let app = LibraryApp {
+        let mut app = LibraryApp {
             id: unique_id(os, &dir, &m.apps),
             os,
             name,
@@ -426,9 +469,13 @@ impl Library {
             added: SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0),
             opens: Vec::new(),
             program_ids,
-            identity,
+            identity: None,
             favorite: false,
+            errors: String::new(),
+            named_by_user: false,
+            share_errors: false,
         };
+        app.identify_as(identity);
         m.apps.push(app.clone());
         self.save(&m)?;
         Ok(app)
@@ -447,7 +494,7 @@ impl Library {
             }
             app.program_ids = program_ids(&self.os_root(app.os).join(&app.dir), &app.programs);
             if app.identity.is_none() {
-                app.identity = handlers::identify(app.os, &app.program_ids, handlers::known_versions());
+                app.identify_as(handlers::identify(app.os, &app.program_ids, handlers::known_versions()));
             }
             changed |= !app.program_ids.is_empty();
         }
@@ -458,8 +505,9 @@ impl Library {
     }
 
     /// Says what an app is (`None`: not known yet), as the user confirmed
-    /// it. A handler must be one of its guest's in `HANDLERS`. Changing
-    /// the handler drops the app's favorite mark.
+    /// it, and names it for that ("WordPerfect 5.1"). A handler must be
+    /// one of its guest's in `HANDLERS`. Changing the handler drops the
+    /// app's favorite mark.
     pub fn set_identity(&self, id: &str, identity: Option<(Option<String>, Option<String>)>) -> Result<LibraryApp, String> {
         self.update(id, |a| {
             let identity = match identity {
@@ -476,7 +524,27 @@ impl Library {
             if a.handler() != identity.as_ref().and_then(|i| i.handler.as_deref()) {
                 a.favorite = false;
             }
-            a.identity = identity;
+            a.identify_as(identity);
+            Ok(())
+        })
+    }
+
+    /// Whether an app that isn't a known one shares its errors.
+    pub fn set_share_errors(&self, id: &str, share: bool) -> Result<LibraryApp, String> {
+        self.update(id, |a| {
+            a.share_errors = share;
+            Ok(())
+        })
+    }
+
+    /// Keeps the user's note of what went wrong running an app.
+    pub fn set_errors(&self, id: &str, text: &str) -> Result<LibraryApp, String> {
+        let text = text.trim();
+        if text.chars().count() > MAX_ERRORS {
+            return Err(format!("Keep it under {MAX_ERRORS} characters."));
+        }
+        self.update(id, |a| {
+            a.errors = text.to_string();
             Ok(())
         })
     }
@@ -960,6 +1028,7 @@ mod tests {
         }
         // Say what they are.
         let wp50 = lib.set_identity(&ids[0], Some((Some("wordperfect".into()), Some(" 5.0 ".into())))).unwrap();
+        assert_eq!(wp50.name, "WordPerfect 5.0", "the name follows Is and Version");
         let identity = wp50.identity.unwrap();
         assert_eq!((identity.handler.as_deref(), identity.version.as_deref(), identity.by), (Some("WordPerfect"), Some("5.0"), IdentifiedBy::User));
         lib.set_identity(&ids[1], Some((Some("WordPerfect".into()), Some("5.1".into())))).unwrap();
@@ -974,9 +1043,35 @@ mod tests {
         // isn't a handler can't be one.
         let other = lib.set_identity(&ids[1], Some((None, Some("7".into())))).unwrap();
         assert!(!other.favorite);
+        assert_eq!(other.name, "WordPerfect 5.1", "an app that isn't a known one keeps its name");
+        // A name the user chose stays through a new version.
+        lib.rename(&ids[0], "Office WP").unwrap();
+        let renamed = lib.set_identity(&ids[0], Some((Some("WordPerfect".into()), Some("5.1".into())))).unwrap();
+        assert_eq!(renamed.name, "Office WP");
         assert_eq!(other.identity.as_ref().map(|i| (i.handler.is_none(), i.version.is_none())), Some((true, true)));
         assert!(lib.set_favorite(&ids[1]).is_err());
         assert!(lib.set_identity(&ids[1], None).unwrap().identity.is_none());
+    }
+
+    #[test]
+    fn names_say_the_app_and_version() {
+        let id = |h: Option<&str>, v: Option<&str>| Identity { handler: h.map(String::from), version: v.map(String::from), by: IdentifiedBy::User };
+        assert_eq!(id(Some("WordPerfect"), Some("5.1")).name().as_deref(), Some("WordPerfect 5.1"));
+        assert_eq!(id(Some("Microsoft Word (DOS)"), Some("5.5")).name().as_deref(), Some("Microsoft Word 5.5 (DOS)"));
+        assert_eq!(id(Some("Lotus 1-2-3"), None).name().as_deref(), Some("Lotus 1-2-3"));
+        assert_eq!(id(None, Some("2")).name(), None);
+    }
+
+    #[test]
+    fn errors_notes_are_kept_trimmed_and_bounded() {
+        let t = TempDir::new();
+        let lib = Library::new(t.path().join("lib"));
+        let src = t.path().join("WP51");
+        fs::create_dir_all(&src).unwrap();
+        fs::write(src.join("WP.EXE"), "MZ").unwrap();
+        let app = lib.import(GuestOs::Dos, &src).unwrap();
+        assert_eq!(lib.set_errors(&app.id, "  Printer driver missing\n").unwrap().errors, "Printer driver missing");
+        assert!(lib.set_errors(&app.id, &"x".repeat(MAX_ERRORS + 1)).is_err());
     }
 
     #[test]
@@ -1109,6 +1204,9 @@ mod tests {
             program_ids: BTreeMap::new(),
             identity: None,
             favorite: false,
+            errors: String::new(),
+            named_by_user: false,
+            share_errors: false,
         }];
         assert_eq!(unique_id(GuestOs::MacClassic, "My App", &apps), "mac-my-app-2");
         assert_eq!(unique_id(GuestOs::MacClassic, "Café", &apps), "mac-caf-");

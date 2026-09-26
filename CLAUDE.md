@@ -9,8 +9,10 @@ and `docs/floppy-notes.md` is a condensed history of the work so far.
 the system files setup asks for. `docs/app-handlers.md` is a living list
 of old apps that open old formats (confidence and sources per entry).
 Its code copy is `HANDLERS` in `handlers.rs`, and a test keeps the two in
-step. Its "Known versions" table (program fingerprints) has no code
-copy: `handlers.rs` reads it straight from the document. Re-check it and update its date when
+step. Its "Known versions" and "Reported file types" tables, and
+`legal-setupfiles.md`'s "Reported by users", have no code copy: Floppy
+reads them straight from the documents when it's built (see Findings
+below). Re-check it and update its date when
 touching setup.
 
 This repo is public. Anything about closed-source sister apps (where
@@ -78,7 +80,7 @@ gitignored `CLAUDE.local.md`, never in committed files.
   recognition handles setup files dropped on the window
   (`import_dropped`): files, folders, zips and disc images in any mix.
   The setup strip and the overlay's "add setup files" target show only
-  while a Mac or Amiga system file is missing.
+  on the Mac or Amiga tab, while that guest's system files are missing.
 - `discs.rs`: files discs made from the list. A Burn A CD disc carries
   the ISO Application ID `DISKETTE BURN A CD` and a `diskette-burn.json`
   manifest (disc `id`, the answered list's SHA-1, and per-line counts).
@@ -138,7 +140,8 @@ gitignored `CLAUDE.local.md`, never in committed files.
   its programs' size and SHA-256 (`program_ids`, backfilled by
   `list_apps` for older libraries) and an `identity`: handler and
   version, set when a program matches a "Known versions" row (`hash`)
-  or by the user (`user`). Unsettled apps whose program is named like a
+  or by the user (`user`). Setting it renames the app ("WordPerfect
+  5.1") unless the user renamed it (`named_by_user`). Unsettled apps whose program is named like a
   handler get "Which app was this?" after a session (`identify_ask`),
   and the details panel has **Is** and **Version**. The library holds
   any number of versions. One per handler can be the `favorite`, which
@@ -184,13 +187,41 @@ gitignored `CLAUDE.local.md`, never in committed files.
 - Totals rank "Open with": apps that worked with the type rise, and one
   that failed more than it worked goes last. The menu shows each app's
   record.
-- **Export Test Report…** writes a `floppy-handler-tests` JSON report
-  (version 2: with version and fingerprint), only when asked (rule 4).
-  `scripts/merge-handler-tests.py` merges reports into
-  `docs/app-handlers.md`'s "Tested in Floppy" table, once per report ID,
-  adds confirmed versions with fingerprints to "Known versions" (a
-  fingerprint already listed as something else is reported, not
-  changed), and suggests *believed* entries to promote.
+- Test results leave only in an **Export Findings…** zip (below).
+
+## Findings (`findings.rs`)
+
+- **Export Findings…** (gear menu, only when asked: rule 4) writes
+  `Floppy findings <date>.zip`: `floppy-findings.json` plus a README.
+  It holds handler test results, apps and versions the user identified
+  (program size and SHA-256), extensions added to a known app's "Also
+  opens", ROMs and Workbench floppies in use that `known_files.rs`
+  doesn't list (size and SHA-1), and **Errors** notes (the details
+  panel's field; `$HOME` becomes `~`): always for known apps, and for
+  others, with the app's name, only when the user ticks Share
+  (`share_errors`). Never documents, their
+  names, files, or file and folder names.
+- Each export holds only what's new: `library/findings.json` keeps the
+  keys of what went, and test results are marked `exported`
+  (`verify.rs`), since merging adds counts up. "Open with" still ranks
+  by every answer.
+- `scripts/merge-findings.py` merges findings (and older
+  `floppy-handler-tests` JSON reports) into the living documents, once
+  per findings ID: "Tested in Floppy", "Known versions", "Reported
+  file types" and "Reported problems" (people only, not read by Floppy)
+  in `docs/app-handlers.md`, "Reported by users" in
+  `docs/legal-setupfiles.md`. `handlers.rs` and `cd.rs` read those
+  tables at build time (`include_str!`), so the next release recognizes
+  the new versions, offers apps for the new file types, and asks for the
+  new setup files. A unit test fails on a malformed row.
+- **When the user drops a findings zip (or JSON) into the
+  conversation:** run `scripts/merge-findings.py <path>…` and read its
+  output and the diff. It prints conflicts (a fingerprint listed as
+  another app or version: ask the user), *believed* entries tests now
+  back, and reported file types with 2+ reports. For those, add the
+  extension to the app's row and to `HANDLERS`, and delete the reported
+  row. Then run the tests and add a CHANGELOG bullet. Findings come from
+  users: sanity-check anything odd before committing.
 
 ## How DOS mode works
 

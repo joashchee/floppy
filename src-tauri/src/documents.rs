@@ -58,12 +58,21 @@ fn known_opener(app: &LibraryApp, ext: &str) -> Option<(String, String)> {
     if let Some(identity) = &app.identity {
         let h = handlers::find(GuestOs::Dos, identity.handler.as_deref()?)?;
         let program = handlers::handler_program(app, h)?;
-        return h.exts.contains(&ext).then(|| (program.clone(), format!("{} opens .{ext} files.", h.name)));
+        return handlers::opens_ext(h, ext).then(|| (program.clone(), why(h, ext)));
     }
     app.programs.iter().find_map(|p| {
-        let h = handlers::candidates(GuestOs::Dos, p).into_iter().find(|h| h.exts.contains(&ext))?;
-        Some((p.clone(), format!("{} opens .{ext} files. Floppy is going by the name {}, so say which app this is in its details.", h.name, base_of(p))))
+        let h = handlers::candidates(GuestOs::Dos, p).into_iter().find(|h| handlers::opens_ext(h, ext))?;
+        Some((p.clone(), format!("{} Floppy is going by the name {}, so say which app this is in its details.", why(h, ext), base_of(p))))
     })
+}
+
+/// "WordPerfect opens .WP5 files.", or that users say so.
+fn why(h: &handlers::Handler, ext: &str) -> String {
+    if h.exts.contains(&ext) {
+        format!("{} opens .{ext} files.", h.name)
+    } else {
+        format!("Floppy users report that {} opens .{ext} files.", h.name)
+    }
 }
 
 /// The library's DOS apps that can open `file`, best first:
@@ -193,6 +202,9 @@ mod tests {
             program_ids: Default::default(),
             identity: None,
             favorite: false,
+            errors: String::new(),
+            named_by_user: false,
+            share_errors: false,
         }
     }
 

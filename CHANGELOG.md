@@ -8,6 +8,39 @@ against the day the change was made.
 
 ## Unreleased
 
+- **Errors field, names that follow Is and Version, exports that don't
+  repeat** (2026-09-27):
+  - Each app's details panel has an **Errors** field: what goes wrong
+    running it. For a known app, Export Findings carries it (the user's
+    home folder reads `~`), and `merge-findings.py` adds it to a new
+    "Reported problems" table in `docs/app-handlers.md`. Another app's
+    errors stay on the Mac unless you tick **Share in Export Findings**,
+    which sends them with the app's name and program fingerprint.
+  - Saying what an app is (Is and Version, "Which app was this?", or a
+    known fingerprint on import) names it for that: "WordPerfect 5.1".
+    An app you renamed keeps your name.
+  - Export Findings holds only what's new since the last export
+    (`library/findings.json`, and each test result is marked exported),
+    because merging adds counts up. The gear menu counts new findings
+    and says when you last exported.
+- **Export Findings** (2026-09-27): the gear menu's Export Test Report is
+  now **Export Findings…**, a zip of everything Floppy has learned that
+  could help every Floppy: test results, apps and versions you
+  identified (by program fingerprint), file types you added to a known
+  app, and ROMs or Workbench floppies it didn't know. No documents,
+  files or file names. `scripts/merge-findings.py` (was
+  `merge-handler-tests.py`, still reads old reports) merges it into the
+  living documents, which Floppy reads when it's built:
+  - new "Reported file types" table (`docs/app-handlers.md`): users'
+    extensions, offered in "Open with";
+  - new "Reported by users" table (`docs/legal-setupfiles.md`): setup
+    files the missing-files list now asks for by content;
+  - program names in "Known versions" count as clues for "Which app
+    was this?".
+- **Setup files per tab** (2026-09-27): the "Setup files needed" strip,
+  Import Files Disc and the drop overlay's setup target show only on the
+  tab of the guest that needs them, listing just its files. The DOS tab,
+  which needs none, no longer shows them.
 - **App versions** (2026-09-27): Floppy tells DOS app versions, and
   different apps with the same program name (`WORD.EXE`), apart.
   - Each DOS app's programs are fingerprinted (size and SHA-256). One
