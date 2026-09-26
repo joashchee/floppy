@@ -6,7 +6,7 @@ All notable changes to Floppy are recorded here. Format loosely follows
 Update this file whenever a change lands. A short bullet is enough, dated
 against the day the change was made.
 
-## Unreleased
+## 0.3.0 (2026-09-27)
 
 - **Basilisk II is bundled** (2026-09-27): the classic Mac works out of
   the box, like DOS and Amiga. `scripts/fetch-basilisk.sh` pins Floppy's
