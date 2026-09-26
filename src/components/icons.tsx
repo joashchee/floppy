@@ -15,14 +15,24 @@ const stroke = {
   strokeLinejoin: "round",
 } as const;
 
-/** Floppy's brand mark: the app icon's disk, in fixed colors. */
+/** Floppy's brand mark: the app icon's 5¼" disk, in fixed colors. The
+ * rim is thicker than the icon's so it still reads at header size. */
 export function AppMarkIcon(props: IconProps) {
   return (
-    <svg viewBox="96 96 320 320" {...props}>
-      <path d="M112,96 H368 L416,144 V400 Q416,416 400,416 H112 Q96,416 96,400 V112 Q96,96 112,96 Z" fill="#4ade80" />
-      <rect x="172" y="96" width="168" height="112" rx="6" fill="#d7dbe2" />
-      <rect x="280" y="114" width="36" height="76" rx="4" fill="#14161a" />
-      <rect x="144" y="256" width="224" height="160" rx="10" fill="#f4f1e8" />
+    <svg viewBox="66 66 380 380" {...props}>
+      <path
+        d="M80,72 H432 Q440,72 440,80 V124 H422 V158 H440 V432 Q440,440 432,440 H294 A8,8 0 0 0 278,440 H234 A8,8 0 0 0 218,440 H80 Q72,440 72,432 V80 Q72,72 80,72 Z"
+        fill="#3d424b"
+        stroke="#7a8392"
+        strokeWidth="10"
+        strokeLinejoin="round"
+      />
+      <rect x="100" y="96" width="280" height="66" rx="4" fill="#f4f1e8" />
+      <rect x="100" y="96" width="280" height="16" fill="#4ade80" />
+      <circle cx="256" cy="264" r="60" fill="#241c18" />
+      <circle cx="256" cy="264" r="46" fill="none" stroke="#a8977e" strokeWidth="14" />
+      <circle cx="256" cy="264" r="30" fill="#14161a" />
+      <rect x="236" y="340" width="40" height="84" rx="20" fill="#241c18" />
     </svg>
   );
 }

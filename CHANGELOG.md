@@ -8,6 +8,19 @@ against the day the change was made.
 
 ## Unreleased (0.1.0)
 
+- **New app icon: a classic 5¼" floppy disk** (2026-09-26), replacing
+  the 3½" one. It's a dark grey jacket with a light rim on the dark tile,
+  and a cream label striped in Floppy's green. It has the large hub
+  opening with the disk's hub ring, an index hole, a long head window
+  with stress-relief notches on either side, and a write-protect notch.
+  The header's brand mark (`AppMarkIcon`) is redrawn to match.
+  `src-tauri/build.rs` now reruns when `icons/` changes: the dev Dock
+  icon is compiled in, and cargo didn't treat the icons as inputs, so
+  `tauri dev` kept showing the old one.
+  `src-tauri/icons/source-icon.svg` is the source (also
+  `public/favicon.svg`). Every size is generated from it with `npx tauri
+  icon`, keeping only the desktop icons.
+
 - **Basilisk II build workflow** (2026-09-26), a first step towards
   bundling it. `.github/workflows/basilisk.yml` (run by hand) builds a
   universal `BasiliskII.app` from a pinned kanjitalk755/macemu commit

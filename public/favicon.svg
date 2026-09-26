@@ -1,21 +1,33 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
   <rect width="512" height="512" rx="104" fill="#14161a"/>
   <defs>
-    <linearGradient id="body" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#5ee89a"/>
-      <stop offset="100%" stop-color="#2fae66"/>
+    <linearGradient id="jacket" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#4a505b"/>
+      <stop offset="100%" stop-color="#30343c"/>
     </linearGradient>
-    <linearGradient id="metal" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0%" stop-color="#fbfcfe"/>
-      <stop offset="55%" stop-color="#c3c8d0"/>
-      <stop offset="100%" stop-color="#7d8491"/>
+    <linearGradient id="media" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#3a2e27"/>
+      <stop offset="50%" stop-color="#1c1613"/>
+      <stop offset="100%" stop-color="#33281f"/>
     </linearGradient>
   </defs>
-  <path d="M112,96 H368 L416,144 V400 Q416,416 400,416 H112 Q96,416 96,400 V112 Q96,96 112,96 Z" fill="url(#body)"/>
-  <rect x="172" y="96" width="168" height="112" rx="6" fill="url(#metal)"/>
-  <rect x="280" y="114" width="36" height="76" rx="4" fill="#14161a"/>
-  <rect x="144" y="256" width="224" height="160" rx="10" fill="#f4f1e8"/>
-  <rect x="168" y="292" width="176" height="10" rx="5" fill="#2fae66" opacity="0.55"/>
-  <rect x="168" y="324" width="140" height="10" rx="5" fill="#2fae66" opacity="0.4"/>
-  <rect x="168" y="356" width="160" height="10" rx="5" fill="#2fae66" opacity="0.4"/>
+  <!-- 5¼" jacket: square flexible sleeve with the write-protect notch in
+       the right edge and the two stress-relief notches in the bottom edge,
+       either side of the head window -->
+  <path d="M80,72 H432 Q440,72 440,80 V124 H422 V158 H440 V432 Q440,440 432,440 H294 A8,8 0 0 0 278,440 H234 A8,8 0 0 0 218,440 H80 Q72,440 72,432 V80 Q72,72 80,72 Z"
+        fill="url(#jacket)" stroke="#7a8392" stroke-width="3" stroke-linejoin="round"/>
+  <!-- label -->
+  <rect x="100" y="96" width="280" height="66" rx="4" fill="#f4f1e8"/>
+  <rect x="100" y="96" width="280" height="14" rx="4" fill="#4ade80"/>
+  <rect x="100" y="104" width="280" height="6" fill="#4ade80"/>
+  <rect x="118" y="126" width="188" height="8" rx="4" fill="#2fae66" opacity="0.6"/>
+  <rect x="118" y="144" width="136" height="8" rx="4" fill="#2fae66" opacity="0.45"/>
+  <!-- large hub opening: the disk's reinforcing hub ring and centre hole -->
+  <circle cx="256" cy="264" r="60" fill="url(#media)"/>
+  <circle cx="256" cy="264" r="46" fill="none" stroke="#a8977e" stroke-width="12"/>
+  <circle cx="256" cy="264" r="32" fill="#14161a"/>
+  <!-- index hole -->
+  <circle cx="342" cy="296" r="9" fill="url(#media)"/>
+  <!-- long head window running down to the bottom edge -->
+  <rect x="236" y="340" width="40" height="84" rx="20" fill="url(#media)"/>
 </svg>
