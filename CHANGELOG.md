@@ -6,6 +6,16 @@ All notable changes to Floppy are recorded here. Format loosely follows
 Update this file whenever a change lands. A short bullet is enough, dated
 against the day the change was made.
 
+## Unreleased
+
+- **Releases ship the bundled emulators' source** (2026-09-26).
+  `scripts/build-release.sh` now ends by running the new
+  `scripts/fetch-sources.sh`. It downloads the DOSBox Staging and FS-UAE
+  source matching the pinned binaries into
+  `src-tauri/target/release/bundle/source/`, checking each against a
+  SHA-256 pinned beside the binary's version (`SRC_URL`/`SRC_SHA256` in
+  the fetch scripts). The GPL requires releasing those alongside the DMG.
+
 ## 0.2.0 (2026-09-26)
 
 - **Drop setup files onto the window** (2026-09-26).

@@ -88,7 +88,8 @@ gitignored `CLAUDE.local.md`, never in committed files.
 - DOSBox Staging comes from `scripts/fetch-dosbox.sh` (pinned version and
   SHA-256) into the gitignored `src-tauri/resources/dosbox/`, which
   tauri.conf.json bundles as a resource. Bump the version and hash there
-  together.
+  together, along with `SRC_URL`/`SRC_SHA256`, the matching source that
+  every release ships (`scripts/fetch-sources.sh`).
 
 ## How classic Mac mode works
 
@@ -148,7 +149,10 @@ gitignored `CLAUDE.local.md`, never in committed files.
   builder's home folder and user name. The script remaps them with
   `--remap-path-prefix` and fails if `$HOME` is still in the built app.
   Arguments pass through to `tauri build` (`--bundles app` skips the DMG,
-  which needs `hdiutil`).
+  which needs `hdiutil`). It then downloads the bundled GPL emulators'
+  source into `src-tauri/target/release/bundle/source/`. Attach those to
+  the GitHub release with the DMG: shipping their binaries means offering
+  their source.
 - **Track platform parity** in `docs/platform-parity.md` whenever a
   feature uses a macOS-specific mechanism. Don't implement the
   Windows/Linux side early.

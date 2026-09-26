@@ -8,7 +8,9 @@
 #
 # Arguments are passed on to `tauri build`, e.g. `--bundles app`.
 # Afterwards the built app is searched for $HOME, and the script fails if
-# it's still there. Always build releases with this script.
+# it's still there. It then downloads the source of the bundled GPL
+# emulators (scripts/fetch-sources.sh), which every release must ship
+# alongside the DMG. Always build releases with this script.
 set -eu
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
@@ -28,3 +30,6 @@ if [ -n "$LEAKS" ]; then
   exit 1
 fi
 echo "Checked: no $HOME paths in the release build."
+
+# Shipping DOSBox Staging and FS-UAE binaries means shipping their source.
+"$ROOT/scripts/fetch-sources.sh" "$TARGET/bundle/source"

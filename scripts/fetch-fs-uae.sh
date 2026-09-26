@@ -11,6 +11,11 @@
 set -eu
 
 VERSION=v3.2.35
+# The matching source, shipped with each Floppy release (GPL): FS-UAE's own
+# source tarball. scripts/fetch-sources.sh reads these two lines: bump them
+# together with VERSION.
+SRC_URL="https://github.com/FrodeSolheim/fs-uae/releases/download/$VERSION/fs-uae-${VERSION#v}.tar.xz"
+SRC_SHA256=f3d3cb8d3df34b0b0125c45a5a3e187ff71050be5dc8455cc4505c0380269117
 case "$(uname -m)" in
   arm64)
     ARCH=ARM64

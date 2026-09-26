@@ -8,6 +8,12 @@ set -eu
 VERSION=v0.83.0
 SHA256=d8a771adfb8010fa6b5f7fb5351abfba659273ad01c89f03675a92bdbdae8167
 URL="https://github.com/dosbox-staging/dosbox-staging/releases/download/$VERSION/dosbox-staging-macOS-$VERSION.dmg"
+# The matching source, shipped with each Floppy release (GPL). DOSBox
+# Staging publishes no source tarball, so this is GitHub's archive of the
+# tag. scripts/fetch-sources.sh reads these two lines: bump them together
+# with VERSION.
+SRC_URL="https://github.com/dosbox-staging/dosbox-staging/archive/refs/tags/$VERSION.tar.gz"
+SRC_SHA256=9b36be5a666784adaeffa560bd0950691f851a76bdb97e7ae3c989561e91caf3
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 DEST="$ROOT/src-tauri/resources/dosbox"
