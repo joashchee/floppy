@@ -23,7 +23,7 @@ const MAKE_RAN_TXT: &[u8] = &[
 #[test]
 #[ignore]
 fn program_runs_in_dosbox_and_dosbox_exits() {
-    let (bin, _) = Emulator::DosboxStaging.locate(None).expect("run scripts/fetch-dosbox.sh first");
+    let (bin, _) = Emulator::DosboxStaging.locate(None, None).expect("run scripts/fetch-dosbox.sh first");
     // Inherited by DOSBox. Only this (ignored, run-alone) test sets them.
     std::env::set_var("SDL_VIDEODRIVER", "dummy");
     std::env::set_var("SDL_AUDIODRIVER", "dummy");
@@ -78,7 +78,7 @@ const EMPTY_THE_ARG: &[u8] = &[
 fn document_opens_in_its_app_and_the_change_is_listed() {
     use crate::documents::{changes, dos_openers, dos_path, snapshot};
 
-    let (bin, _) = Emulator::DosboxStaging.locate(None).expect("run scripts/fetch-dosbox.sh first");
+    let (bin, _) = Emulator::DosboxStaging.locate(None, None).expect("run scripts/fetch-dosbox.sh first");
     std::env::set_var("SDL_VIDEODRIVER", "dummy");
     std::env::set_var("SDL_AUDIODRIVER", "dummy");
     let t = TempDir::new();

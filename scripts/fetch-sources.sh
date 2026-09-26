@@ -5,8 +5,10 @@
 # their source too. build-release.sh runs this. Run it alone as
 #   scripts/fetch-sources.sh [output folder]
 # The URLs and SHA-256s live beside each binary's pin (SRC_URL and
-# SRC_SHA256 in fetch-dosbox.sh and fetch-fs-uae.sh), so a version bump
-# can't leave the source behind. A hash mismatch fails the script.
+# SRC_SHA256 in fetch-dosbox.sh, fetch-fs-uae.sh and fetch-basilisk.sh,
+# which also pins GMP_ and MPFR_ ones for the libraries linked into
+# Basilisk II), so a version bump can't leave the source behind. A hash
+# mismatch fails the script.
 set -eu
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
@@ -22,11 +24,12 @@ pin() {
   printf '%s\n' "$raw" | sed -e "s|\${VERSION#v}|$bare|g" -e "s|\$VERSION|$version|g"
 }
 
+# fetch <fetch script> <file name> [variable prefix, e.g. GMP_]
 fetch() {
   script="$ROOT/scripts/$1"
   name=$2
-  url=$(pin "$script" SRC_URL)
-  sha=$(pin "$script" SRC_SHA256)
+  url=$(pin "$script" "${3:-}SRC_URL")
+  sha=$(pin "$script" "${3:-}SRC_SHA256")
   dest="$OUT/$name"
   if [ -f "$dest" ] && echo "$sha  $dest" | shasum -a 256 -c - >/dev/null 2>&1; then
     echo "Have $name"
@@ -46,6 +49,10 @@ DOSBOX_VERSION=$(sed -n 's/^VERSION=v//p' "$ROOT/scripts/fetch-dosbox.sh")
 FSUAE_VERSION=$(sed -n 's/^VERSION=v//p' "$ROOT/scripts/fetch-fs-uae.sh")
 fetch fetch-dosbox.sh "dosbox-staging-$DOSBOX_VERSION-source.tar.gz"
 fetch fetch-fs-uae.sh "fs-uae-$FSUAE_VERSION-source.tar.xz"
+BASILISK_VERSION=$(sed -n 's/^VERSION=//p' "$ROOT/scripts/fetch-basilisk.sh")
+fetch fetch-basilisk.sh "BasiliskII-$BASILISK_VERSION-source.tar.gz"
+fetch fetch-basilisk.sh "$(basename "$(pin "$ROOT/scripts/fetch-basilisk.sh" GMP_SRC_URL)")" GMP_
+fetch fetch-basilisk.sh "$(basename "$(pin "$ROOT/scripts/fetch-basilisk.sh" MPFR_SRC_URL)")" MPFR_
 
 TAG=v$(sed -n 's/^  "version": "\(.*\)",$/\1/p' "$ROOT/package.json" | head -1)
 echo "GPL sources are in $OUT. Attach them to the release with the DMG:"

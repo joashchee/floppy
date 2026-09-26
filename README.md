@@ -28,15 +28,16 @@ Requires Node 20+, Rust, and the [Tauri 2 prerequisites](https://tauri.app/start
 npm install
 scripts/fetch-dosbox.sh   # downloads the pinned DOSBox Staging into src-tauri/resources/dosbox/
 scripts/fetch-fs-uae.sh   # downloads the pinned FS-UAE into src-tauri/resources/fs-uae/
+scripts/fetch-basilisk.sh # downloads Floppy's pinned Basilisk II build into src-tauri/resources/basilisk/
 npm run tauri dev         # develop
 scripts/build-release.sh  # release build: tauri build, with build-machine paths stripped
 ```
 
-Classic Mac mode needs Basilisk II installed separately. It has no
-official binary release to bundle, so install a current macOS build
-(the kanjitalk755/macemu fork, e.g. from the Emaculation forum) as
-`BasiliskII.app` in `/Applications` or `~/Applications`, or point
-`FLOPPY_BASILISK` at its executable:
+Basilisk II (classic Mac) has no official binary release, so Floppy
+bundles its own build of a pinned kanjitalk755/macemu commit, made by
+`.github/workflows/basilisk.yml`. To use a different build, install it
+as `BasiliskII.app` and pick it with **Locate Basilisk II…** in the gear
+menu, or point `FLOPPY_BASILISK` at its executable:
 
 ```sh
 FLOPPY_BASILISK=/path/to/BasiliskII.app/Contents/MacOS/BasiliskII npm run tauri dev

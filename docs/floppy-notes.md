@@ -17,7 +17,7 @@ Windows. No target app is C64 software, so VICE isn't needed.
 |---|---|---|---|
 | DOS | DOSBox Staging v0.83.0 | GPL-2.0-or-later | Bundled (`scripts/fetch-dosbox.sh`) |
 | Amiga | FS-UAE v3.2.35 | GPL-2.0 | Bundled (`scripts/fetch-fs-uae.sh`, SHA-256 pinned per arch) |
-| Classic Mac | Basilisk II (kanjitalk755 fork) | GPL-2.0-or-later | Not bundled: found in `/Applications` or `~/Applications`, or `FLOPPY_BASILISK` |
+| Classic Mac | Basilisk II (kanjitalk755 fork) | GPL-2.0-or-later | Bundled (`scripts/fetch-basilisk.sh`, Floppy's own build from `.github/workflows/basilisk.yml`). Also found in `/Applications` or `~/Applications`, located from the gear menu, or `FLOPPY_BASILISK` |
 
 All three run as separate executables with a per-launch config file
 (aggregation, never linked), which satisfies rule 1.
@@ -170,7 +170,6 @@ the user's drives. The two files are the whole interface (rule 2).
 
 ## Open items
 
-- Bundle Basilisk II via a reproducible, pinned source build.
 - Auto-open apps inside the guest: a Mac Startup Items alias, or Amiga
   `user-startup`.
 - SheepShaver for PPC-only Mac apps.

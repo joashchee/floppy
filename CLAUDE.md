@@ -2,7 +2,7 @@
 
 Emulation frontend and launcher for original-era desktop apps: DOS
 (bundled DOSBox Staging), Amiga (bundled FS-UAE) and classic Mac OS
-(Basilisk II, found as a separate install). `docs/emulators.md` records
+(bundled Basilisk II, Floppy's own build). `docs/emulators.md` records
 why each emulator was picked and its licensing and reliability checks,
 and `docs/floppy-notes.md` is a condensed history of the work so far.
 `docs/legal-setupfiles.md` is a living list of free, legal sources for
@@ -65,7 +65,8 @@ gitignored `CLAUDE.local.md`, never in committed files.
   failed import leaves nothing behind. User-supplied ROMs and boot disks
   live in `library/system/<os>/`, outside the shared folders.
 - `emulator.rs`: finds each emulator (`FLOPPY_DOSBOX` / `FLOPPY_FSUAE` /
-  `FLOPPY_BASILISK` env, then bundled, then an install) and spawns it with
+  `FLOPPY_BASILISK` env, then a copy the user located, kept in
+  `library/emulators.json`, then bundled, then an install) and spawns it with
   only Floppy's per-launch config (`library/run/<emulator>/<id>.*`).
 - `cd.rs`: the missing-files list and files disc, a plain-file contract
   any tool can take part in (the module doc is the spec). Floppy writes
@@ -199,8 +200,15 @@ gitignored `CLAUDE.local.md`, never in committed files.
 - Launch writes a Basilisk II prefs file (Quadra 900, 68040 + FPU,
   64 MB) and runs `BasiliskII --config <file>`. The library is the Mac's
   **Unix** volume. There's no auto-open yet: the user opens the app there.
-- Basilisk II isn't bundled: no pinnable binary release exists (see
-  `docs/emulators.md`).
+- Basilisk II comes from `scripts/fetch-basilisk.sh` into the gitignored
+  `src-tauri/resources/basilisk/`. Upstream publishes no binaries, so
+  it's Floppy's own universal build of a pinned kanjitalk755/macemu
+  commit: `.github/workflows/basilisk.yml` builds it and publishes a
+  `basilisk-ii-<date>-<commit>` release of this repo with the exact
+  source plus GMP and MPFR (statically linked, LGPL). A rebuild never
+  gives the same bytes, so after one, re-pin every hash in the fetch
+  script from the release's `SHA256SUMS`. A copy the user picks with
+  **Locate Basilisk II…** in the gear menu wins over the bundled one.
 
 ## How Amiga mode works
 
@@ -236,7 +244,8 @@ gitignored `CLAUDE.local.md`, never in committed files.
 
 - **Before any commit and push, check for security issues:** hardcoded
   dev-machine paths, anything that should be gitignored (especially
-  `src-tauri/resources/dosbox/` and `src-tauri/resources/fs-uae/`), and dependency licenses whenever
+  `src-tauri/resources/dosbox/`, `src-tauri/resources/fs-uae/` and
+  `src-tauri/resources/basilisk/`), and dependency licenses whenever
   `Cargo.lock` or `package-lock.json` changes (rule 1).
 - **Build releases with `scripts/build-release.sh`**, never a bare
   `tauri build`. rustc bakes source paths (including every dependency's
@@ -280,11 +289,14 @@ gitignored `CLAUDE.local.md`, never in committed files.
   running currently opens a second window.
 - Per-app DOSBox settings (cycles, machine type, sound).
 - Code signing: Developer ID signing and notarization must also sign the
-  nested `DOSBox Staging.app` and `FS-UAE.app`. The fetch script's 7-Zip
+  nested `DOSBox Staging.app`, `FS-UAE.app` and `BasiliskII.app`. The fetch script's 7-Zip
   fallback path loses DOSBox's original signature, and FS-UAE's tarball
-  signature doesn't verify as shipped.
-- Bundling Basilisk II: needs a reproducible build from a pinned
-  kanjitalk755/macemu commit (Xcode, static GMP/MPFR, SDL2 framework).
+  signature doesn't verify as shipped. Tauri's resource copy also turns
+  symlinks into plain files (BasiliskII.app's `SDL2.framework`), so
+  `codesign --verify --deep` fails on all three nested apps in the built
+  Floppy.app today. They still run unsigned-style (checked 2026-09-27),
+  but signing must re-sign each one, or restore the framework symlinks
+  first.
 - Auto-opening a Mac app (alias in the startup disk's Startup Items) or
   an Amiga folder app (`user-startup`). Today the guest boots and the
   user opens the app.

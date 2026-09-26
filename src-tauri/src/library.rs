@@ -193,6 +193,11 @@ impl Library {
         self.root.join("verifications.json")
     }
 
+    /// Emulators the user located themselves (emulator.rs).
+    pub fn emulators_path(&self) -> PathBuf {
+        self.root.join("emulators.json")
+    }
+
     /// Per-launch config files and emulator scratch space.
     pub fn run_dir(&self) -> PathBuf {
         self.root.join("run")

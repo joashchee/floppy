@@ -8,6 +8,17 @@ against the day the change was made.
 
 ## Unreleased
 
+- **Basilisk II is bundled** (2026-09-27): the classic Mac works out of
+  the box, like DOS and Amiga. `scripts/fetch-basilisk.sh` pins Floppy's
+  own universal build of macemu `892eeb7` (made by
+  `.github/workflows/basilisk.yml`), and every release now ships its
+  source plus the GMP and MPFR it links. A Basilisk II you pick with
+  Locate Basilisk II… still takes precedence.
+- **Locate Basilisk II…** (2026-09-26): a gear-menu item to point Floppy
+  at a Basilisk II that isn't in `/Applications` or `~/Applications`
+  (say, still in Downloads). Pick the `.app` (or its executable); Floppy
+  remembers it in `library/emulators.json` and the status pill shows
+  "(located)". If it moves, Floppy falls back to the usual places.
 - **Ask Diskette** (2026-09-26): while Diskette is running and Floppy
   still needs setup files or old apps, a strip (and a gear-menu item)
   offers to ask it (`request.rs`). Floppy sends one list of everything

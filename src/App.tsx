@@ -104,7 +104,24 @@ function emulatorLabel(s: GuestStatus | undefined): string {
   if (!s.found) return `${s.emulator}: not found`;
   if (s.source === "installed") return `${s.emulator} (installed)`;
   if (s.source === "env") return `${s.emulator} (env override)`;
+  if (s.source === "chosen") return `${s.emulator} (located)`;
   return s.emulator;
+}
+
+/** The Locate Basilisk II… tooltip: which copy starts the Mac now. */
+function basiliskTitle(s: GuestStatus | undefined): string {
+  switch (s?.found ? s.source : null) {
+    case "chosen":
+      return "Using the Basilisk II you located. Pick another to change it.";
+    case "bundled":
+      return "Using the Basilisk II built into Floppy. Pick another build to use it instead.";
+    case "installed":
+      return "Using the Basilisk II in Applications. Pick another build to use it instead.";
+    case "env":
+      return "Using FLOPPY_BASILISK, which overrides any copy picked here.";
+    default:
+      return "Basilisk II runs the classic Mac. Pick BasiliskII.app wherever it is.";
+  }
 }
 
 /** Where a drag over the window will drop: an app import, or setup files. */
@@ -590,6 +607,21 @@ function App() {
     }
   }
 
+  /** Points Floppy at a Basilisk II that isn't in /Applications or ~/Applications. */
+  async function locateBasilisk() {
+    const path = await open({ title: "Locate Basilisk II", filters: [{ name: "Application", extensions: ["app"] }] });
+    if (typeof path !== "string") return;
+    setError(null);
+    setMessage(null);
+    try {
+      await invoke<GuestStatus>("locate_emulator", { os: "mac-classic", path });
+      await refreshStatuses();
+      setMessage(`Floppy will start the Mac with ${baseName(path)}.`);
+    } catch (e) {
+      fail(e);
+    }
+  }
+
   /** Saves the missing-files list: the system files still needed, one file name per line (cd.rs). */
   async function saveMissingList() {
     const path = await save({
@@ -834,6 +866,7 @@ function App() {
   }
 
   const blocker = status?.blocker ?? null;
+  const basiliskStatus = statuses.find((s) => s.os === "mac-classic");
   // A Mac or Amiga shares one startup disk between its apps, so only one runs at a time.
   const launchBlocked = !status || !!blocker || (guest !== "dos" && guestRunning);
   const workbenchMissing = guest === "amiga" && !status?.system.boot;
@@ -875,6 +908,16 @@ function App() {
                 />
                 <span>ANSIapps theme (old-school DOS look)</span>
               </label>
+              <button
+                type="button"
+                className="menu-item"
+                disabled={!!busy}
+                title={basiliskTitle(basiliskStatus)}
+                onClick={() => fromGear(() => void locateBasilisk())}
+              >
+                <FolderIcon />
+                <span>Locate Basilisk II…</span>
+              </button>
               <div className="menu-sep" />
               <div className="menu-note">Old apps you own that open old files</div>
               <button type="button" className="menu-item" disabled={!!busy} onClick={() => fromGear(() => void saveWantedApps())}>

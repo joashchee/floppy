@@ -78,6 +78,7 @@ pub fn run() {
             commands::guest_statuses,
             commands::set_system_file,
             commands::set_guest_model,
+            commands::locate_emulator,
             commands::write_missing_list,
             commands::import_setup_files,
             commands::import_files_disc,

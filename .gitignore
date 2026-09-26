@@ -20,3 +20,5 @@ yarn-error.log*
 /src-tauri/resources/dosbox/
 # Fetched by scripts/fetch-fs-uae.sh — also third-party.
 /src-tauri/resources/fs-uae/
+# Fetched by scripts/fetch-basilisk.sh — also third-party.
+/src-tauri/resources/basilisk/

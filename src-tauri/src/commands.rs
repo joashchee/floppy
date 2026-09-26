@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 
-use crate::emulator::{Emulator, EmulatorSource};
+use crate::emulator::{self, Emulator, EmulatorSource};
 use crate::documents::{self, Change, Opener};
 use crate::library::{GuestOs, GuestSystem, Library, LibraryApp, LibraryDoc, SystemFile};
 use crate::cd::{self, CdImport};
@@ -71,7 +71,7 @@ fn launch_conflict(id: &str, os: GuestOs, running: &HashMap<String, GuestOs>) ->
 
 fn guest_status(app: &AppHandle, library: &Library, os: GuestOs) -> Result<GuestStatus, String> {
     let emu = Emulator::for_os(os);
-    let found = emu.locate(app.path().resource_dir().ok().as_deref());
+    let found = emu.locate(app.path().resource_dir().ok().as_deref(), emulator::chosen(library, emu).as_deref());
     let system = library.system(os)?;
     let rom_note = match (os, library.system_file(os, SystemFile::Rom)?) {
         (GuestOs::Amiga, Some(p)) => kickstart_note(&p),
@@ -166,6 +166,15 @@ pub async fn set_system_file(app: AppHandle, os: String, kind: SystemFile, path:
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// Remembers `path` (an app bundle or executable) as the emulator for
+/// `os`'s guest, for one that isn't where Floppy looks.
+#[tauri::command]
+pub fn locate_emulator(app: AppHandle, state: State<AppState>, os: String, path: String) -> Result<GuestStatus, String> {
+    let os = GuestOs::parse(&os).ok_or("Unknown guest OS.")?;
+    emulator::set_chosen(&state.library, Emulator::for_os(os), Path::new(&path))?;
+    guest_status(&app, &state.library, os)
 }
 
 #[tauri::command]
@@ -495,7 +504,8 @@ fn start(
         return Err(e);
     }
     let emu = Emulator::for_os(entry.os);
-    let (bin, _) = emu.locate(app.path().resource_dir().ok().as_deref()).ok_or(emu.missing_message())?;
+    let chosen = emulator::chosen(&state.library, emu);
+    let (bin, _) = emu.locate(app.path().resource_dir().ok().as_deref(), chosen.as_deref()).ok_or(emu.missing_message())?;
     let conf_path = write_launch_config(&state.library, &entry, program.as_deref(), args.as_deref())?;
     let os_root = state.library.os_root(entry.os);
     let before = (entry.os == GuestOs::Dos).then(|| documents::snapshot(&os_root));

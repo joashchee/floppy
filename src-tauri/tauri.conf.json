@@ -32,7 +32,8 @@
     "license": "GPL-2.0-or-later",
     "resources": {
       "resources/dosbox/": "dosbox/",
-      "resources/fs-uae/": "fs-uae/"
+      "resources/fs-uae/": "fs-uae/",
+      "resources/basilisk/": "basilisk/"
     },
     "icon": [
       "icons/32x32.png",

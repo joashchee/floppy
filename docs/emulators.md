@@ -13,7 +13,7 @@ app is C64 software, so VICE isn't needed yet.
 |---|---|---|---|---|
 | DOS | DOSBox Staging | v0.83.0 | GPL-2.0-or-later | Bundled: `scripts/fetch-dosbox.sh` |
 | Amiga | FS-UAE | v3.2.35 | GPL-2.0 (UAE/WinUAE lineage) | Bundled: `scripts/fetch-fs-uae.sh` |
-| Classic Mac (68k) | Basilisk II (kanjitalk755 fork) | user's install | GPL-2.0-or-later | Not bundled: found in `/Applications` or `~/Applications` |
+| Classic Mac (68k) | Basilisk II (kanjitalk755 fork) | macemu `892eeb7` (2026-08-30) | GPL-2.0-or-later | Bundled (macOS): `scripts/fetch-basilisk.sh`, Floppy's own build. Also found in `/Applications` or `~/Applications`, or located from the gear menu |
 
 All three run as separate executables, started with a config file Floppy
 writes for each launch (aggregation, never linked in), so a GPLv2-only
@@ -79,10 +79,19 @@ the end-to-end test runs a real program in it headlessly.
   arm64 (no JIT). **But it publishes no binary releases**: its only
   GitHub releases are 2017 SheepShaver pre-releases. Current macOS builds
   are posted on the Emaculation forum, which sits behind a Cloudflare
-  browser check, so a script can't fetch and pin one. Building from
-  source needs full Xcode plus static GMP and MPFR. So Floppy finds an
-  installed `BasiliskII.app` (or `FLOPPY_BASILISK`) instead of bundling it
-  for now.
+  browser check, so a script can't fetch and pin one.
+- **So Floppy builds its own** (2026-09-27): `.github/workflows/basilisk.yml`
+  builds a universal `BasiliskII.app` from a pinned commit on a GitHub
+  macOS runner (Xcode, SDL2 2.32.10 framework, GMP 6.3.0 and MPFR 4.2.2
+  static) and publishes it as a `basilisk-ii-<date>-<commit>` release of
+  this repo, with the exact source and the GMP/MPFR tarballs.
+  `scripts/fetch-basilisk.sh` pins it by SHA-256 and `fetch-sources.sh`
+  ships all three sources with each Floppy release. Checked for
+  `892eeb7`: the source tarball's contents are identical to GitHub's
+  archive of that commit, the GMP and MPFR hashes are GNU's, the binary
+  links only system frameworks and its own SDL2, and it needs macOS 11
+  (the arm64 floor). It's signed ad hoc. A copy the user installs or
+  locates still works, and a located one wins over the bundled one.
 - **Alternatives considered:**
   - Mini vMac (GPL-2.0): Mac Plus/II only, no shared host folder (disk
     images only), so transfers would need HFS image writing.

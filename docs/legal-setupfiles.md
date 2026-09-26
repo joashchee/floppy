@@ -19,7 +19,7 @@ bottom each time.
 | Mac startup disk (7.1, 7.6, 8.0, 8.1) | Classic Mac | **No**, these were paid releases | Your own install discs |
 | Kickstart ROM | Amiga | **No** (cheapest licensed copy is paid) | [Amiga Forever](https://www.amigaforever.com/), or a dump of an Amiga you own |
 | Workbench | Amiga | **No** | Amiga Forever, or your own disks |
-| Basilisk II (the emulator) | Classic Mac | **Yes** (GPL-2.0-or-later) | [E-Maculation builds](https://www.emaculation.com/forum/viewtopic.php?f=6&t=7361); Floppy's own build once published (`.github/workflows/basilisk.yml`) |
+| Basilisk II (the emulator) | Classic Mac | **Yes** (GPL-2.0-or-later) | [E-Maculation builds](https://www.emaculation.com/forum/viewtopic.php?f=6&t=7361); Floppy's own build, bundled (`.github/workflows/basilisk.yml`) |
 
 ## Classic Mac
 
@@ -126,18 +126,20 @@ same way, once its source publishes the hash.
 
 ## Emulators
 
-DOSBox Staging and FS-UAE are bundled. Basilisk II isn't bundled yet,
-and it's free under GPL-2.0-or-later:
+All three emulators are bundled with Floppy on macOS. Basilisk II is
+Floppy's own build, and other builds are free under GPL-2.0-or-later too:
 
 - [E-Maculation: BasiliskII builds for Mac OS X](https://www.emaculation.com/forum/viewtopic.php?f=6&t=7361):
   universal SDL2 builds from kanjitalk755/macemu. The forum is behind a
   browser check, so download by hand.
 - Floppy's own pinned build: the `basilisk-ii-…` releases on Floppy's
-  GitHub repo, made by `.github/workflows/basilisk.yml`, once published.
+  GitHub repo, made by `.github/workflows/basilisk.yml` and bundled by
+  `scripts/fetch-basilisk.sh`.
 
 ## Check log
 
 | Date | What was checked | Result |
 |---|---|---|
+| 2026-09-27 | Floppy's Basilisk II build (macemu `892eeb7`, from `.github/workflows/basilisk.yml`) | Now bundled. Its source tarball matches GitHub's archive of the commit file for file, and the GMP 6.3.0 and MPFR 4.2.2 tarballs match GNU's SHA-256s. |
 | 2026-09-26 | Known-good hashes: MAME Apple drivers, FS-UAE `rommgr.cpp` and launcher Workbench lists, TOSEC DAT pack 2025-03-13 (Amiga Firmware and Workbench DATs), Internet Archive metadata for System 7.0.1/7.5.3 and Mac OS 7.6 | 20 Mac ROMs, 4 Mac startup disks, 74 Kickstarts, 81 Workbench disks. TOSEC has no Mac OS DAT. The Internet Archive's Mac ROM collections are zipped, so their per-file hashes can't be read without downloading ROMs, which Floppy won't do. |
 | 2026-09-26 | Apple free System releases, Internet Archive items (file lists via `archive.org/metadata/<id>`), Amiga Forever editions, FS-UAE Kickstart docs, AROS nightlies, E-Maculation builds | As above. The Wayback Machine was offline, so Apple's archived download pages and licence text weren't checked. |

@@ -100,7 +100,7 @@ export interface GuestStatus {
   os: GuestOs;
   emulator: string;
   found: boolean;
-  source: "env" | "bundled" | "installed" | null;
+  source: "env" | "chosen" | "bundled" | "installed" | null;
   system: GuestSystem;
   romNote: string | null;
   /** Why apps can't launch yet; null when they can. */
