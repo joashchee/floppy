@@ -1,0 +1,192 @@
+# Builds Basilisk II (kanjitalk755/macemu) from a pinned commit and
+# publishes it as a GitHub release of this repo, which a fetch script can
+# then pin by SHA-256, as for DOSBox Staging and FS-UAE. Upstream
+# publishes no binaries (see docs/emulators.md), hence this build.
+#
+# One Xcode build makes a universal app: x86_64 with the JIT (uae_cpu),
+# arm64 without it (uae_cpu_2021, which needs static GMP and MPFR for the
+# FPU). The Xcode build is the one that uses extfs_macosx.cpp, which reads
+# resource forks and Finder info natively, as Floppy's Mac imports need.
+#
+# The project hardcodes its dependency locations, so this follows
+# upstream's README: SDL2.framework in /Library/Frameworks, GMP and MPFR
+# in /usr/local. That's fine on a throwaway runner; don't run these steps
+# on your own Mac.
+#
+# GPL: the release carries the exact macemu source plus the GMP and MPFR
+# tarballs that were linked in (both LGPL-3.0-or-later), next to the
+# binary. SDL2 (zlib) ships as Apple's framework, unmodified.
+#
+# To bump: change the pins below together, then run the workflow.
+
+name: Basilisk II
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish a GitHub release (off = build and verify only)
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+env:
+  MACEMU_REPO: kanjitalk755/macemu
+  MACEMU_COMMIT: 892eeb74ab9d70dfb034138a0b39057b14f275bc # 2026-08-30
+  SDL2_VERSION: 2.32.10
+  SDL2_SHA256: 4a7ac31640d70214e848f994be8a12849c0f97918a7e6c2e27a40036166d1a7f
+  GMP_VERSION: 6.3.0
+  GMP_SHA256: a3c2b80201b89e68616f4ad30bc66aee4927c3ce50e33929ca819d5c43538898
+  MPFR_VERSION: 4.2.2
+  MPFR_SHA256: b67ba0383ef7e8a8563734e2e889ef5ec3c3b898a01d00fa0a6869ad81c6ce01
+
+jobs:
+  build:
+    # Apple Silicon runner: GMP and MPFR are only linked into the arm64
+    # slice, so they build natively here (and `make check` can run).
+    runs-on: macos-15
+    steps:
+      - name: Toolchain
+        run: |
+          xcodebuild -version
+          sw_vers
+
+      - name: Fetch pinned dependencies
+        working-directory: ${{ runner.temp }}
+        run: |
+          set -eu
+          curl -sSfLO "https://github.com/libsdl-org/SDL/releases/download/release-$SDL2_VERSION/SDL2-$SDL2_VERSION.dmg"
+          curl -sSfLO "https://ftp.gnu.org/gnu/gmp/gmp-$GMP_VERSION.tar.xz"
+          curl -sSfLO "https://ftp.gnu.org/gnu/mpfr/mpfr-$MPFR_VERSION.tar.xz"
+          shasum -a 256 -c - <<EOF
+          $SDL2_SHA256  SDL2-$SDL2_VERSION.dmg
+          $GMP_SHA256  gmp-$GMP_VERSION.tar.xz
+          $MPFR_SHA256  mpfr-$MPFR_VERSION.tar.xz
+          EOF
+
+      - name: Install SDL2.framework
+        working-directory: ${{ runner.temp }}
+        run: |
+          set -eu
+          hdiutil attach -nobrowse -readonly -mountpoint sdl2 "SDL2-$SDL2_VERSION.dmg"
+          fw=$(find sdl2 -maxdepth 2 -name SDL2.framework -type d | head -1)
+          test -n "$fw"
+          sudo mkdir -p /Library/Frameworks
+          sudo ditto "$fw" /Library/Frameworks/SDL2.framework
+          hdiutil detach sdl2
+          lipo -info /Library/Frameworks/SDL2.framework/SDL2
+
+      # Static only, so nothing in /usr/local ends up as a runtime
+      # dependency of the app. The minimum OS matches arm64's floor.
+      - name: Build GMP and MPFR (static, arm64)
+        working-directory: ${{ runner.temp }}
+        env:
+          CFLAGS: -O2 -mmacosx-version-min=11.0
+          CXXFLAGS: -O2 -mmacosx-version-min=11.0
+        run: |
+          set -eu
+          tar -xJf "gmp-$GMP_VERSION.tar.xz"
+          (cd "gmp-$GMP_VERSION" && ./configure --disable-shared --prefix=/usr/local \
+            && make -j"$(sysctl -n hw.ncpu)" && make check && sudo make install)
+          tar -xJf "mpfr-$MPFR_VERSION.tar.xz"
+          (cd "mpfr-$MPFR_VERSION" && ./configure --disable-shared --prefix=/usr/local --with-gmp=/usr/local \
+            && make -j"$(sysctl -n hw.ncpu)" && make check && sudo make install)
+
+      - name: Check out macemu
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.MACEMU_REPO }}
+          ref: ${{ env.MACEMU_COMMIT }}
+          path: macemu
+          persist-credentials: false
+
+      - name: Verify commit
+        run: test "$(git -C macemu rev-parse HEAD)" = "$MACEMU_COMMIT"
+
+      - name: Build BasiliskII.app
+        working-directory: macemu/BasiliskII/src/MacOSX
+        run: |
+          set -eu
+          xcodebuild build \
+            -project BasiliskII.xcodeproj \
+            -configuration Release \
+            ONLY_ACTIVE_ARCH=NO \
+            SYMROOT="$RUNNER_TEMP/build"
+
+      - name: Verify the app
+        working-directory: ${{ runner.temp }}/build/Release
+        run: |
+          set -eu
+          app=BasiliskII.app
+          bin="$app/Contents/MacOS/BasiliskII"
+          archs=$(lipo -archs "$bin")
+          echo "Architectures: $archs"
+          case " $archs " in *" arm64 "*) ;; *) echo "missing arm64" >&2; exit 1 ;; esac
+          case " $archs " in *" x86_64 "*) ;; *) echo "missing x86_64" >&2; exit 1 ;; esac
+          test -d "$app/Contents/Frameworks/SDL2.framework"
+          otool -L "$bin"
+          # Everything must come from the OS or from inside the bundle.
+          # (Indented lines are dependencies; the rest are per-arch headers.)
+          if otool -L "$bin" | grep -E '^[[:space:]]' \
+            | grep -vE '^[[:space:]]+(/usr/lib/|/System/Library/|@rpath/|@executable_path/)'; then
+            echo "The app links something outside the bundle and the OS." >&2
+            exit 1
+          fi
+
+      # Upstream's Release config doesn't sign. Ad-hoc sign so the arm64
+      # slice runs; Floppy's release signing re-signs it with Developer ID.
+      - name: Sign ad hoc
+        working-directory: ${{ runner.temp }}/build/Release
+        run: |
+          set -eu
+          codesign --force --sign - BasiliskII.app/Contents/Frameworks/SDL2.framework
+          codesign --force --sign - BasiliskII.app
+          codesign --verify --deep --strict BasiliskII.app
+
+      - name: Package
+        id: package
+        run: |
+          set -eu
+          short=$(printf %.7s "$MACEMU_COMMIT")
+          date=$(git -C macemu show -s --format=%cs HEAD)
+          name="BasiliskII-$date-$short"
+          out="$RUNNER_TEMP/out"
+          mkdir -p "$out"
+          tar -cJf "$out/$name-macOS-universal.tar.xz" -C "$RUNNER_TEMP/build/Release" BasiliskII.app
+          git -C macemu archive --format=tar.gz --prefix="macemu-$MACEMU_COMMIT/" \
+            -o "$out/$name-source.tar.gz" HEAD
+          cp "$RUNNER_TEMP/gmp-$GMP_VERSION.tar.xz" "$RUNNER_TEMP/mpfr-$MPFR_VERSION.tar.xz" "$out/"
+          (cd "$out" && shasum -a 256 * > SHA256SUMS && cat SHA256SUMS)
+          echo "tag=basilisk-ii-$date-$short" >> "$GITHUB_OUTPUT"
+          echo "date=$date" >> "$GITHUB_OUTPUT"
+
+      - name: Keep the build
+        uses: actions/upload-artifact@v4
+        with:
+          name: basilisk-ii
+          path: ${{ runner.temp }}/out/
+
+      - name: Publish release
+        if: inputs.publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.package.outputs.tag }}
+          DATE: ${{ steps.package.outputs.date }}
+        run: |
+          set -eu
+          cat > "$RUNNER_TEMP/notes.md" <<EOF
+          Basilisk II built from [$MACEMU_REPO@$MACEMU_COMMIT](https://github.com/$MACEMU_REPO/tree/$MACEMU_COMMIT) ($DATE) for Floppy to bundle. Universal: x86_64 with JIT, arm64 without.
+
+          - Basilisk II: GPL-2.0-or-later. Its exact source is the \`-source.tar.gz\` asset.
+          - GMP $GMP_VERSION and MPFR $MPFR_VERSION (LGPL-3.0-or-later), statically linked into the arm64 slice. Their source tarballs are attached.
+          - SDL $SDL2_VERSION (zlib), the official framework, embedded unmodified.
+
+          Signed ad hoc only. Built by \`.github/workflows/basilisk.yml\`.
+          EOF
+          gh release create "$TAG" "$RUNNER_TEMP"/out/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "Basilisk II $DATE ($(printf %.7s "$MACEMU_COMMIT"))" \
+            --notes-file "$RUNNER_TEMP/notes.md"

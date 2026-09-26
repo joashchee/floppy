@@ -1,0 +1,39 @@
+[package]
+name = "floppy"
+version = "0.1.0"
+description = "Floppy — run the old apps your files need, in their own OS"
+authors = ["ansiapps"]
+license = "GPL-2.0-or-later"
+edition = "2021"
+
+[lib]
+# The `_lib` suffix keeps the lib name distinct from the bin name
+# (https://github.com/rust-lang/cargo/issues/8519).
+name = "floppy_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+tauri-plugin-log = "2"
+tauri-plugin-dialog = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+log = "0.4"
+walkdir = "2"
+# Importing a zipped DOS program — read-only, deflate is all old DOS zips use.
+zip = { version = "8.6.0", default-features = false, features = ["deflate-flate2"] }
+
+# Resource forks and Finder info (getxattr/setxattr) for classic Mac imports.
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2"
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = 3
+panic = "abort"
+strip = true
