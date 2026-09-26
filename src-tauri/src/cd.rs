@@ -4,9 +4,27 @@
 //! (Diskette's Burn A CD is one):
 //!
 //! 1. **Missing-files list** (`missing_list`): a `.txt` of the system files
-//!    Floppy still needs, one file name per line, `#` comment lines,
-//!    meant to be matched ignoring case. Names are the ones these files
-//!    are commonly stored under, so a renamed dump won't be found.
+//!    Floppy still needs. Its first line is a column header, then one
+//!    file per line, `#` comment lines, blank lines ignored:
+//!
+//!    ```text
+//!    #columns: name size sha1
+//!    Quadra650.ROM
+//!    # Quadra 950 (3DC27823)
+//!    <tab>1048576<tab>d61dba4a2d2cf9048244b713eaa294100063658d
+//!    ```
+//!
+//!    - A **name line** is just a file name, the one a file is commonly
+//!      stored under, matched ignoring case. It has no tabs.
+//!    - A **content line** has an empty name, then the size in bytes and
+//!      SHA-1 of a known-good ROM dump (`known_roms.rs`), tab-separated.
+//!      It finds that dump whatever it's called: a renamed ROM can't be
+//!      found by name. Only ROMs get these, since startup disks and
+//!      Workbench change as they're used.
+//!
+//!    The header starts with `#`, so a reader that only knows plain name
+//!    lists treats it as a comment. Name lines still work there, and the
+//!    content lines read as odd names that match nothing.
 //! 2. **Files disc**: a disc image (ISO and similar) or a folder holding
 //!    copies of those files, laid out any way at all, at any depth, with
 //!    duplicates allowed. A tool may place each name independently, so a
@@ -22,6 +40,7 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 use walkdir::WalkDir;
 
+use crate::known_roms::{self, KnownRom};
 use crate::library::{GuestOs, Library, SystemFile};
 use crate::{amiga, mac};
 
@@ -67,6 +86,17 @@ impl Slot {
             Slot::MacBoot => "Mac startup disk: a disk image with System 7 to Mac OS 8.1 installed.",
             Slot::Kickstart => "Amiga Kickstart ROM (plus rom.key for encrypted Amiga Forever ROMs).",
             Slot::Workbench => "Amiga Workbench boot disk.",
+        }
+    }
+
+    /// Known-good dumps this slot can be found by, for the hash hints.
+    fn known(self) -> &'static [KnownRom] {
+        match self {
+            Slot::MacRom => known_roms::MAC_ROMS,
+            Slot::Kickstart => known_roms::KICKSTARTS,
+            // Startup disks and Workbench are written to as they're used,
+            // so no two copies hash the same.
+            Slot::MacBoot | Slot::Workbench => &[],
         }
     }
 
@@ -122,22 +152,33 @@ pub fn missing_slots(library: &Library) -> Result<Vec<Slot>, String> {
     Ok(out)
 }
 
-/// The missing-files list, or `None` when nothing is missing.
+/// The missing-files list (see the module doc), or `None` when nothing is
+/// missing.
 pub fn missing_list(slots: &[Slot]) -> Option<String> {
     if slots.is_empty() {
         return None;
     }
+    // The header must be the first line.
     let mut s = String::from(
-        "# Files Floppy's emulators still need. Gather copies into a disc\n\
+        "#columns: name size sha1\n\
+         # Files Floppy's emulators still need. Gather copies into a disc\n\
          # image or folder (Diskette's Burn A CD can do this from its\n\
          # catalog), then use Import Files Disc in Floppy.\n\
-         # Floppy checks each file's contents, so extra matches do no harm.\n",
+         # Floppy checks each file's contents, so extra matches do no harm.\n\
+         # Lines starting with a tab have no name: they find a known-good\n\
+         # copy by its size and SHA-1, whatever the file is called.\n",
     );
     for slot in slots {
         s += &format!("\n# {}\n", slot.comment());
         for name in slot.names() {
             s += name;
             s += "\n";
+        }
+        if !slot.known().is_empty() {
+            s += "# Known-good copies, found by content under any name:\n";
+        }
+        for rom in slot.known() {
+            s += &format!("# {}\n\t{}\t{}\n", rom.label, rom.size, rom.sha1);
         }
     }
     Some(s)
@@ -227,22 +268,33 @@ fn classify(path: &Path, len: u64, keys: &[PathBuf]) -> Option<Candidate> {
     None
 }
 
-/// Every file under `root` that could fill a slot, best first. The walk
-/// has no depth limit: two copies from the same volume keep their whole
-/// volume-relative path under that volume's folder, however deep, and
-/// the CD holds only matched files, so a full walk is cheap.
-pub fn find_candidates(root: &Path) -> Vec<Candidate> {
-    let files: Vec<(PathBuf, u64)> = WalkDir::new(root)
+/// Every file under `root`, with its size. No depth limit: two copies
+/// from the same volume keep their whole volume-relative path under that
+/// volume's folder, however deep, and a files disc holds only matched
+/// files, so a full walk is cheap. Hidden files (AppleDouble `._` files
+/// included) are skipped.
+fn files_under(root: &Path) -> Vec<(PathBuf, u64)> {
+    WalkDir::new(root)
         .min_depth(1)
         .into_iter()
         .filter_map(Result::ok)
         .filter(|e| e.file_type().is_file() && !e.file_name().to_string_lossy().starts_with('.'))
         .filter_map(|e| Some((e.path().to_path_buf(), e.metadata().ok()?.len())))
-        .collect();
+        .collect()
+}
+
+/// The files that could fill a slot, best first. Every `rom.key` among
+/// them is tried against every encrypted ROM.
+fn candidates_in(files: &[(PathBuf, u64)]) -> Vec<Candidate> {
     let keys: Vec<PathBuf> = files.iter().map(|(p, _)| p).filter(|p| file_name(p).eq_ignore_ascii_case("rom.key")).cloned().collect();
     let mut out: Vec<Candidate> = files.iter().filter_map(|(p, len)| classify(p, *len, &keys)).collect();
     out.sort_by(|a, b| b.score.cmp(&a.score).then_with(|| a.path.cmp(&b.path)));
     out
+}
+
+/// Every file under `root` that could fill a slot, best first.
+pub fn find_candidates(root: &Path) -> Vec<Candidate> {
+    candidates_in(&files_under(root))
 }
 
 #[derive(Serialize, Debug, Default, PartialEq)]
@@ -252,11 +304,17 @@ pub struct CdImport {
     pub added: Vec<String>,
     /// Labels of slots the CD had nothing usable for.
     pub still_missing: Vec<String>,
+    /// Dropped zips and disc images that couldn't be opened, with why.
+    pub skipped: Vec<String>,
 }
 
 /// Fills every empty slot from the files under `root`.
 pub fn import_from_dir(library: &Library, root: &Path) -> Result<CdImport, String> {
-    let candidates = find_candidates(root);
+    fill_slots(library, &find_candidates(root))
+}
+
+/// Fills every empty slot with the best of `candidates`.
+fn fill_slots(library: &Library, candidates: &[Candidate]) -> Result<CdImport, String> {
     let mut report = CdImport::default();
     for slot in missing_slots(library)? {
         let mut these: Vec<&Candidate> = candidates.iter().filter(|c| c.slot == slot).collect();
@@ -281,6 +339,71 @@ pub fn import_from_dir(library: &Library, root: &Path) -> Result<CdImport, Strin
             None => report.still_missing.push(slot.label().to_string()),
         }
     }
+    Ok(report)
+}
+
+/// Disc images a dropped file may be, when it isn't a system file itself.
+const DISC_IMAGE_EXTS: [&str; 4] = ["iso", "cdr", "dmg", "toast"];
+
+/// Removes a temporary folder, and everything in it, when dropped.
+struct Scratch(PathBuf);
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// Fills empty slots from whatever the user dropped or picked, in any
+/// mix: system files themselves (under any name), folders of them at any
+/// depth, zips, and disc images. Each file is judged by its contents
+/// first, so a Mac startup disk saved as `.dmg` or `.iso` is used as it
+/// is. A disc image that isn't a system file itself is opened read-only
+/// and searched. Zips are unpacked into a temporary folder under
+/// `library/run/`, removed afterwards. A dropped encrypted Amiga Forever
+/// ROM brings the `rom.key` beside it.
+pub fn import_dropped(library: &Library, paths: &[PathBuf]) -> Result<CdImport, String> {
+    let scratch = Scratch(library.run_dir().join(format!("setup-{}", std::process::id())));
+    let _ = std::fs::remove_dir_all(&scratch.0);
+    // Declared after `scratch`, so disc images detach before it's removed.
+    let mut mounts: Vec<Mount> = Vec::new();
+    let mut files: Vec<(PathBuf, u64)> = Vec::new();
+    let mut skipped = Vec::new();
+    for (i, path) in paths.iter().enumerate() {
+        if path.is_dir() {
+            files.extend(files_under(path));
+            continue;
+        }
+        let Ok(meta) = std::fs::metadata(path) else { continue };
+        let ext = path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
+        if ext == "zip" {
+            let dest = scratch.0.join(format!("zip-{i}"));
+            match crate::library::extract_zip(path, &dest, false) {
+                Ok(()) => files.extend(files_under(&dest)),
+                Err(e) => skipped.push(format!("Couldn't unpack {}: {e}", file_name(path))),
+            }
+            continue;
+        }
+        let this = (path.clone(), meta.len());
+        if DISC_IMAGE_EXTS.contains(&ext.as_str()) && candidates_in(std::slice::from_ref(&this)).is_empty() {
+            match Mount::attach(path, &scratch.0.join(format!("disc-{i}"))) {
+                Ok(m) => {
+                    files.extend(files_under(&m.0));
+                    mounts.push(m);
+                }
+                Err(e) => skipped.push(e),
+            }
+            continue;
+        }
+        files.push(this);
+        let key = path.with_file_name("rom.key");
+        if !file_name(path).eq_ignore_ascii_case("rom.key") && key.is_file() && !files.iter().any(|(p, _)| *p == key) {
+            let len = std::fs::metadata(&key).map(|m| m.len()).unwrap_or(0);
+            files.push((key, len));
+        }
+    }
+    let mut report = fill_slots(library, &candidates_in(&files))?;
+    report.skipped = skipped;
     Ok(report)
 }
 
@@ -376,10 +499,30 @@ mod tests {
     fn list_names_only_missing_slots() {
         assert_eq!(missing_list(&[]), None);
         let list = missing_list(&[Slot::Kickstart]).unwrap();
-        assert!(list.lines().all(|l| l.is_empty() || l.starts_with('#') || !l.contains('\t')));
+        assert!(list.starts_with("#columns: name size sha1\n"));
         assert!(list.contains("\nkick40068.A1200\n"));
         assert!(list.contains("\nrom.key\n"));
         assert!(!list.contains("Quadra"));
+        assert!(list.contains("\n# Kickstart v3.1 (A1200)\n\t524288\te21545723fe8374e91342617604f1b3d703094f1\n"));
+        // Name lines have no tabs, so name-only readers still match them.
+        // Content lines are an empty name, a size and a 40-digit SHA-1.
+        let mut content = 0;
+        for line in list.lines().filter(|l| !l.is_empty() && !l.starts_with('#')) {
+            let cells: Vec<&str> = line.split('\t').collect();
+            match cells[..] {
+                [name] => assert!(!name.trim().is_empty() && name.trim() == name, "{line:?}"),
+                ["", size, sha1] => {
+                    assert!(matches!(size, "262144" | "524288"), "{line:?}");
+                    assert!(sha1.len() == 40 && sha1.bytes().all(|b| b.is_ascii_hexdigit()), "{line:?}");
+                    content += 1;
+                }
+                _ => panic!("bad line {line:?}"),
+            }
+        }
+        assert_eq!(content, known_roms::KICKSTARTS.len());
+        let mac = missing_list(&[Slot::MacRom, Slot::MacBoot]).unwrap();
+        assert!(mac.contains("\n\t1048576\tf2a9ce387019bf272c6e3459d961b30f28942ac5\n"));
+        assert_eq!(mac.matches("\n\t").count(), known_roms::MAC_ROMS.len());
         // Every slot has names, and none repeat within a slot.
         for slot in SLOTS {
             let mut names = slot.names().to_vec();
@@ -422,6 +565,7 @@ mod tests {
                     "Workbench disk: wb31.adf".into(),
                 ],
                 still_missing: vec!["Mac ROM".into()],
+                skipped: vec![],
             }
         );
         // The undamaged 3.1 copy won, and set the matching model.
@@ -481,6 +625,87 @@ mod tests {
         fs::write(t2.path().join("amiga-os-310-a1200.rom"), &enc).unwrap();
         fs::write(t2.path().join("rom.key"), b"some other key").unwrap();
         assert!(find_candidates(t2.path()).is_empty());
+    }
+
+    fn mac_rom() -> Vec<u8> {
+        let mut rom = vec![0u8; 524_288];
+        rom[8..10].copy_from_slice(&[0x06, 0x7C]);
+        rom
+    }
+
+    fn write_zip(path: &Path, files: &[(&str, &[u8])]) {
+        let mut z = zip::ZipWriter::new(fs::File::create(path).unwrap());
+        let opts = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        for (name, data) in files {
+            z.start_file(*name, opts).unwrap();
+            std::io::Write::write_all(&mut z, data).unwrap();
+        }
+        z.finish().unwrap();
+    }
+
+    #[test]
+    fn dropped_files_folders_and_zips_fill_slots_together() {
+        let t = TempDir::new();
+        let src = t.path().join("src");
+        fs::create_dir_all(src.join("Amiga stuff/deep")).unwrap();
+        // A single file with a name no list would guess.
+        fs::write(src.join("my quadra (copy).bin"), mac_rom()).unwrap();
+        // A folder holding a Kickstart a few levels down.
+        fs::write(src.join("Amiga stuff/deep/kick.rom"), kickstart(40, true)).unwrap();
+        // A zip holding a Mac startup disk and Workbench, plus Mac clutter.
+        let zip = src.join("system.zip");
+        write_zip(&zip, &[
+            ("disks/System 7.5.3.img", &mac_boot_disk()),
+            ("disks/wb31.adf", &workbench_adf("Workbench3.1")),
+            ("__MACOSX/disks/._wb31.adf", b"junk"),
+        ]);
+
+        let lib = Library::new(t.path().join("lib"));
+        let paths = [src.join("my quadra (copy).bin"), src.join("Amiga stuff"), zip.clone()];
+        let report = import_dropped(&lib, &paths).unwrap();
+        assert_eq!(
+            report.added,
+            vec![
+                "Mac ROM: my quadra (copy).bin".to_string(),
+                "Mac startup disk: System 7.5.3.img".to_string(),
+                "Kickstart ROM: kick.rom".to_string(),
+                "Workbench disk: wb31.adf".to_string(),
+            ]
+        );
+        assert!(report.still_missing.is_empty() && report.skipped.is_empty(), "{report:?}");
+        assert!(missing_slots(&lib).unwrap().is_empty());
+        // The unpacked zip is cleaned up, and the sources are untouched.
+        assert!(fs::read_dir(lib.run_dir()).map_or(true, |mut d| d.next().is_none()));
+        assert!(zip.exists() && src.join("my quadra (copy).bin").exists());
+    }
+
+    #[test]
+    fn a_dropped_encrypted_rom_finds_the_rom_key_beside_it() {
+        let t = TempDir::new();
+        let key = b"the right key".to_vec();
+        let mut enc = b"AMIROMTYPE1".to_vec();
+        enc.extend(kickstart(40, true).iter().enumerate().map(|(i, b)| b ^ key[i % key.len()]));
+        fs::write(t.path().join("amiga-os-310-a1200.rom"), &enc).unwrap();
+        fs::write(t.path().join("rom.key"), &key).unwrap();
+
+        let lib = Library::new(t.path().join("lib"));
+        let report = import_dropped(&lib, &[t.path().join("amiga-os-310-a1200.rom")]).unwrap();
+        assert_eq!(report.added, vec!["Kickstart ROM: amiga-os-310-a1200.rom".to_string()]);
+    }
+
+    #[test]
+    fn dropping_nothing_useful_changes_nothing() {
+        let t = TempDir::new();
+        let notes = t.path().join("notes.txt");
+        fs::write(&notes, b"hi").unwrap();
+        let bad_zip = t.path().join("broken.zip");
+        fs::write(&bad_zip, b"not a zip").unwrap();
+        let lib = Library::new(t.path().join("lib"));
+        let report = import_dropped(&lib, &[notes, bad_zip]).unwrap();
+        assert!(report.added.is_empty());
+        assert_eq!(report.still_missing.len(), SLOTS.len());
+        assert_eq!(report.skipped.len(), 1, "{report:?}");
+        assert!(report.skipped[0].contains("broken.zip"));
     }
 
     #[test]

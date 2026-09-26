@@ -129,11 +129,24 @@ the user's drives. The two files are the whole interface (rule 2).
   filled. A copy the library rejects falls through to the next.
 - **Fix on the way.** The Mac ROM check now matches Basilisk II's; it had
   accepted 256 KB Mac II ROMs that Basilisk II refuses.
-- **Why option A.** Floppy can't know users' file names, and ROM dumps go
-  by many. A plain name list works with existing tools today. B, an
-  optional size column, is the planned next step once the tools reading
-  the list accept it. Hashes (option C) would need those tools to hash
-  files.
+- **Why option A first.** Floppy can't know users' file names, and ROM
+  dumps go by many. A plain name list works with existing tools.
+- **Options B and C, sizes and hashes (built 2026-09-26).** The list now
+  starts with a `#columns: name size sha1` header. Name lines stay bare
+  names (no tabs). Each known-good ROM gets a nameless line: a tab, its
+  size, a tab, its SHA-1. A tool that hashes candidates by size finds
+  the dump whatever it's called.
+  - The header starts with `#`, so a name-only reader treats it as a
+    comment. Name lines still work there, and the nameless lines read as
+    odd names that match nothing, so one list suits both kinds of
+    reader.
+  - The hashes are the SHA-1s ROM databases publish: Mac ROMs from
+    MAME's Apple drivers, Kickstarts from FS-UAE's `rommgr.cpp`
+    (`known_roms.rs`).
+  - Startup disks and Workbench get no hash lines, because they change
+    as they're used.
+  - Floppy still recognizes every file by content, so an unlisted dump
+    still imports.
 
 ## Testing status
 
@@ -163,6 +176,3 @@ the user's drives. The two files are the whole interface (rule 2).
 - Universal arm64 + x86-64 build: the FS-UAE fetch is per-arch.
 - Windows/Linux: Mac fork handling, FS-UAE paths, Basilisk II detection,
   ISO mounting (`docs/platform-parity.md`).
-- Option B size column. Don't write sizes until the tools reading the
-  list accept them: a line with a size appended could be read as part of
-  the name and silently match nothing.

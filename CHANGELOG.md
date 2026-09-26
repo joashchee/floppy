@@ -6,7 +6,40 @@ All notable changes to Floppy are recorded here. Format loosely follows
 Update this file whenever a change lands. A short bullet is enough, dated
 against the day the change was made.
 
-## Unreleased (0.1.0)
+## 0.2.0 (2026-09-26)
+
+- **Drop setup files onto the window** (2026-09-26).
+  - While a Mac or Amiga system file is missing, a strip under the
+    toolbar says which ones are still needed, with a **Choose Files…**
+    button.
+  - Dragging onto the window splits the overlay into "import into
+    <guest>" and "add setup files". The drop goes to the target under
+    the cursor.
+  - Setup files can be the files themselves (under any name), folders
+    (any depth), zips, or disc images. Each is recognized by its
+    contents, and a dropped encrypted Amiga Forever ROM brings its
+    `rom.key`.
+  - Once nothing is missing, the strip, the setup target and **Import
+    Files Disc…** disappear, and drops import apps as before.
+    `cd::import_dropped`, `import_setup_files`.
+
+- **The missing-files list finds ROMs by content** (2026-09-26). It now
+  starts with a `#columns: name size sha1` header.
+  - Name lines are unchanged.
+  - Each known-good ROM gets a nameless tab-separated line with its size
+    and SHA-1, so a tool can find the ROM stored under any name. There
+    are 20 Basilisk II-usable Mac ROMs from MAME and 49 Kickstarts from
+    FS-UAE's ROM table (`known_roms.rs`).
+  - Readers that only know plain name lists see the header as a comment
+    and still match the names.
+
+- **`docs/legal-setupfiles.md`** (2026-09-26): a living list of free,
+  legal sources for the files setup asks for. Only Mac startup disks
+  (System 7.0.1 and 7.5.3, which Apple released free) and Basilisk II
+  itself qualify. There's no free legal source for Mac ROMs, Kickstarts
+  or Workbench.
+
+## 0.1.0 (2026-09-26)
 
 - **New app icon: a classic 5¼" floppy disk** (2026-09-26), replacing
   the 3½" one. It's a dark grey jacket with a light rim on the dark tile,

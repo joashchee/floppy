@@ -583,7 +583,10 @@ fn copy_tree(src: &Path, dest: &Path, keep_forks: bool) -> io::Result<()> {
     Ok(())
 }
 
-fn extract_zip(src: &Path, dest: &Path, keep_forks: bool) -> io::Result<()> {
+/// Unpacks a zip into `dest`, refusing entries that would land outside it
+/// and stopping past MAX_ZIP_BYTES. Without `keep_forks`, macOS clutter
+/// (`__MACOSX/`, `._` files, `.DS_Store`) is left out.
+pub(crate) fn extract_zip(src: &Path, dest: &Path, keep_forks: bool) -> io::Result<()> {
     let mut zip = zip::ZipArchive::new(File::open(src)?).map_err(io::Error::other)?;
     let mut total = 0u64;
     for i in 0..zip.len() {

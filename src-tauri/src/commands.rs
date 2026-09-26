@@ -192,6 +192,21 @@ pub async fn import_files_disc(app: AppHandle, path: String) -> Result<CdImport,
         .map_err(|e| e.to_string())?
 }
 
+/// Adds system files from whatever the user dropped or picked: the files
+/// themselves, folders, zips or disc images, in any mix (`cd::import_dropped`).
+#[tauri::command]
+pub async fn import_setup_files(app: AppHandle, paths: Vec<String>) -> Result<CdImport, String> {
+    let state = app.state::<AppState>();
+    if running_map(&state).values().any(|o| o.single_instance()) {
+        return Err("Quit Basilisk II and FS-UAE before adding system files.".into());
+    }
+    let handle = app.clone();
+    let paths: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
+    tauri::async_runtime::spawn_blocking(move || cd::import_dropped(&handle.state::<AppState>().library, &paths))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
 #[tauri::command]
 pub fn running_apps(state: State<AppState>) -> Vec<String> {
     running_map(&state).into_keys().collect()

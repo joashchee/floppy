@@ -92,6 +92,28 @@ function emulatorLabel(s: GuestStatus | undefined): string {
   return s.emulator;
 }
 
+/** Where a drag over the window will drop: an app import, or setup files. */
+type DropZone = "app" | "setup";
+
+/** Labels of the Mac and Amiga system files still missing (cd.rs `missing_slots`). */
+function missingSetupFiles(statuses: GuestStatus[]): string[] {
+  const out: string[] = [];
+  const mac = statuses.find((s) => s.os === "mac-classic");
+  const amiga = statuses.find((s) => s.os === "amiga");
+  if (mac && !mac.system.rom) out.push("Mac ROM");
+  if (mac && !mac.system.boot) out.push("Mac startup disk");
+  if (amiga && !amiga.system.rom) out.push("Kickstart ROM");
+  if (amiga && !amiga.system.boot) out.push("Workbench disk");
+  return out;
+}
+
+/** What an import of system files did, for the status line. */
+function describeImport(r: CdImport): string {
+  const added = r.added.length ? `Added ${r.added.join(", ")}.` : "Found nothing new to add.";
+  const missing = r.stillMissing.length ? ` Still missing: ${r.stillMissing.join(", ")}.` : "";
+  return added + missing;
+}
+
 function App() {
   const [apps, setApps] = useState<LibraryApp[]>([]);
   const [guest, setGuest] = useState<GuestOs>("dos");
@@ -102,6 +124,7 @@ function App() {
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
+  const [dropZone, setDropZone] = useState<DropZone | null>(null);
   const [confirmRemove, setConfirmRemove] = useState<LibraryApp | null>(null);
   const [nameDraft, setNameDraft] = useState("");
 
@@ -113,6 +136,10 @@ function App() {
   );
   const selected = guestApps.find((a) => a.id === selectedId) ?? null;
   const guestRunning = apps.some((a) => a.os === guest && running.has(a.id));
+  const missingSetup = useMemo(() => missingSetupFiles(statuses), [statuses]);
+  const setupNeeded = missingSetup.length > 0;
+  // Basilisk II and FS-UAE use the system files, so they can't change mid-run.
+  const systemInUse = apps.some((a) => a.os !== "dos" && running.has(a.id));
 
   useEffect(() => {
     setNameDraft(selected?.name ?? "");
@@ -166,22 +193,35 @@ function App() {
   }, []);
 
   useEffect(() => {
+    // While setup files are missing, the overlay has two targets; the drop
+    // goes to the one under the cursor. Otherwise every drop is an app.
+    const zoneAt = ({ x, y }: { x: number; y: number }): DropZone | null => {
+      if (!setupNeeded) return "app";
+      const el = document.elementFromPoint(x / window.devicePixelRatio, y / window.devicePixelRatio);
+      return (el?.closest<HTMLElement>("[data-drop-zone]")?.dataset.dropZone as DropZone | undefined) ?? null;
+    };
     const unlisten = getCurrentWebview().onDragDropEvent((event) => {
       if (event.payload.type === "enter" || event.payload.type === "over") {
         setDragging(true);
+        setDropZone(zoneAt(event.payload.position));
       } else if (event.payload.type === "leave") {
         setDragging(false);
+        setDropZone(null);
       } else if (event.payload.type === "drop") {
+        const zone = zoneAt(event.payload.position);
         setDragging(false);
-        void importPaths(event.payload.paths);
+        setDropZone(null);
+        if (zone === "setup") void addSetupFiles(event.payload.paths);
+        else if (zone === "app") void importPaths(event.payload.paths);
       }
     });
     return () => {
       unlisten.then((f) => f());
     };
-    // Re-subscribe when the guest changes, so drops import into the guest on screen.
+    // Re-subscribe when the guest changes (drops import into the guest on
+    // screen) and when setup is finished (the setup target goes away).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [guest]);
+  }, [guest, setupNeeded]);
 
   /** Imports one after another: each copy is disk-bound, so running them in parallel wouldn't be faster. */
   async function importPaths(paths: string[]) {
@@ -268,6 +308,29 @@ function App() {
     }
   }
 
+  /** Adds whatever system files are among `paths`: the files themselves, folders, zips or disc images (cd.rs `import_dropped`). */
+  async function addSetupFiles(paths: string[]) {
+    if (!paths.length) return;
+    setError(null);
+    setMessage(null);
+    setBusy(`Checking ${paths.length === 1 ? baseName(paths[0]) : `${paths.length} items`}`);
+    try {
+      const r = await invoke<CdImport>("import_setup_files", { paths });
+      await refreshStatuses();
+      setMessage(describeImport(r));
+      if (r.skipped.length) setError(r.skipped.join("\n"));
+    } catch (e) {
+      fail(e);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function pickSetupFiles() {
+    const picked = await open({ multiple: true, title: "Choose ROMs, startup disks, or zips or disc images holding them" });
+    if (Array.isArray(picked)) await addSetupFiles(picked);
+  }
+
   /** Sets up every guest it can from a files disc: a disc image or folder of gathered system files. */
   async function importFilesDisc(directory: boolean) {
     const path = await open(
@@ -282,9 +345,7 @@ function App() {
     try {
       const r = await invoke<CdImport>("import_files_disc", { path });
       await refreshStatuses();
-      const added = r.added.length ? `Added ${r.added.join(", ")}.` : "Found nothing new to add.";
-      const missing = r.stillMissing.length ? ` Still missing: ${r.stillMissing.join(", ")}.` : "";
-      setMessage(added + missing);
+      setMessage(describeImport(r));
     } catch (e) {
       fail(e);
     } finally {
@@ -419,19 +480,36 @@ function App() {
           </span>
           {ui.importFileLabel}
         </button>
-        <button
-          type="button"
-          className="icontext-btn"
-          onClick={() => void importFilesDisc(false)}
-          disabled={!!busy || apps.some((a) => a.os !== "dos" && running.has(a.id))}
-          title="Add ROMs and startup disks from a disc image of gathered system files"
-        >
-          <span className="btn-icon">
+        {setupNeeded && (
+          <button
+            type="button"
+            className="icontext-btn"
+            onClick={() => void importFilesDisc(false)}
+            disabled={!!busy || systemInUse}
+            title="Add ROMs and startup disks from a disc image of gathered system files"
+          >
+            <span className="btn-icon">
+              <ChipIcon />
+            </span>
+            Import Files Disc…
+          </button>
+        )}
+      </div>
+
+      {setupNeeded && (
+        <div className="setup-drop">
+          <span className="setup-drop-icon">
             <ChipIcon />
           </span>
-          Import Files Disc…
-        </button>
-      </div>
+          <p className="setup-drop-text">
+            <strong>Setup files needed:</strong> {missingSetup.join(", ")}. Drop them onto this window as files, folders,
+            zips or disc images. Floppy recognizes each one by its contents, whatever it's called.
+          </p>
+          <button type="button" className="small" onClick={() => void pickSetupFiles()} disabled={!!busy || systemInUse}>
+            Choose Files…
+          </button>
+        </div>
+      )}
 
       {busy && (
         <div className="scan-status-row">
@@ -592,11 +670,19 @@ function App() {
         </p>
       </Dialog>
 
-      <div className={`drop-overlay${dragging ? " show" : ""}`}>
-        <div className="drop-box">
+      <div className={`drop-overlay${dragging ? " show" : ""}${setupNeeded ? " split" : ""}`}>
+        <div className={`drop-box${dropZone === "app" ? " active" : ""}`} data-drop-zone="app">
           Drop to import into {GUEST_LABEL[guest]}
           <small>{ui.dropHint}</small>
         </div>
+        {setupNeeded && (
+          <div className={`drop-box${dropZone === "setup" ? " active" : ""}`} data-drop-zone="setup">
+            Drop to add setup files
+            <small>
+              Still needed: {missingSetup.join(", ")}. Files, folders, zips or disc images, under any name.
+            </small>
+          </div>
+        )}
       </div>
     </main>
   );

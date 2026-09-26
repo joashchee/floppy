@@ -5,6 +5,9 @@ Emulation frontend and launcher for original-era desktop apps: DOS
 (Basilisk II, found as a separate install). `docs/emulators.md` records
 why each emulator was picked and its licensing and reliability checks,
 and `docs/floppy-notes.md` is a condensed history of the work so far.
+`docs/legal-setupfiles.md` is a living list of free, legal sources for
+the system files setup asks for. Re-check it and update its date when
+touching setup.
 
 This repo is public. Anything about closed-source sister apps (where
 they live, their internals, their side of a handoff) belongs in the
@@ -65,7 +68,11 @@ gitignored `CLAUDE.local.md`, never in committed files.
   a `.txt` of missing system files under their common names, and some
   tool gathers copies into a disc image or folder, laid out any way, at
   any depth. Floppy mounts it read-only and fills empty slots by
-  recognizing files by content, never by name or position.
+  recognizing files by content, never by name or position. The same
+  recognition handles setup files dropped on the window
+  (`import_dropped`): files, folders, zips and disc images in any mix.
+  The setup strip and the overlay's "add setup files" target show only
+  while a Mac or Amiga system file is missing.
 - `commands.rs`: Tauri commands. `launch_app` tracks running apps and
   emits `running-changed` when an emulator starts and when it quits. Mac
   and Amiga apps share one writable startup disk per guest, so only one
@@ -170,5 +177,5 @@ gitignored `CLAUDE.local.md`, never in committed files.
 - Windows/Linux: Mac fork handling, FS-UAE paths, Basilisk II detection
   (`docs/platform-parity.md`).
 - A universal (arm64 + x86-64) build: the FS-UAE fetch is per-arch.
-- A size column in the missing-files list, once the tools reading it
-  accept one (see `CLAUDE.local.md`).
+- More known-good hashes in `known_roms.rs` as users report dumps that
+  aren't listed (the IIci's single-file dump, for one).

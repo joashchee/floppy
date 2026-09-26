@@ -44,10 +44,12 @@ export interface StartupImport {
   error: string | null;
 }
 
-/** cd.rs `CdImport`: what an Import Files Disc set up. */
+/** cd.rs `CdImport`: what an Import Files Disc (or dropped setup files) set up. */
 export interface CdImport {
   added: string[];
   stillMissing: string[];
+  /** Dropped zips and disc images that couldn't be opened, with why. */
+  skipped: string[];
 }
 
 /** amiga.rs `MODELS`. */

@@ -6,6 +6,7 @@ mod dos;
 #[cfg(test)]
 mod e2e;
 mod emulator;
+mod known_roms;
 mod library;
 mod mac;
 #[cfg(test)]
@@ -54,6 +55,7 @@ pub fn run() {
             commands::set_system_file,
             commands::set_guest_model,
             commands::write_missing_list,
+            commands::import_setup_files,
             commands::import_files_disc,
             commands::running_apps,
             commands::take_startup_import,

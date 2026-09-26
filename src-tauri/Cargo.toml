@@ -1,6 +1,6 @@
 [package]
 name = "floppy"
-version = "0.1.0"
+version = "0.2.0"
 description = "Floppy — run the old apps your files need, in their own OS"
 authors = ["ansiapps"]
 license = "GPL-2.0-or-later"
