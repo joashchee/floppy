@@ -1049,8 +1049,10 @@ version = "0.2.0"
 dependencies = [
  "libc",
  "log",
+ "plist",
  "serde",
  "serde_json",
+ "sha2",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",

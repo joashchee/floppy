@@ -6,7 +6,10 @@ Emulation frontend and launcher for original-era desktop apps: DOS
 why each emulator was picked and its licensing and reliability checks,
 and `docs/floppy-notes.md` is a condensed history of the work so far.
 `docs/legal-setupfiles.md` is a living list of free, legal sources for
-the system files setup asks for. Re-check it and update its date when
+the system files setup asks for. `docs/app-handlers.md` is a living list
+of old apps that open old formats (confidence and sources per entry).
+Its code copy is `HANDLERS` in `handlers.rs`, and a test keeps the two in
+step. Re-check it and update its date when
 touching setup.
 
 This repo is public. Anything about closed-source sister apps (where
@@ -29,7 +32,7 @@ gitignored `CLAUDE.local.md`, never in committed files.
 2. **Floppy stays a separate program from anything that feeds it.**
    Other programs talk to it only across a process boundary, through
    documented plain interfaces: `floppy import [--os
-   dos|mac-classic|amiga] <path>` (`cli.rs`), the missing-files list and
+   dos|mac-classic|amiga] <path>` and `floppy open <file>` (`cli.rs`), the missing-files list and
    files disc (`cd.rs`), and later perhaps a URL scheme. Never read
    another app's private data (its database or internal files), never
    let Floppy code be linked into a closed-source program, and never copy
@@ -73,10 +76,80 @@ gitignored `CLAUDE.local.md`, never in committed files.
   (`import_dropped`): files, folders, zips and disc images in any mix.
   The setup strip and the overlay's "add setup files" target show only
   while a Mac or Amiga system file is missing.
-- `commands.rs`: Tauri commands. `launch_app` tracks running apps and
-  emits `running-changed` when an emulator starts and when it quits. Mac
-  and Amiga apps share one writable startup disk per guest, so only one
-  of each runs at a time.
+- `discs.rs`: files discs made from the list. A Burn A CD disc carries
+  the ISO Application ID `DISKETTE BURN A CD` and a `diskette-burn.json`
+  manifest (disc `id`, the answered list's SHA-1, and per-line counts).
+  From such a disc Floppy:
+  - remembers the disc ID;
+  - puts every copy it couldn't use (unrecognized, refused, or damaged)
+    on the ignore list, which later lists carry as
+    `#ignore: sha256 <hash> <reason>`;
+  - leaves off later lists any slot whose every line found nothing
+    usable, until **Ask Again**.
+
+  State is in `library/files-discs.json`. `sha1.rs` exists only to match
+  a disc to the list it answers.
+
+## Old media (`media.rs`)
+
+- macOS no longer mounts HFS (since 10.15), or Amiga disks. A watcher
+  thread polls `/dev` for new whole disks and, after 5 s, asks `diskutil`
+  whether anything on one mounted. An external disk with nothing mounted
+  and no modern partitions gets a "Copy and Open" notice.
+- Raw disks belong to root, so the copy is read through
+  `/usr/libexec/authopen` (macOS's own password prompt, read-only). The
+  first 64 KB decide the guest (Apple partition map or HFS/HFS+/MFS: Mac;
+  Rigid Disk Block or AmigaDOS: Amiga), and anything else is abandoned.
+  The image is imported like a dropped disk image and launched when that
+  guest is ready. The original is never written to.
+
+## Documents (`documents.rs`)
+
+- An old file is opened in the app that made it: it's imported as a
+  document, matched to apps already in the library, and launched with
+  the app. DOS only so far; Amiga and classic Mac are next (see the
+  plan page linked from `CLAUDE.local.md`).
+- DOS documents live in `C:\DOCS` (`library/dos/DOCS/`, reserved: no
+  app folder takes that name) under 8.3 names. The original name is
+  kept in `library.json` (`documents`) and used on export.
+- Matching: `DOS_APPS`, a public table of well-known programs and the
+  extensions they open, plus extensions the user adds per app ("Also
+  opens"). The app a document last opened with is offered first.
+- `open_document` runs `PROGRAM C:\DOCS\FILE` in `[autoexec]`. Every
+  DOS launch snapshots drive C: and, when DOSBox quits, emits
+  `session-ended` with the files that are new or changed (Show in Finder
+  and Export, which uses the original name). Files saved into `C:\DOCS`
+  become documents.
+- `floppy open [--os dos] <file>` hands Floppy a document (`cli.rs`),
+  like `floppy import` does an app. A dropped file that isn't a folder,
+  zip or program becomes a document on the DOS tab.
+
+## Handler apps (`handlers.rs`)
+
+- `HANDLERS`: per guest, the app, its program file names, DOS
+  extensions, Mac creator and type codes, and Amiga IFF types. It drives
+  document matching (`documents.rs`), the wanted-apps list, and Import
+  Apps Disc.
+- **Save Wanted-Apps List…** writes the missing-files list format for
+  every handler not in the library, plus `#gather: folder` (bring each
+  matched file's folder) and `#forks: appledouble` (keep Mac forks as
+  `._` files). **Import Apps Disc…** imports each handler found on the
+  disc with its folder, once, nearest the root first, skipping ones
+  already in the library.
+
+## Handler verification (`verify.rs`)
+
+- After each document session Floppy asks "Did <app> open <document>
+  correctly?" (Worked / Didn't Work, optional note). Answers go in
+  `library/verifications.json`, keyed by guest, app (or handler),
+  program and file type, never the document's name.
+- Totals rank "Open with": apps that worked with the type rise, and one
+  that failed more than it worked goes last. The menu shows each app's
+  record.
+- **Export Test Report…** writes a `floppy-handler-tests` JSON report,
+  only when asked (rule 4). `scripts/merge-handler-tests.py` merges
+  reports into `docs/app-handlers.md`'s "Tested in Floppy" table, once
+  per report ID, and suggests *believed* entries to promote.
 
 ## How DOS mode works
 
@@ -181,5 +254,6 @@ gitignored `CLAUDE.local.md`, never in committed files.
 - Windows/Linux: Mac fork handling, FS-UAE paths, Basilisk II detection
   (`docs/platform-parity.md`).
 - A universal (arm64 + x86-64) build: the FS-UAE fetch is per-arch.
-- More known-good hashes in `known_roms.rs` as users report dumps that
-  aren't listed (the IIci's single-file dump, for one).
+- More known-good hashes as users report copies that aren't listed (the
+  IIci's single-file ROM dump, for one). `known_files.rs` is generated:
+  edit `scripts/update-known-hashes.py` and run it, never the `.rs`.

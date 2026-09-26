@@ -17,10 +17,10 @@
 //!    - A **name line** is just a file name, the one a file is commonly
 //!      stored under, matched ignoring case. It has no tabs.
 //!    - A **content line** has an empty name, then the size in bytes and
-//!      SHA-1 of a known-good ROM dump (`known_roms.rs`), tab-separated.
-//!      It finds that dump whatever it's called: a renamed ROM can't be
-//!      found by name. Only ROMs get these, since startup disks and
-//!      Workbench change as they're used.
+//!      SHA-1 of a known-good copy (`known_files.rs`), tab-separated. It
+//!      finds that copy whatever it's called: a renamed file can't be
+//!      found by name. Every slot has them, from published hash lists
+//!      (`scripts/update-known-hashes.py`).
 //!
 //!    The header starts with `#`, so a reader that only knows plain name
 //!    lists treats it as a comment. Name lines still work there, and the
@@ -29,18 +29,37 @@
 //!    copies of those files, laid out any way at all, at any depth, with
 //!    duplicates allowed. A tool may place each name independently, so a
 //!    ROM and its `rom.key` can end up in different folders.
+//!    A disc can carry a manifest saying which list it answers and how
+//!    each line went (Diskette's Burn A CD writes `diskette-burn.json`;
+//!    discs.rs reads it).
 //! 3. `import_cd` reads the disc, recognizes each file by its contents
 //!    rather than its name, and fills every empty slot with the best
 //!    copy, trying the next copy if one is damaged.
 //!
-//! Only these two files cross between programs (rule 2).
+//! 4. **Ignore lines.** From a disc with a manifest, Floppy remembers
+//!    every file it couldn't use: not a system file, refused by its
+//!    checks, or damaged (a failing checksum). Good copies that just
+//!    weren't needed don't count. Later lists carry one line per file,
+//!    so the disc maker leaves that content off whichever line it
+//!    matches. Old readers see a comment:
+//!
+//!    ```text
+//!    #ignore: sha256 <hash> <reason>
+//!    ```
+//!
+//!    A slot whose every line found nothing usable on the user's drives
+//!    is left off later lists until the user says Ask Again (discs.rs).
+//!
+//! Only these files (the list, the disc and its manifest) cross between
+//! programs (rule 2).
 
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 use walkdir::WalkDir;
 
-use crate::known_roms::{self, KnownRom};
+use crate::discs::{self, DiscReport, IgnoredFile};
+use crate::known_files::{self, KnownFile};
 use crate::library::{GuestOs, Library, SystemFile};
 use crate::{amiga, mac};
 
@@ -79,6 +98,10 @@ impl Slot {
         }
     }
 
+    pub fn from_label(label: &str) -> Option<Slot> {
+        SLOTS.into_iter().find(|s| s.label() == label)
+    }
+
     /// What the `.txt` says this group of names is for.
     fn comment(self) -> &'static str {
         match self {
@@ -89,14 +112,15 @@ impl Slot {
         }
     }
 
-    /// Known-good dumps this slot can be found by, for the hash hints.
-    fn known(self) -> &'static [KnownRom] {
+    /// Known-good copies this slot can be found by, for the content lines.
+    /// A startup disk or Workbench changes once it's used, but the user's
+    /// original download or disk image still matches.
+    fn known(self) -> &'static [KnownFile] {
         match self {
-            Slot::MacRom => known_roms::MAC_ROMS,
-            Slot::Kickstart => known_roms::KICKSTARTS,
-            // Startup disks and Workbench are written to as they're used,
-            // so no two copies hash the same.
-            Slot::MacBoot | Slot::Workbench => &[],
+            Slot::MacRom => known_files::MAC_ROMS,
+            Slot::MacBoot => known_files::MAC_BOOT_DISKS,
+            Slot::Kickstart => known_files::KICKSTARTS,
+            Slot::Workbench => known_files::WORKBENCH_DISKS,
         }
     }
 
@@ -152,36 +176,75 @@ pub fn missing_slots(library: &Library) -> Result<Vec<Slot>, String> {
     Ok(out)
 }
 
-/// The missing-files list (see the module doc), or `None` when nothing is
-/// missing.
-pub fn missing_list(slots: &[Slot]) -> Option<String> {
+/// A missing-files list, and which slot each of its lines (1-based) asks
+/// for.
+pub struct MissingList {
+    pub text: String,
+    pub lines: Vec<(usize, Slot)>,
+}
+
+/// The missing-files list (see the module doc) for `slots`, ending with
+/// an `#ignore:` line per file in `ignored`. `None` when `slots` is empty.
+pub fn missing_list(slots: &[Slot], ignored: &[IgnoredFile]) -> Option<MissingList> {
     if slots.is_empty() {
         return None;
     }
     // The header must be the first line.
-    let mut s = String::from(
-        "#columns: name size sha1\n\
-         # Files Floppy's emulators still need. Gather copies into a disc\n\
-         # image or folder (Diskette's Burn A CD can do this from its\n\
-         # catalog), then use Import Files Disc in Floppy.\n\
-         # Floppy checks each file's contents, so extra matches do no harm.\n\
-         # Lines starting with a tab have no name: they find a known-good\n\
-         # copy by its size and SHA-1, whatever the file is called.\n",
-    );
+    let mut out: Vec<String> = vec![
+        "#columns: name size sha1".into(),
+        "# Files Floppy's emulators still need. Gather copies into a disc".into(),
+        "# image or folder (Diskette's Burn A CD can do this from its".into(),
+        "# catalog), then use Import Files Disc in Floppy.".into(),
+        "# Floppy checks each file's contents, so extra matches do no harm.".into(),
+        "# Lines starting with a tab have no name: they find a known-good".into(),
+        "# copy by its size and SHA-1, whatever the file is called.".into(),
+    ];
+    let mut lines = Vec::new();
     for slot in slots {
-        s += &format!("\n# {}\n", slot.comment());
+        out.push(String::new());
+        out.push(format!("# {}", slot.comment()));
         for name in slot.names() {
-            s += name;
-            s += "\n";
+            out.push(name.to_string());
+            lines.push((out.len(), *slot));
         }
-        if !slot.known().is_empty() {
-            s += "# Known-good copies, found by content under any name:\n";
-        }
-        for rom in slot.known() {
-            s += &format!("# {}\n\t{}\t{}\n", rom.label, rom.size, rom.sha1);
+        out.push("# Known-good copies, found by content under any name:".into());
+        for f in slot.known() {
+            out.push(format!("# {}", f.label));
+            out.push(format!("\t{}\t{}", f.size, f.sha1));
+            lines.push((out.len(), *slot));
         }
     }
-    Some(s)
+    if !ignored.is_empty() {
+        out.push(String::new());
+        out.push("# Copies an earlier files disc brought that Floppy couldn't use.".into());
+        out.push("# Leave that content off the next disc, whatever it's called.".into());
+        for f in ignored {
+            out.push(format!("#ignore: sha256 {} {}", f.sha256, f.reason.replace(['\n', '\r', '\t'], " ")));
+        }
+    }
+    let mut text = out.join("\n");
+    text.push('\n');
+    Some(MissingList { text, lines })
+}
+
+/// Writes the missing-files list to `path`, leaving off slots the user's
+/// drives couldn't fill (discs.rs), and remembers it for matching discs.
+/// Returns how many slots it asks for: 0 when nothing is missing.
+pub fn write_list(library: &Library, path: &Path) -> Result<usize, String> {
+    let missing = missing_slots(library)?;
+    let unfindable = discs::not_on_drives(library);
+    let slots: Vec<Slot> = missing.iter().copied().filter(|s| !unfindable.contains(s)).collect();
+    if slots.is_empty() && !missing.is_empty() {
+        let labels: Vec<&str> = missing.iter().map(|s| s.label()).collect();
+        return Err(format!(
+            "Your drives had no usable copy of what's still missing ({}). Add it another way, or use Ask Again to put it back on the list.",
+            labels.join(", ")
+        ));
+    }
+    let Some(list) = missing_list(&slots, &discs::ignored_files(library)) else { return Ok(0) };
+    std::fs::write(path, &list.text).map_err(|e| format!("Couldn't save the list: {e}"))?;
+    discs::record_list(library, &list.text, &list.lines)?;
+    Ok(slots.len())
 }
 
 /// A file on the CD that looks like it fills a slot, and how good a copy
@@ -195,6 +258,9 @@ pub struct Candidate {
     pub detail: String,
     /// The `rom.key` that unlocks an encrypted Amiga Forever ROM.
     pub key: Option<PathBuf>,
+    /// Its checksum fails. (Only where the checksum is known to be right:
+    /// Kickstarts, not Mac ROMs.)
+    pub damaged: bool,
 }
 
 fn file_name(p: &Path) -> String {
@@ -208,7 +274,7 @@ fn classify(path: &Path, len: u64, keys: &[PathBuf]) -> Option<Candidate> {
     let name = file_name(path);
     let lower = name.to_lowercase();
     let head = crate::library::read_head(path, 16).ok()?;
-    let cand = |slot, score, detail: String| Some(Candidate { slot, path: path.to_path_buf(), score, detail, key: None });
+    let cand = |slot, score, detail: String| Some(Candidate { slot, path: path.to_path_buf(), score, detail, key: None, damaged: false });
 
     if mac::is_basilisk_rom(&head, len) {
         let ok = std::fs::read(path).is_ok_and(|b| mac::rom_checksum_ok(&b));
@@ -218,7 +284,10 @@ fn classify(path: &Path, len: u64, keys: &[PathBuf]) -> Option<Candidate> {
         Some(amiga::Kickstart::Plain { version, .. }) => {
             let ok = std::fs::read(path).is_ok_and(|b| amiga::carry_sum_ok(&b));
             // Newer Kickstarts run more software.
-            return cand(Slot::Kickstart, 100 + if ok { 50 } else { 0 } + i64::from(version), version.to_string());
+            return Some(Candidate {
+                damaged: !ok,
+                ..cand(Slot::Kickstart, 100 + if ok { 50 } else { 0 } + i64::from(version), version.to_string())?
+            });
         }
         Some(amiga::Kickstart::Encrypted) => {
             // A files disc may place each name independently, so the ROM
@@ -240,6 +309,7 @@ fn classify(path: &Path, len: u64, keys: &[PathBuf]) -> Option<Candidate> {
                     score: 100 + if ok { 50 } else { 0 } + i64::from(version),
                     detail: version.to_string(),
                     key: Some(key.clone()),
+                    damaged: !ok,
                 })
             });
         }
@@ -253,6 +323,7 @@ fn classify(path: &Path, len: u64, keys: &[PathBuf]) -> Option<Candidate> {
                 score: 100 + if bootable { 50 } else { 0 },
                 detail: volume,
                 key: None,
+                damaged: false,
             });
     }
     if amiga::is_disk_image(&name) && (lower.contains("workbench") || lower.starts_with("wb")) {
@@ -279,6 +350,7 @@ fn files_under(root: &Path) -> Vec<(PathBuf, u64)> {
         .into_iter()
         .filter_map(Result::ok)
         .filter(|e| e.file_type().is_file() && !e.file_name().to_string_lossy().starts_with('.'))
+        .filter(|e| !e.file_name().to_string_lossy().eq_ignore_ascii_case(discs::MANIFEST))
         .filter_map(|e| Some((e.path().to_path_buf(), e.metadata().ok()?.len())))
         .collect()
 }
@@ -293,11 +365,12 @@ fn candidates_in(files: &[(PathBuf, u64)]) -> Vec<Candidate> {
 }
 
 /// Every file under `root` that could fill a slot, best first.
+#[cfg(test)]
 pub fn find_candidates(root: &Path) -> Vec<Candidate> {
     candidates_in(&files_under(root))
 }
 
-#[derive(Serialize, Debug, Default, PartialEq)]
+#[derive(Serialize, Debug, Default, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct CdImport {
     /// "Kickstart ROM: kick40068.A1200".
@@ -306,16 +379,39 @@ pub struct CdImport {
     pub still_missing: Vec<String>,
     /// Dropped zips and disc images that couldn't be opened, with why.
     pub skipped: Vec<String>,
+    /// Files on a disc with a manifest that Floppy couldn't use ("name:
+    /// reason"), now on the ignore list.
+    pub unusable: Vec<String>,
+    /// What the disc's manifest told Floppy, when it had one.
+    pub disc: Option<DiscReport>,
 }
 
-/// Fills every empty slot from the files under `root`.
+/// Fills every empty slot from the files under `root`. When `root` has a
+/// disc manifest, what couldn't be used goes on the skip list.
 pub fn import_from_dir(library: &Library, root: &Path) -> Result<CdImport, String> {
-    fill_slots(library, &find_candidates(root))
+    let files = files_under(root);
+    let candidates = candidates_in(&files);
+    let filled = fill_slots(library, &candidates)?;
+    let mut report = filled.report.clone();
+    if let Some(manifest) = discs::read_manifest(root) {
+        track_disc(library, root, &manifest, &files, &candidates, &filled, &mut report)?;
+    }
+    Ok(report)
+}
+
+/// What filling the slots did with each candidate.
+#[derive(Default)]
+struct Filled {
+    report: CdImport,
+    /// The copies that filled a slot.
+    used: Vec<PathBuf>,
+    /// Copies the library refused, with why.
+    failed: Vec<(PathBuf, String)>,
 }
 
 /// Fills every empty slot with the best of `candidates`.
-fn fill_slots(library: &Library, candidates: &[Candidate]) -> Result<CdImport, String> {
-    let mut report = CdImport::default();
+fn fill_slots(library: &Library, candidates: &[Candidate]) -> Result<Filled, String> {
+    let mut out = Filled::default();
     for slot in missing_slots(library)? {
         let mut these: Vec<&Candidate> = candidates.iter().filter(|c| c.slot == slot).collect();
         if slot == Slot::Workbench {
@@ -333,13 +429,86 @@ fn fill_slots(library: &Library, candidates: &[Candidate]) -> Result<CdImport, S
         }
         // A copy that fails the library's own checks (or won't copy) is
         // skipped for the next one.
-        let added = these.iter().find(|c| library.set_system_file(slot.os(), slot.kind(), &c.path, c.key.as_deref()).is_ok());
+        let mut added = None;
+        for c in these {
+            match library.set_system_file(slot.os(), slot.kind(), &c.path, c.key.as_deref()) {
+                Ok(_) => {
+                    added = Some(c);
+                    break;
+                }
+                Err(e) => out.failed.push((c.path.clone(), e)),
+            }
+        }
         match added {
-            Some(c) => report.added.push(format!("{}: {}", slot.label(), file_name(&c.path))),
-            None => report.still_missing.push(slot.label().to_string()),
+            Some(c) => {
+                out.report.added.push(format!("{}: {}", slot.label(), file_name(&c.path)));
+                out.used.push(c.path.clone());
+            }
+            None => out.report.still_missing.push(slot.label().to_string()),
         }
     }
-    Ok(report)
+    Ok(out)
+}
+
+
+fn sha256_of(path: &Path) -> std::io::Result<String> {
+    use sha2::Digest;
+    use std::io::Read;
+    let mut f = std::fs::File::open(path)?;
+    let mut h = sha2::Sha256::new();
+    let mut buf = vec![0u8; 1 << 20];
+    loop {
+        let n = f.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        h.update(&buf[..n]);
+    }
+    Ok(h.finalize().iter().map(|b| format!("{b:02x}")).collect())
+}
+
+/// Every file under `root` that couldn't be used, hashed for the ignore
+/// list. A file counts when it isn't a system file, the library refused
+/// it, or it's damaged. A good copy that just wasn't needed doesn't, and
+/// neither do `rom.key` files, which are only ever companions.
+fn unusable_under(root: &Path, disc: &str, files: &[(PathBuf, u64)], candidates: &[Candidate], filled: &Filled) -> Vec<IgnoredFile> {
+    let recorded = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    let mut out = Vec::new();
+    for (path, size) in files.iter().filter(|(p, _)| p.starts_with(root)) {
+        let name = file_name(path);
+        if name.eq_ignore_ascii_case("rom.key") || filled.used.contains(path) {
+            continue;
+        }
+        let reason = if let Some((_, e)) = filled.failed.iter().find(|(p, _)| p == path) {
+            e.clone()
+        } else {
+            match candidates.iter().find(|c| c.path == *path) {
+                None => "Not a system file Floppy recognizes.".to_string(),
+                Some(c) if c.damaged => format!("A damaged {}: its checksum doesn't match.", c.slot.label()),
+                Some(_) => continue,
+            }
+        };
+        let Ok(sha256) = sha256_of(path) else { continue };
+        out.push(IgnoredFile { sha256, size: *size, name, reason, disc: disc.to_string(), recorded });
+    }
+    out
+}
+
+/// Records what a disc with a manifest taught (discs.rs) into `report`.
+fn track_disc(
+    library: &Library,
+    root: &Path,
+    manifest: &discs::Manifest,
+    files: &[(PathBuf, u64)],
+    candidates: &[Candidate],
+    filled: &Filled,
+    report: &mut CdImport,
+) -> Result<(), String> {
+    let unusable = unusable_under(root, &manifest.id, files, candidates, filled);
+    report.unusable.extend(unusable.iter().map(|f| format!("{}: {}", f.name, f.reason)));
+    let still_missing: Vec<Slot> = report.still_missing.iter().filter_map(|l| Slot::from_label(l)).collect();
+    report.disc = Some(discs::record_import(library, manifest, unusable, &still_missing)?);
+    Ok(())
 }
 
 /// Disc images a dropped file may be, when it isn't a system file itself.
@@ -369,9 +538,14 @@ pub fn import_dropped(library: &Library, paths: &[PathBuf]) -> Result<CdImport, 
     let mut mounts: Vec<Mount> = Vec::new();
     let mut files: Vec<(PathBuf, u64)> = Vec::new();
     let mut skipped = Vec::new();
+    // Folders and discs that came with a manifest (discs.rs).
+    let mut tracked: Vec<(PathBuf, discs::Manifest)> = Vec::new();
     for (i, path) in paths.iter().enumerate() {
         if path.is_dir() {
             files.extend(files_under(path));
+            if let Some(m) = discs::read_manifest(path) {
+                tracked.push((path.clone(), m));
+            }
             continue;
         }
         let Ok(meta) = std::fs::metadata(path) else { continue };
@@ -385,10 +559,16 @@ pub fn import_dropped(library: &Library, paths: &[PathBuf]) -> Result<CdImport, 
             continue;
         }
         let this = (path.clone(), meta.len());
-        if DISC_IMAGE_EXTS.contains(&ext.as_str()) && candidates_in(std::slice::from_ref(&this)).is_empty() {
+        // A Burn A CD disc goes straight to being opened: it's never a
+        // system file itself.
+        let files_disc = discs::iso_application_id(path).as_deref() == Some(discs::APPLICATION_ID);
+        if DISC_IMAGE_EXTS.contains(&ext.as_str()) && (files_disc || candidates_in(std::slice::from_ref(&this)).is_empty()) {
             match Mount::attach(path, &scratch.0.join(format!("disc-{i}"))) {
                 Ok(m) => {
                     files.extend(files_under(&m.0));
+                    if let Some(manifest) = discs::read_manifest(&m.0) {
+                        tracked.push((m.0.clone(), manifest));
+                    }
                     mounts.push(m);
                 }
                 Err(e) => skipped.push(e),
@@ -402,8 +582,13 @@ pub fn import_dropped(library: &Library, paths: &[PathBuf]) -> Result<CdImport, 
             files.push((key, len));
         }
     }
-    let mut report = fill_slots(library, &candidates_in(&files))?;
+    let candidates = candidates_in(&files);
+    let filled = fill_slots(library, &candidates)?;
+    let mut report = filled.report.clone();
     report.skipped = skipped;
+    for (root, manifest) in &tracked {
+        track_disc(library, root, manifest, &files, &candidates, &filled, &mut report)?;
+    }
     Ok(report)
 }
 
@@ -415,6 +600,16 @@ pub fn import_cd(library: &Library, path: &Path) -> Result<CdImport, String> {
     }
     let mount = Mount::attach(path, &library.run_dir().join(format!("cd-{}", std::process::id())))?;
     import_from_dir(library, &mount.0)
+}
+
+/// Runs `f` on a disc's root: a folder as it is, or a disc image
+/// attached read-only for the duration.
+pub fn with_disc<T>(library: &Library, path: &Path, f: impl FnOnce(&Path) -> Result<T, String>) -> Result<T, String> {
+    if path.is_dir() {
+        return f(path);
+    }
+    let mount = Mount::attach(path, &library.run_dir().join(format!("disc-{}", std::process::id())))?;
+    f(&mount.0)
 }
 
 /// A disc image attached read-only with `hdiutil`, detached on drop.
@@ -497,8 +692,8 @@ mod tests {
 
     #[test]
     fn list_names_only_missing_slots() {
-        assert_eq!(missing_list(&[]), None);
-        let list = missing_list(&[Slot::Kickstart]).unwrap();
+        assert!(missing_list(&[], &[]).is_none());
+        let list = missing_list(&[Slot::Kickstart], &[]).unwrap().text;
         assert!(list.starts_with("#columns: name size sha1\n"));
         assert!(list.contains("\nkick40068.A1200\n"));
         assert!(list.contains("\nrom.key\n"));
@@ -512,17 +707,21 @@ mod tests {
             match cells[..] {
                 [name] => assert!(!name.trim().is_empty() && name.trim() == name, "{line:?}"),
                 ["", size, sha1] => {
-                    assert!(matches!(size, "262144" | "524288"), "{line:?}");
+                    assert!(matches!(size, "262144" | "524288" | "262155" | "524299"), "{line:?}");
                     assert!(sha1.len() == 40 && sha1.bytes().all(|b| b.is_ascii_hexdigit()), "{line:?}");
                     content += 1;
                 }
                 _ => panic!("bad line {line:?}"),
             }
         }
-        assert_eq!(content, known_roms::KICKSTARTS.len());
-        let mac = missing_list(&[Slot::MacRom, Slot::MacBoot]).unwrap();
+        assert_eq!(content, known_files::KICKSTARTS.len());
+        let mac = missing_list(&[Slot::MacRom, Slot::MacBoot], &[]).unwrap().text;
         assert!(mac.contains("\n\t1048576\tf2a9ce387019bf272c6e3459d961b30f28942ac5\n"));
-        assert_eq!(mac.matches("\n\t").count(), known_roms::MAC_ROMS.len());
+        assert_eq!(mac.matches("\n\t").count(), known_files::MAC_ROMS.len() + known_files::MAC_BOOT_DISKS.len());
+        // System 7.5.3's installed disk, and a Workbench boot disk, are found by content too.
+        assert!(mac.contains("\n# System 7.5.3, installed (25 MB)\n\t26214400\tda2239b83e572d7f594d1b7af050f5bc3f6fae84\n"));
+        let wb = missing_list(&[Slot::Workbench], &[]).unwrap().text;
+        assert!(wb.contains("\t901120\t486ea9520e60051c20ec01329d5a0fe3bb10b4fc\n"), "Workbench 3.1 [!]");
         // Every slot has names, and none repeat within a slot.
         for slot in SLOTS {
             let mut names = slot.names().to_vec();
@@ -566,6 +765,8 @@ mod tests {
                 ],
                 still_missing: vec!["Mac ROM".into()],
                 skipped: vec![],
+                unusable: vec![],
+                disc: None,
             }
         );
         // The undamaged 3.1 copy won, and set the matching model.
@@ -706,6 +907,131 @@ mod tests {
         assert_eq!(report.still_missing.len(), SLOTS.len());
         assert_eq!(report.skipped.len(), 1, "{report:?}");
         assert!(report.skipped[0].contains("broken.zip"));
+    }
+
+    fn sha256_hex(data: &[u8]) -> String {
+        use sha2::Digest;
+        sha2::Sha256::digest(data).iter().map(|b| format!("{b:02x}")).collect()
+    }
+
+    #[test]
+    fn a_burn_disc_teaches_the_next_list() {
+        let t = TempDir::new();
+        let lib = Library::new(t.path().join("lib"));
+        // The list the disc answers, as Floppy saved it.
+        let list_path = t.path().join("Floppy needs.txt");
+        assert_eq!(write_list(&lib, &list_path).unwrap(), SLOTS.len());
+        let saved = fs::read_to_string(&list_path).unwrap();
+        let line_of = |needle: &str| saved.lines().position(|l| l == needle).unwrap() + 1;
+        let kick_lines: Vec<usize> = missing_list(&[Slot::Kickstart], &[]).unwrap().lines.iter().map(|(n, _)| *n).collect();
+        assert!(!kick_lines.is_empty());
+
+        let cd = t.path().join("cd");
+        fs::create_dir_all(cd.join("Backup")).unwrap();
+        let junk = b"not a ROM at all".to_vec();
+        fs::write(cd.join("Quadra650.ROM"), &junk).unwrap(); // matched by name only
+        fs::write(cd.join("wb31.adf"), workbench_adf("Workbench3.1")).unwrap(); // used
+        fs::write(cd.join("Backup/wb31.adf"), workbench_adf("Workbench3.1")).unwrap(); // fine, not needed
+        // A damaged copy beside a good one: the good one is used. (A damaged
+        // copy that's the only one is still used, and isn't ignored.)
+        let damaged = kickstart(40, false);
+        fs::write(cd.join("Backup/kick40068.A1200"), &damaged).unwrap();
+        fs::write(cd.join("kick40068.A1200"), kickstart(40, true)).unwrap();
+        // Every Kickstart line matched nothing, except the damaged copy's
+        // name line, which Floppy then can't use either.
+        let kick_name_line = line_of("kick40068.A1200");
+        let lines: Vec<String> = saved
+            .lines()
+            .enumerate()
+            .filter(|(_, l)| !l.starts_with('#') && !l.is_empty())
+            .map(|(i, _)| {
+                let n = i + 1;
+                let matches = if n == kick_name_line || n == line_of("Quadra650.ROM") || n == line_of("wb31.adf") { 1 } else { 0 };
+                format!(r#"{{"line": {n}, "matches": {matches}, "onDisc": {matches}, "ignored": 0}}"#)
+            })
+            .collect();
+        fs::write(
+            cd.join("DISKETTE-BURN.JSON"), // some disc formats store names in capitals
+            format!(
+                r#"{{"format": "diskette-burn", "version": 1, "producer": "Diskette 0.10.0", "id": "disc-1",
+                    "list": {{"name": "Floppy needs.txt", "sha1": "{}"}}, "lines": [{}], "files": [], "leftOut": []}}"#,
+                crate::sha1::hex(saved.as_bytes()),
+                lines.join(",")
+            ),
+        )
+        .unwrap();
+
+        let report = import_cd(&lib, &cd).unwrap();
+        assert_eq!(report.added, vec!["Kickstart ROM: kick40068.A1200".to_string(), "Workbench disk: wb31.adf".to_string()]);
+        // The manifest itself isn't a file Floppy "couldn't use".
+        assert_eq!(report.unusable.len(), 2, "{report:?}");
+        let disc = report.disc.clone().unwrap();
+        assert_eq!(disc.producer, "Diskette 0.10.0");
+        assert!(!disc.already_imported);
+        // Mac ROM: its name line matched (junk), so the drives had something:
+        // the ignore list's job now. Startup disk: nothing on any line.
+        assert_eq!(disc.not_on_drives, vec!["Mac startup disk".to_string()], "{disc:?}");
+
+        // The next list ignores both bad copies by content, and leaves off
+        // the startup disk the drives don't have.
+        let next = t.path().join("next.txt");
+        write_list(&lib, &next).unwrap();
+        let next = fs::read_to_string(&next).unwrap();
+        assert!(next.starts_with("#columns: name size sha1\n"));
+        assert!(next.contains(&format!("\n#ignore: sha256 {} Not a system file Floppy recognizes.\n", sha256_hex(&junk))), "{next}");
+        assert!(next.contains(&format!("\n#ignore: sha256 {} A damaged Kickstart ROM", sha256_hex(&damaged))));
+        assert!(!next.contains("System 7.5.3.img"));
+        assert!(next.contains("Quadra650.ROM"));
+
+        // Importing the same disc again is recognized, and adds nothing.
+        let again = import_cd(&lib, &cd).unwrap();
+        assert!(again.disc.unwrap().already_imported);
+        assert_eq!(discs::ignored_files(&lib).len(), 2);
+
+        // Ask Again puts the startup disk back.
+        discs::ask_again(&lib, Slot::MacBoot).unwrap();
+        write_list(&lib, &t.path().join("again.txt")).unwrap();
+        assert!(fs::read_to_string(t.path().join("again.txt")).unwrap().contains("System 7.5.3.img"));
+    }
+
+    #[test]
+    fn a_disc_without_a_manifest_isnt_tracked() {
+        let t = TempDir::new();
+        let cd = t.path().join("cd");
+        fs::create_dir_all(&cd).unwrap();
+        fs::write(cd.join("Quadra650.ROM"), b"junk").unwrap();
+        let lib = Library::new(t.path().join("lib"));
+        let report = import_cd(&lib, &cd).unwrap();
+        assert!(report.unusable.is_empty() && report.disc.is_none());
+        // A manifest in some other format doesn't count either.
+        fs::write(cd.join(discs::MANIFEST), r#"{"format": "something-else", "version": 1}"#).unwrap();
+        assert!(import_cd(&lib, &cd).unwrap().disc.is_none());
+        assert!(discs::ignored_files(&lib).is_empty());
+    }
+
+    #[test]
+    fn a_list_the_drives_cant_fill_at_all_says_so() {
+        let t = TempDir::new();
+        let lib = Library::new(t.path().join("lib"));
+        let list = t.path().join("l.txt");
+        write_list(&lib, &list).unwrap();
+        let saved = fs::read_to_string(&list).unwrap();
+        let lines: Vec<String> = saved
+            .lines()
+            .enumerate()
+            .filter(|(_, l)| !l.starts_with('#') && !l.is_empty())
+            .map(|(i, _)| format!(r#"{{"line": {}, "matches": 0}}"#, i + 1))
+            .collect();
+        let cd = t.path().join("cd");
+        fs::create_dir_all(&cd).unwrap();
+        fs::write(
+            cd.join(discs::MANIFEST),
+            format!(r#"{{"format": "diskette-burn", "version": 1, "id": "d", "list": {{"sha1": "{}"}}, "lines": [{}]}}"#, crate::sha1::hex(saved.as_bytes()), lines.join(",")),
+        )
+        .unwrap();
+        assert_eq!(import_cd(&lib, &cd).unwrap().disc.unwrap().not_on_drives.len(), SLOTS.len());
+        let err = write_list(&lib, &t.path().join("m.txt")).unwrap_err();
+        assert!(err.contains("Ask Again"), "{err}");
     }
 
     #[test]

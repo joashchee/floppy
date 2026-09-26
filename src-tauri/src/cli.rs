@@ -1,9 +1,14 @@
-//! Command-line handoff: `floppy import [--os dos|mac-classic|amiga] <path>`.
+//! Command-line handoff:
+//!
+//! - `floppy import [--os dos|mac-classic|amiga] <path>`: an app.
+//! - `floppy open [--os dos] <file>`: a document, to open in an app that
+//!   made it (documents.rs). DOS only so far.
 //!
 //! This is how another program (a catalog app like Diskette, a script)
-//! hands Floppy an app: start Floppy with these arguments, and it imports
-//! the path into the library and opens with it selected. Only arguments
-//! cross the process boundary. Floppy never reads another program's data.
+//! hands Floppy an app or a file: start Floppy with these arguments, and
+//! it imports the path into the library and opens with it selected. Only
+//! arguments cross the process boundary. Floppy never reads another
+//! program's data.
 
 use std::path::PathBuf;
 
@@ -14,18 +19,20 @@ pub enum Cli {
     /// Plain launch (includes arguments macOS itself adds, like `-psn_…`).
     None,
     Import { os: GuestOs, path: PathBuf },
+    Open { os: GuestOs, path: PathBuf },
     Error(String),
 }
 
-const USAGE: &str = "Usage: floppy import [--os dos|mac-classic|amiga] <path>";
+const USAGE: &str = "Usage: floppy import [--os dos|mac-classic|amiga] <path>, or floppy open [--os dos] <file>";
 
 /// Parses `args` without the program name.
 pub fn parse(args: &[String]) -> Cli {
     let mut it = args.iter();
-    match it.next().map(String::as_str) {
-        Some("import") => {}
+    let open = match it.next().map(String::as_str) {
+        Some("import") => false,
+        Some("open") => true,
         _ => return Cli::None,
-    }
+    };
     let mut os = GuestOs::Dos;
     let mut path = None;
     while let Some(arg) = it.next() {
@@ -39,8 +46,9 @@ pub fn parse(args: &[String]) -> Cli {
         }
     }
     match path {
+        Some(path) if open => Cli::Open { os, path },
         Some(path) => Cli::Import { os, path },
-        None => Cli::Error(format!("Missing the path to import. {USAGE}")),
+        None => Cli::Error(format!("Missing the path. {USAGE}")),
     }
 }
 
@@ -62,6 +70,13 @@ mod tests {
             Cli::Import { os: GuestOs::MacClassic, path: "/v/MacWrite II".into() }
         );
         assert_eq!(p(&["import", "--os", "amiga", "/v/PT.adf"]), Cli::Import { os: GuestOs::Amiga, path: "/v/PT.adf".into() });
+    }
+
+    #[test]
+    fn parses_open() {
+        assert_eq!(p(&["open", "/v/LETTER.WP5"]), Cli::Open { os: GuestOs::Dos, path: "/v/LETTER.WP5".into() });
+        assert_eq!(p(&["open", "--os", "dos", "/v/B.WK1"]), Cli::Open { os: GuestOs::Dos, path: "/v/B.WK1".into() });
+        assert!(matches!(p(&["open"]), Cli::Error(_)));
     }
 
     #[test]

@@ -28,6 +28,15 @@ import {
   type GuestStatus,
   type LibraryApp,
   type CdImport,
+  dosPath,
+  type ImportedItem,
+  type LibraryDoc,
+  type Opener,
+  type HandlerTest,
+  type SessionReport,
+  type MediaProgress,
+  type OldMedia,
+  type SetupTracking,
   type StartupImport,
 } from "./lib/types";
 import "./App.css";
@@ -50,9 +59,10 @@ const GUEST_UI: Record<
     icon: () => <DosAppIcon />,
     importFilter: ["zip", "exe", "com", "bat"],
     importFileLabel: "Import Zip or Program…",
-    dropHint: "A DOS program's folder, a zip, or an .EXE, .COM or .BAT",
+    dropHint: "A DOS program's folder, a zip, an .EXE, .COM or .BAT, or a document to open in one",
     libraryDesc: "Everything here is on drive C: in DOSBox, so apps can reach each other's files.",
-    emptyHint: "Drop a DOS program's folder, a zip, or an .EXE onto this window, or use the Import buttons.",
+    emptyHint:
+      "Drop a DOS program's folder, a zip, or an .EXE onto this window, or use the Import buttons. Drop an old document (a .WP5, .WK1, .DBF…) to open it in an app that made it.",
     bootOnlyLabel: "DOS Prompt",
     bootOnlyTitle: "Boot DOSBox at a prompt in this app's folder",
   },
@@ -107,11 +117,25 @@ function missingSetupFiles(statuses: GuestStatus[]): string[] {
   return out;
 }
 
+function formatBytes(n: number): string {
+  if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(n / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+}
+
 /** What an import of system files did, for the status line. */
 function describeImport(r: CdImport): string {
   const added = r.added.length ? `Added ${r.added.join(", ")}.` : "Found nothing new to add.";
   const missing = r.stillMissing.length ? ` Still missing: ${r.stillMissing.join(", ")}.` : "";
-  return added + missing;
+  const from = r.disc ? `From a ${r.disc.producer || "files"} disc${r.disc.alreadyImported ? " you imported before" : ""}: ` : "";
+  const n = r.unusable.length;
+  const unusable = n
+    ? ` ${n} ${n === 1 ? "copy" : "copies"} on it couldn't be used. The next Missing-Files List asks for ${n === 1 ? "it" : "them"} to be left out.`
+    : "";
+  const gone = r.disc?.notOnDrives.length
+    ? ` Your drives have no usable ${r.disc.notOnDrives.join(" or ")}, so the next list stops asking for ${r.disc.notOnDrives.length === 1 ? "it" : "them"}.`
+    : "";
+  return from + added + missing + unusable + gone;
 }
 
 function App() {
@@ -125,6 +149,14 @@ function App() {
   const [message, setMessage] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
   const [dropZone, setDropZone] = useState<DropZone | null>(null);
+  const [oldMedia, setOldMedia] = useState<OldMedia[]>([]);
+  const [mediaProgress, setMediaProgress] = useState<MediaProgress | null>(null);
+  const [tracking, setTracking] = useState<SetupTracking>({ ignored: 0, notOnDrives: [] });
+  const [documents, setDocuments] = useState<LibraryDoc[]>([]);
+  const [selectedDocId, setSelectedDocId] = useState<string | null>(null);
+  const [session, setSession] = useState<SessionReport | null>(null);
+  const [verifyNote, setVerifyNote] = useState("");
+  const [tests, setTests] = useState<HandlerTest[]>([]);
   const [confirmRemove, setConfirmRemove] = useState<LibraryApp | null>(null);
   const [nameDraft, setNameDraft] = useState("");
 
@@ -135,6 +167,11 @@ function App() {
     [apps, guest],
   );
   const selected = guestApps.find((a) => a.id === selectedId) ?? null;
+  const guestDocs = useMemo(
+    () => documents.filter((d) => d.os === guest).sort((a, b) => a.name.localeCompare(b.name)),
+    [documents, guest],
+  );
+  const selectedDoc = guestDocs.find((d) => d.id === selectedDocId) ?? null;
   const guestRunning = apps.some((a) => a.os === guest && running.has(a.id));
   const missingSetup = useMemo(() => missingSetupFiles(statuses), [statuses]);
   const setupNeeded = missingSetup.length > 0;
@@ -148,11 +185,36 @@ function App() {
   async function refresh(): Promise<LibraryApp[]> {
     const list = await invoke<LibraryApp[]>("list_apps");
     setApps(list);
+    setDocuments(await invoke<LibraryDoc[]>("list_documents"));
+    setTests(await invoke<HandlerTest[]>("handler_tests"));
     return list;
   }
 
   async function refreshStatuses() {
     setStatuses(await invoke<GuestStatus[]>("guest_statuses"));
+    setTracking(await invoke<SetupTracking>("setup_tracking"));
+  }
+
+  /** Empties the ignore list (discs.rs), so the next files disc may bring those copies again. */
+  async function forgetIgnored() {
+    try {
+      await invoke("forget_ignored_files");
+      await refreshStatuses();
+      setMessage("Forgot the ignored copies. The next Missing-Files List no longer asks for them to be left out.");
+    } catch (e) {
+      fail(e);
+    }
+  }
+
+  /** Puts a system file the drives couldn't supply back on the missing-files list. */
+  async function askAgain(slot: string) {
+    try {
+      await invoke("ask_again", { slot });
+      await refreshStatuses();
+      setMessage(`The next Missing-Files List asks for a ${slot} again.`);
+    } catch (e) {
+      fail(e);
+    }
   }
 
   async function refreshRunning() {
@@ -166,7 +228,14 @@ function App() {
 
   function select(app: LibraryApp) {
     setGuest(app.os);
+    setSelectedDocId(null);
     setSelectedId(app.id);
+  }
+
+  function selectDoc(doc: LibraryDoc) {
+    setGuest(doc.os);
+    setSelectedId(null);
+    setSelectedDocId(doc.id);
   }
 
   useEffect(() => {
@@ -179,6 +248,10 @@ function App() {
           await refresh();
           select(startup.app);
           setMessage(`Imported ${startup.app.name} as ${guestPath(startup.app)}.`);
+        } else if (startup?.document) {
+          await refresh();
+          selectDoc(startup.document);
+          setMessage(`Added ${startup.document.name} as ${dosPath(startup.document)}. Choose an app to open it with.`);
         } else if (startup?.error) {
           setError(startup.error);
         }
@@ -187,8 +260,20 @@ function App() {
       }
     })();
     const unlisten = listen("running-changed", () => void refreshRunning());
+    // Old disks macOS couldn't mount (media.rs), and copy progress.
+    invoke<OldMedia[]>("old_media").then(setOldMedia, () => {});
+    const unlistenMedia = listen<OldMedia[]>("old-media-changed", (e) => setOldMedia(e.payload));
+    const unlistenProgress = listen<MediaProgress>("media-progress", (e) => setMediaProgress(e.payload));
+    // What a DOS session saved (documents.rs), listed once DOSBox quits.
+    const unlistenSession = listen<SessionReport>("session-ended", (e) => {
+      setSession(e.payload);
+      void refresh();
+    });
     return () => {
       unlisten.then((f) => f());
+      unlistenSession.then((f) => f());
+      unlistenMedia.then((f) => f());
+      unlistenProgress.then((f) => f());
     };
   }, []);
 
@@ -227,22 +312,30 @@ function App() {
   async function importPaths(paths: string[]) {
     setError(null);
     setMessage(null);
-    let last: LibraryApp | null = null;
+    let last: ImportedItem | null = null;
     const failures: string[] = [];
     for (const path of paths) {
       setBusy(`Importing ${baseName(path)}`);
       try {
-        last = await invoke<LibraryApp>("import_app", { os: guest, path });
+        // A DOS document goes to C:\DOCS; anything else is an app.
+        last = await invoke<ImportedItem>("import_item", { os: guest, path });
       } catch (e) {
         failures.push(String(e));
       }
     }
     setBusy(null);
     await refresh();
-    if (last) {
-      select(last);
+    if (last?.app) {
+      select(last.app);
       setMessage(
-        paths.length === 1 ? `Imported ${last.name} as ${guestPath(last)}.` : `Imported ${paths.length - failures.length} of ${paths.length}.`,
+        paths.length === 1 ? `Imported ${last.app.name} as ${guestPath(last.app)}.` : `Imported ${paths.length - failures.length} of ${paths.length}.`,
+      );
+    } else if (last?.document) {
+      selectDoc(last.document);
+      setMessage(
+        paths.length === 1
+          ? `Added ${last.document.name} as ${dosPath(last.document)}.`
+          : `Imported ${paths.length - failures.length} of ${paths.length}.`,
       );
     }
     if (failures.length) setError(failures.join("\n"));
@@ -260,6 +353,64 @@ function App() {
       filters: ui.importFilter ? [{ name: "Importable files", extensions: ui.importFilter }] : undefined,
     });
     if (Array.isArray(picked) && picked.length) await importPaths(picked);
+  }
+
+  async function pickDocuments() {
+    const picked = await open({ multiple: true, title: "Add documents to open in a DOS app" });
+    if (Array.isArray(picked) && picked.length) await importPaths(picked);
+  }
+
+  /** Opens a document in the chosen app; what it saves is listed when DOSBox quits. */
+  async function openDocument(doc: LibraryDoc, opener: Opener) {
+    setError(null);
+    setSession(null);
+    try {
+      await invoke("open_document", { id: doc.id, appId: opener.appId, program: opener.program });
+      setMessage(`Opening ${doc.name} in ${opener.appName}. What it saves is listed when DOSBox quits.`);
+      await refresh();
+    } catch (e) {
+      fail(e);
+    }
+  }
+
+  async function removeDocument(doc: LibraryDoc) {
+    try {
+      await invoke("remove_document", { id: doc.id });
+      if (selectedDocId === doc.id) setSelectedDocId(null);
+      setMessage(`Removed ${doc.name}.`);
+      await refresh();
+    } catch (e) {
+      fail(e);
+    }
+  }
+
+  async function revealLibraryFile(os: GuestOs, path: string) {
+    try {
+      await revealItemInDir(await invoke<string>("library_file", { os, path }));
+    } catch (e) {
+      fail(e);
+    }
+  }
+
+  async function exportLibraryFile(os: GuestOs, path: string) {
+    const dest = await open({ directory: true, title: "Export to this folder" });
+    if (typeof dest !== "string") return;
+    try {
+      const copy = await invoke<string>("export_file", { os, path, destDir: dest });
+      setMessage(`Exported ${baseName(copy)}.`);
+    } catch (e) {
+      fail(e);
+    }
+  }
+
+  async function setAppOpens(app: LibraryApp, text: string) {
+    const exts = text.split(/[\s,;]+/).filter(Boolean);
+    try {
+      await invoke("set_app_opens", { id: app.id, exts });
+      await refresh();
+    } catch (e) {
+      fail(e);
+    }
   }
 
   async function chooseSystemFile(kind: "rom" | "boot", directory: boolean) {
@@ -331,6 +482,84 @@ function App() {
     if (Array.isArray(picked)) await addSetupFiles(picked);
   }
 
+  /** Records whether the app opened the document's file type correctly (verify.rs). */
+  async function answerVerification(worked: boolean) {
+    if (!session?.verify) return;
+    try {
+      await invoke("record_verification", { pending: session.verify, worked, note: verifyNote.trim() || null });
+      setSession({ ...session, verify: null });
+      setVerifyNote("");
+      await refresh();
+      setMessage(
+        `Recorded that ${session.verify.appName} ${worked ? "opened" : "didn't open"} ${session.verify.fileType} files correctly.`,
+      );
+    } catch (e) {
+      fail(e);
+    }
+  }
+
+  /** Saves the test results as a report, for scripts/merge-handler-tests.py. Nothing leaves otherwise. */
+  async function exportTests() {
+    const path = await save({
+      title: "Export the handler test report",
+      defaultPath: "Floppy handler tests.json",
+      filters: [{ name: "JSON", extensions: ["json"] }],
+    });
+    if (!path) return;
+    try {
+      const n = await invoke<number>("export_handler_tests", { path });
+      setMessage(`Exported ${n} tested ${n === 1 ? "combination" : "combinations"} to ${baseName(path)}. No document names are in it.`);
+    } catch (e) {
+      fail(e);
+    }
+  }
+
+  /** Saves the wanted-apps list (handlers.rs): old apps that open old files, for a disc maker to gather. */
+  async function saveWantedApps() {
+    const path = await save({
+      title: "Save the wanted-apps list",
+      defaultPath: "Floppy wants apps.txt",
+      filters: [{ name: "Text", extensions: ["txt"] }],
+    });
+    if (!path) return;
+    setError(null);
+    try {
+      const count = await invoke<number>("write_wanted_apps", { path });
+      setMessage(
+        count === 0
+          ? "Every app Floppy knows opens old files is already in the library."
+          : `Saved ${baseName(path)}, asking for ${count} app files. Gather them into a disc image or folder (Diskette's Burn A CD does this), then use Import Apps Disc.`,
+      );
+    } catch (e) {
+      fail(e);
+    }
+  }
+
+  /** Imports the old apps on a disc made from the wanted-apps list. */
+  async function importAppsDisc(directory: boolean) {
+    const path = await open(
+      directory
+        ? { directory: true, title: "Import a folder of gathered apps" }
+        : { title: "Import an apps disc", filters: [{ name: "Disc image", extensions: ["iso", "cdr", "dmg", "toast"] }] },
+    );
+    if (typeof path !== "string") return;
+    setError(null);
+    setMessage(null);
+    setBusy(`Reading ${baseName(path)}`);
+    try {
+      const r = await invoke<{ imported: string[]; already: string[]; failed: string[] }>("import_apps_disc", { path });
+      await refresh();
+      const imported = r.imported.length ? `Imported ${r.imported.join(", ")}.` : "Found no new apps.";
+      const already = r.already.length ? ` Already in the library: ${r.already.join(", ")}.` : "";
+      setMessage(imported + already);
+      if (r.failed.length) setError(r.failed.join("\n"));
+    } catch (e) {
+      fail(e);
+    } finally {
+      setBusy(null);
+    }
+  }
+
   /** Sets up every guest it can from a files disc: a disc image or folder of gathered system files. */
   async function importFilesDisc(directory: boolean) {
     const path = await open(
@@ -351,6 +580,44 @@ function App() {
     } finally {
       setBusy(null);
     }
+  }
+
+  /**
+   * Copies an old disk into the library (macOS asks for the password to
+   * read it) and imports it into the guest its contents belong to, then
+   * opens it there when that guest is ready and free.
+   */
+  async function copyMedia(m: OldMedia) {
+    setError(null);
+    setMessage(null);
+    setBusy(`Copying ${m.name}`);
+    setMediaProgress({ device: m.device, done: 0, total: m.size });
+    try {
+      const app = await invoke<LibraryApp>("copy_old_media", { device: m.device });
+      const list = await refresh();
+      await refreshStatuses();
+      select(app);
+      const s = (await invoke<GuestStatus[]>("guest_statuses")).find((x) => x.os === app.os);
+      const guestBusy = list.some((a) => a.os === app.os && running.has(a.id));
+      const copied = `Copied ${m.name} as ${guestPath(app)}.`;
+      if (s && !s.blocker && !guestBusy && app.program) {
+        await invoke("launch_app", { id: app.id, promptOnly: false });
+        setMessage(`${copied} Opening it in ${GUEST_LABEL[app.os]}.`);
+      } else if (s?.blocker) {
+        setMessage(`${copied} It opens once ${GUEST_LABEL[app.os]} is set up: ${s.blocker}`);
+      } else {
+        setMessage(`${copied} Launch it when the ${GUEST_LABEL[app.os]} running now has quit.`);
+      }
+    } catch (e) {
+      fail(e);
+    } finally {
+      setBusy(null);
+      setMediaProgress(null);
+    }
+  }
+
+  async function ignoreMedia(m: OldMedia) {
+    await invoke("dismiss_media", { device: m.device }).catch(fail);
   }
 
   async function setModel(model: string) {
@@ -438,6 +705,59 @@ function App() {
 
       {error && <div className="error">{error}</div>}
       {message && <div className="status-message">{message}</div>}
+      {session && (
+        <div className="session-report">
+          <div className="session-report-head">
+            <strong>
+              {session.appName}
+              {session.document ? ` (${session.document})` : ""}
+              {session.changes.length
+                ? ` saved ${session.changes.length} ${session.changes.length === 1 ? "file" : "files"}`
+                : " didn't save anything"}
+            </strong>
+            <button type="button" className="small" onClick={() => setSession(null)}>
+              Done
+            </button>
+          </div>
+          {session.verify && (
+            <div className="verify-row">
+              <span>
+                Did {session.verify.appName} open {session.verify.document} correctly?
+              </span>
+              <input
+                type="text"
+                placeholder="Note (optional)"
+                value={verifyNote}
+                onChange={(e) => setVerifyNote(e.target.value)}
+              />
+              <button type="button" className="small primary" onClick={() => void answerVerification(true)}>
+                Worked
+              </button>
+              <button type="button" className="small" onClick={() => void answerVerification(false)}>
+                Didn't Work
+              </button>
+            </div>
+          )}
+          <ul>
+            {session.changes.map((c) => (
+              <li key={c.path}>
+                <span className="session-file">
+                  {c.name}
+                  <span className="row-meta">
+                    {c.new ? "New" : "Changed"} · {`C:\\${c.path.replace(/\//g, "\\")}`}
+                  </span>
+                </span>
+                <button type="button" className="small" onClick={() => void revealLibraryFile(session.os, c.path)}>
+                  Show in Finder
+                </button>
+                <button type="button" className="small" onClick={() => void exportLibraryFile(session.os, c.path)}>
+                  Export…
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       <div className="guest-tiles" role="tablist" aria-label="Guest OS">
         {GUEST_OSES.map((os) => {
@@ -453,6 +773,7 @@ function App() {
               onClick={() => {
                 setGuest(os);
                 setSelectedId(null);
+                setSelectedDocId(null);
               }}
             >
               <span className="guest-tile-icon">{GUEST_UI[os].icon()}</span>
@@ -480,6 +801,14 @@ function App() {
           </span>
           {ui.importFileLabel}
         </button>
+        {guest === "dos" && (
+          <button type="button" className="icontext-btn" onClick={() => void pickDocuments()} disabled={!!busy}>
+            <span className="btn-icon">
+              <FileIcon />
+            </span>
+            Import Document…
+          </button>
+        )}
         {setupNeeded && (
           <button
             type="button"
@@ -511,10 +840,43 @@ function App() {
         </div>
       )}
 
+      {oldMedia.map((m) => (
+        <div className="setup-drop media-offer" key={m.device}>
+          <span className="setup-drop-icon">
+            <ChipIcon />
+          </span>
+          <p className="setup-drop-text">
+            <strong>
+              {m.name}
+              {m.diskImage ? " (disk image)" : ""}, {formatBytes(m.size)}
+            </strong>{" "}
+            is attached, but macOS can't open it.{" "}
+            {m.hint ? `It looks like a ${GUEST_LABEL[m.hint]} disk. ` : ""}
+            Floppy can copy it and open the copy in {m.hint ? GUEST_LABEL[m.hint] : "the emulator it belongs to"}. macOS
+            asks for your password to read it, and the original isn't changed.
+          </p>
+          <button type="button" className="small primary" onClick={() => void copyMedia(m)} disabled={!!busy}>
+            Copy and Open
+          </button>
+          <button type="button" className="small" onClick={() => void ignoreMedia(m)} disabled={!!busy}>
+            Ignore
+          </button>
+        </div>
+      ))}
+
       {busy && (
         <div className="scan-status-row">
-          <span className="scan-status-label">{busy}…</span>
-          <ProgressBar indeterminate label={busy} />
+          <span className="scan-status-label">
+            {busy}
+            {mediaProgress && mediaProgress.done > 0
+              ? ` (${formatBytes(mediaProgress.done)} of ${formatBytes(mediaProgress.total)})`
+              : "…"}
+          </span>
+          {mediaProgress && mediaProgress.done > 0 ? (
+            <ProgressBar value={mediaProgress.done / Math.max(1, mediaProgress.total)} label={busy} />
+          ) : (
+            <ProgressBar indeterminate label={busy} />
+          )}
         </div>
       )}
 
@@ -525,6 +887,28 @@ function App() {
             {GUEST_LABEL[guest]} Library
           </h2>
           <p className="desc">{ui.libraryDesc}</p>
+          <div className="system-row find-apps">
+            <span className="system-note">Old apps you own that open old files:</span>
+            <button type="button" className="small" disabled={!!busy} onClick={() => void saveWantedApps()}>
+              Save Wanted-Apps List…
+            </button>
+            <button type="button" className="small" disabled={!!busy} onClick={() => void importAppsDisc(false)}>
+              Import Apps Disc…
+            </button>
+            <button type="button" className="small" disabled={!!busy} onClick={() => void importAppsDisc(true)}>
+              Folder…
+            </button>
+            {tests.length > 0 && (
+              <button
+                type="button"
+                className="small"
+                onClick={() => void exportTests()}
+                title="Which apps opened which file types, from your answers. For docs/app-handlers.md; no document names."
+              >
+                Export Test Report ({tests.length})…
+              </button>
+            )}
+          </div>
 
           {guest !== "dos" && status && (
             <SystemSetup
@@ -534,6 +918,9 @@ function App() {
               onModel={(m) => void setModel(m)}
               onSaveList={() => void saveMissingList()}
               onImportFolder={() => void importFilesDisc(true)}
+              tracking={tracking}
+              onForgetIgnored={() => void forgetIgnored()}
+              onAskAgain={(slot) => void askAgain(slot)}
             />
           )}
 
@@ -546,7 +933,7 @@ function App() {
                   <button
                     type="button"
                     className={`app-row${app.id === selectedId ? " selected" : ""}`}
-                    onClick={() => setSelectedId(app.id)}
+                    onClick={() => select(app)}
                     onDoubleClick={() => app.program && !launchBlocked && void launch(app, false)}
                   >
                     <span className="row-icon">{ui.icon()}</span>
@@ -560,11 +947,55 @@ function App() {
               ))}
             </ul>
           )}
+
+          {guest === "dos" && guestDocs.length > 0 && (
+            <>
+              <h3 className="list-heading">
+                <span className="section-icon">
+                  <FileIcon />
+                </span>
+                Documents <span className="list-heading-meta">C:\DOCS</span>
+              </h3>
+              <ul className="app-list">
+                {guestDocs.map((doc) => (
+                  <li key={doc.id}>
+                    <button
+                      type="button"
+                      className={`app-row${doc.id === selectedDocId ? " selected" : ""}`}
+                      onClick={() => selectDoc(doc)}
+                    >
+                      <span className="row-icon">
+                        <FileIcon />
+                      </span>
+                      <span className="row-main">
+                        <span className="row-name">{doc.name}</span>
+                        <span className="row-meta">{dosPath(doc)}</span>
+                      </span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
         </section>
 
         <section className="panel">
-          {!selected ? (
-            <p className="empty">Select an app to launch it or change what it opens.</p>
+          {selectedDoc ? (
+            <DocumentDetails
+              doc={selectedDoc}
+              apps={apps}
+              busy={!!busy}
+              onOpen={(o) => void openDocument(selectedDoc, o)}
+              onReveal={() => void revealLibraryFile(selectedDoc.os, selectedDoc.file)}
+              onExport={() => void exportLibraryFile(selectedDoc.os, selectedDoc.file)}
+              onRemove={() => void removeDocument(selectedDoc)}
+            />
+          ) : !selected ? (
+            <p className="empty">
+              {guest === "dos"
+                ? "Select an app to launch it or change what it opens, or a document to open it in its app."
+                : "Select an app to launch it or change what it opens."}
+            </p>
           ) : (
             <div className="app-details">
               <label className="field">
@@ -593,6 +1024,21 @@ function App() {
                   ))}
                 </select>
               </label>
+              {selected.os === "dos" && (
+                <label className="field">
+                  <span className="field-label">Also opens</span>
+                  <input
+                    key={`${selected.id}-${selected.opens.join(",")}`}
+                    type="text"
+                    placeholder="Extensions, e.g. TXT, DOC"
+                    defaultValue={selected.opens.join(", ")}
+                    onBlur={(e) => void setAppOpens(selected, e.currentTarget.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") e.currentTarget.blur();
+                    }}
+                  />
+                </label>
+              )}
               <dl className="details-grid">
                 <dt>Folder</dt>
                 <dd className="details-path">{guestPath(selected)}</dd>
@@ -707,6 +1153,103 @@ function LaunchHint({ app, blocker, guestRunning }: { app: LibraryApp; blocker: 
   );
 }
 
+/** An opener's track record with this file type, for the "Open with" menu. */
+function testLabel(o: Opener): string {
+  if (!o.worked && !o.failed) return "";
+  const parts = [o.worked ? `worked ${o.worked}×` : "", o.failed ? `failed ${o.failed}×` : ""].filter(Boolean);
+  return ` · ${parts.join(", ")}`;
+}
+
+/** A document: the apps in the library that can open it, and opening it in one. */
+function DocumentDetails({
+  doc,
+  apps,
+  busy,
+  onOpen,
+  onReveal,
+  onExport,
+  onRemove,
+}: {
+  doc: LibraryDoc;
+  apps: LibraryApp[];
+  busy: boolean;
+  onOpen: (o: Opener) => void;
+  onReveal: () => void;
+  onExport: () => void;
+  onRemove: () => void;
+}) {
+  const [openers, setOpeners] = useState<Opener[]>([]);
+  const [choice, setChoice] = useState(0);
+  // Re-match when the document or the library's apps change.
+  useEffect(() => {
+    invoke<Opener[]>("document_openers", { id: doc.id }).then(
+      (o) => {
+        setOpeners(o);
+        setChoice(0);
+      },
+      () => setOpeners([]),
+    );
+  }, [doc.id, apps]);
+  const opener = openers[choice];
+  const ext = doc.file.includes(".") ? doc.file.split(".").pop()!.toUpperCase() : "";
+  return (
+    <div className="app-details">
+      <h3 className="doc-title">{doc.name}</h3>
+      {openers.length > 0 ? (
+        <label className="field">
+          <span className="field-label">Open with</span>
+          <select value={choice} onChange={(e) => setChoice(Number(e.target.value))}>
+            {openers.map((o, i) => (
+              <option key={`${o.appId}-${o.program}`} value={i}>
+                {o.appName} ({o.program}){testLabel(o)}
+              </option>
+            ))}
+          </select>
+          {opener && <span className="system-note">{opener.why}</span>}
+        </label>
+      ) : (
+        <p className="system-note">
+          {ext
+            ? `No app in the library opens .${ext} files yet. Import one, or add ${ext} to an app's "Also opens".`
+            : "This file has no extension, so Floppy can't tell which app opens it. Add its name's type to an app's \"Also opens\", or rename it."}
+        </p>
+      )}
+      <dl className="details-grid">
+        <dt>In DOS</dt>
+        <dd className="details-path">{dosPath(doc)}</dd>
+        <dt>Added</dt>
+        <dd>{new Date(doc.added * 1000).toLocaleString()}</dd>
+      </dl>
+      <div className="detail-actions">
+        <button type="button" className="primary icontext-btn" disabled={busy || !opener} onClick={() => opener && onOpen(opener)}>
+          <span className="btn-icon">
+            <PlayIcon />
+          </span>
+          Open
+        </button>
+        <button type="button" className="icontext-btn" onClick={onReveal}>
+          <span className="btn-icon">
+            <FolderIcon />
+          </span>
+          Show in Finder
+        </button>
+        <button type="button" className="icontext-btn" onClick={onExport}>
+          <span className="btn-icon">
+            <FileIcon />
+          </span>
+          Export…
+        </button>
+        <button type="button" className="danger icontext-btn" onClick={onRemove}>
+          <span className="btn-icon">
+            <TrashIcon />
+          </span>
+          Remove
+        </button>
+      </div>
+    </div>
+  );
+}
+
 /** The user-supplied ROM and startup disk a Mac or Amiga needs. Floppy never includes these. */
 function SystemSetup({
   status,
@@ -715,6 +1258,9 @@ function SystemSetup({
   onModel,
   onSaveList,
   onImportFolder,
+  tracking,
+  onForgetIgnored,
+  onAskAgain,
 }: {
   status: GuestStatus;
   disabled: boolean;
@@ -722,9 +1268,27 @@ function SystemSetup({
   onModel: (model: string) => void;
   onSaveList: () => void;
   onImportFolder: () => void;
+  tracking: SetupTracking;
+  onForgetIgnored: () => void;
+  onAskAgain: (slot: string) => void;
 }) {
   const amiga = status.os === "amiga";
   const { rom, boot, model } = status.system;
+  // cd.rs slot labels, which the list and discs.rs use.
+  const romSlot = amiga ? "Kickstart ROM" : "Mac ROM";
+  const bootSlot = amiga ? "Workbench disk" : "Mac startup disk";
+  /** "Not on your drives" and Ask Again, when a files disc found no usable copy. */
+  const notOnDrives = (slot: string) =>
+    tracking.notOnDrives.includes(slot) && (
+      <>
+        <span className="system-note" title="A files disc made from your last list found no usable copy on your drives, so the list stopped asking for it.">
+          Not on your drives
+        </span>
+        <button type="button" className="small" disabled={disabled} onClick={() => onAskAgain(slot)}>
+          Ask Again
+        </button>
+      </>
+    );
   return (
     <div className="system-setup">
       <h3>
@@ -741,6 +1305,7 @@ function SystemSetup({
         <button type="button" className="small" disabled={disabled} onClick={() => onChoose("rom", false)}>
           Choose…
         </button>
+        {!rom && notOnDrives(romSlot)}
       </div>
       <div className="system-row">
         <span className="system-label">{amiga ? "Workbench" : "Startup disk"}</span>
@@ -753,6 +1318,7 @@ function SystemSetup({
             Folder…
           </button>
         )}
+        {!boot && notOnDrives(bootSlot)}
       </div>
       {amiga && (
         <div className="system-row">
@@ -779,6 +1345,17 @@ function SystemSetup({
           <button type="button" className="small" disabled={disabled} onClick={onImportFolder}>
             Import Folder of Files…
           </button>
+          {tracking.ignored > 0 && (
+            <button
+              type="button"
+              className="small"
+              disabled={disabled}
+              onClick={onForgetIgnored}
+              title="Earlier files discs brought these copies, and Floppy couldn't use them. The list asks for them to be left out."
+            >
+              Forget {tracking.ignored} Ignored {tracking.ignored === 1 ? "Copy" : "Copies"}
+            </button>
+          )}
           <span className="system-note">
             Lists the files still needed, to find on your drives (for example with Diskette's Burn A CD). Floppy checks
             each file's contents when you import them.

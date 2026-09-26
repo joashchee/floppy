@@ -376,3 +376,30 @@ button.icontext-btn .btn-icon { display: inline-flex; width: 14px; height: 14px;
 .setup-drop-icon svg { width: 16px; height: 16px; }
 .setup-drop-text { flex: 1; font-size: 12px; color: var(--muted); line-height: 1.45; }
 .setup-drop-text strong { color: var(--text); font-weight: 600; }
+
+/* An attached old disk macOS couldn't mount (media.rs): the same strip,
+   with a solid border, since it's something that just happened rather
+   than a standing to-do. */
+.media-offer { border-style: solid; border-color: var(--accent-dim); }
+
+/* Documents (documents.rs): a second list under the DOS apps. */
+.list-heading { display: flex; align-items: center; gap: 8px; margin: 16px 0 8px; font-size: 12px; font-weight: 600; }
+.list-heading .section-icon { display: flex; color: var(--accent); }
+.list-heading .section-icon svg { width: 14px; height: 14px; }
+.list-heading-meta { font-family: var(--font-mono); font-weight: 400; color: var(--muted); }
+.doc-title { margin: 0; font-size: 15px; font-weight: 600; word-break: break-word; }
+
+/* What a DOS session saved, listed when DOSBox quits. */
+.session-report { border: 1px solid var(--accent-dim); border-radius: 8px; padding: 10px 14px; margin-bottom: 14px; font-size: 13px; }
+.session-report-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.session-report ul { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.session-report li { display: flex; align-items: center; gap: 8px; }
+.session-file { flex: 1; display: flex; flex-direction: column; min-width: 0; word-break: break-word; }
+
+/* The wanted-apps list and apps disc (handlers.rs), under each library's description. */
+.find-apps { margin: 8px 0 12px; }
+
+/* "Did it open correctly?" after a document session (verify.rs). */
+.verify-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
+.verify-row span { flex: 1 1 220px; }
+.verify-row input { flex: 0 1 200px; }

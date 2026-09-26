@@ -8,6 +8,85 @@ against the day the change was made.
 
 ## Unreleased
 
+- **Handler verification** (2026-09-26): a running record of which apps
+  really open which file types.
+  - After each document session, Floppy asks whether the app opened it
+    correctly (Worked / Didn't Work, optional note). Answers stay
+    local, in `library/verifications.json`, with no document names.
+  - "Open with" shows each app's record for the file type (worked 3×,
+    failed 1×) and ranks by it. An app that fails more than it works
+    goes last.
+  - **Export Test Report…** writes the totals as JSON.
+    `scripts/merge-handler-tests.py` merges reports into the new "Tested
+    in Floppy" table in `docs/app-handlers.md`, never counting a report
+    twice, and suggests *believed* entries to mark verified.
+    `verify.rs`.
+
+- **Find the old apps you own** (2026-09-26).
+  - The new living document `docs/app-handlers.md` lists old apps that
+    open old formats: 13 DOS, 29 classic Mac and 15 Amiga apps. Each
+    entry gives its program names, extensions, Mac type/creator codes or
+    Amiga IFF types, and a confidence and source. Its code copy is
+    `handlers.rs`, and document matching now uses it.
+  - **Save Wanted-Apps List…** writes the missing-files list format for
+    apps not in the library, with `#gather: folder` and
+    `#forks: appledouble` directives for disc makers.
+  - **Import Apps Disc…** imports each app found, with its folder.
+
+- **Open an old DOS file in the app that made it** (2026-09-26): the DOS
+  slice of "Open This Old File".
+  - Drop a document (a .WP5, .WK1, .DBF…) on the DOS tab, use **Import
+    Document…**, or run `floppy open <file>`. It's copied to `C:\DOCS`
+    under an 8.3 name, and its original name is kept.
+  - Floppy offers the library's apps that open it: a table of
+    well-known DOS programs (WordPerfect, Word, WordStar, Works, 1-2-3,
+    Quattro Pro, dBASE, Paradox, Harvard Graphics, Deluxe Paint, PC
+    Paintbrush, AutoCAD, Turbo Pascal), plus each app's **Also opens**.
+  - **Open** runs the program with the document's DOS path.
+  - When DOSBox quits, a panel lists the new or changed files, with
+    **Show in Finder** and **Export…**.
+  - A headless end-to-end test runs a real document through DOSBox.
+    `documents.rs`.
+
+- **Files discs that don't bring the same bad copy twice** (2026-09-26),
+  matching Diskette's Burn A CD contract (`discs.rs`).
+  - Floppy recognizes a Burn A CD disc by its ISO Application ID, or by
+    the `diskette-burn.json` manifest, which is never mistaken for a
+    system file. It remembers each disc's ID, so a re-import says so.
+  - Every copy on such a disc that Floppy couldn't use (not a system
+    file, refused by its checks, or damaged beside a good copy) goes on
+    an ignore list. The next missing-files list carries
+    `#ignore: sha256 <hash> <reason>` lines, so the disc leaves that
+    content out under any name.
+  - The disc also says, line by line, what the user's drives had. A
+    slot whose every line found nothing usable is left off later lists.
+    The setup panel shows "Not on your drives" with **Ask Again**.
+  - **Forget N Ignored Copies** clears the ignore list. State is in
+    `library/files-discs.json`. A small SHA-1 (`sha1.rs`) matches a disc
+    to the list it answers.
+
+- **Every setup file is found by content** (2026-09-26). The
+  missing-files list now has size and SHA-1 lines for Mac startup disks
+  and Workbench disks as well as ROMs: 179 known-good copies in all.
+  - 20 Mac ROMs from MAME.
+  - 4 Mac startup disks from Internet Archive metadata: installed System
+    7.0.1 and 7.5.3, and Mac OS 7.6's bootable Utilities floppies.
+  - 74 Kickstarts from FS-UAE and TOSEC, including Amiga Forever's
+    encrypted ROMs.
+  - 81 Workbench boot disks from TOSEC and the FS-UAE launcher.
+  - The table (`known_files.rs`, replacing `known_roms.rs`) is generated
+    by the new `scripts/update-known-hashes.py`. `docs/legal-setupfiles.md`
+    lists the sources and what's left out, and why.
+
+- **Old disks macOS can't open** (2026-09-26): HFS floppies, CDs and
+  drives, and Amiga drives.
+  - When one is attached and nothing on it mounts, a notice offers
+    **Copy and Open**. Floppy reads the disk through macOS's password
+    prompt (`authopen`, read-only) into a library image, then opens it
+    in Basilisk II or FS-UAE when that guest is set up and free.
+  - The first 64 KB decide the guest, and anything else is abandoned.
+  - **Ignore** hides a disk until it's detached. `media.rs`.
+
 - **Releases ship the bundled emulators' source** (2026-09-26).
   `scripts/build-release.sh` now ends by running the new
   `scripts/fetch-sources.sh`. It downloads the DOSBox Staging and FS-UAE

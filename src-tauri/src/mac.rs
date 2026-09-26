@@ -428,6 +428,16 @@ fn be32(b: &[u8], o: usize) -> u32 {
 /// images (84-byte header), Apple-partitioned hard-disk images, and
 /// HFS+ volumes inside an HFS wrapper.
 pub fn bootable_volume(path: &Path) -> Option<String> {
+    first_volume(path, true)
+}
+
+/// The name of the first HFS or HFS+ volume in a disk image, bootable or
+/// not (see `bootable_volume` for the layouts it reads).
+pub fn volume_name(path: &Path) -> Option<String> {
+    first_volume(path, false)
+}
+
+fn first_volume(path: &Path, bootable_only: bool) -> Option<String> {
     let mut f = fs::File::open(path).ok()?;
     let mut bases = vec![0u64, 84];
     // Apple partition map: "ER" in block 0, "PM" entries from block 1.
@@ -446,10 +456,10 @@ pub fn bootable_volume(path: &Path) -> Option<String> {
             i += 1;
         }
     }
-    bases.into_iter().find_map(|base| volume_at(&mut f, base))
+    bases.into_iter().find_map(|base| volume_at(&mut f, base, bootable_only))
 }
 
-fn volume_at(f: &mut fs::File, base: u64) -> Option<String> {
+fn volume_at(f: &mut fs::File, base: u64, bootable_only: bool) -> Option<String> {
     let v = read_at(f, base + 1024, 512)?;
     match &v[0..2] {
         b"BD" => {
@@ -464,11 +474,11 @@ fn volume_at(f: &mut fs::File, base: u64) -> Option<String> {
             // in the embedded volume.
             if &v[0x7C..0x7E] == b"H+" {
                 let embedded = base + u64::from(be16(&v, 28)) * 512 + u64::from(be16(&v, 0x7E)) * u64::from(be32(&v, 20));
-                return volume_at(f, embedded).map(|_| name);
+                return volume_at(f, embedded, bootable_only).map(|_| name);
             }
-            (be32(&v, 92) != 0).then_some(name)
+            (!bootable_only || be32(&v, 92) != 0).then_some(name)
         }
-        b"H+" | b"HX" => (be32(&v, 0x50) != 0).then(|| "HFS+ volume".to_string()),
+        b"H+" | b"HX" => (!bootable_only || be32(&v, 0x50) != 0).then(|| "HFS+ volume".to_string()),
         _ => None,
     }
 }

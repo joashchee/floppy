@@ -8,8 +8,13 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::emulator::{Emulator, EmulatorSource};
-use crate::library::{GuestOs, GuestSystem, Library, LibraryApp, SystemFile};
+use crate::documents::{self, Change, Opener};
+use crate::library::{GuestOs, GuestSystem, Library, LibraryApp, LibraryDoc, SystemFile};
 use crate::cd::{self, CdImport};
+use crate::discs;
+use crate::handlers;
+use crate::verify;
+use crate::media::{self, MediaWatch, OldMedia};
 use crate::{amiga, dos, mac};
 
 pub struct AppState {
@@ -24,6 +29,8 @@ pub struct AppState {
 #[serde(rename_all = "camelCase")]
 pub struct StartupImport {
     pub app: Option<LibraryApp>,
+    /// From `floppy open <file>`.
+    pub document: Option<LibraryDoc>,
     pub error: Option<String>,
 }
 
@@ -166,15 +173,94 @@ pub fn set_guest_model(state: State<AppState>, os: String, model: String) -> Res
     state.library.set_model(os, &model)
 }
 
-/// Writes the missing-files list (see cd.rs) to `path`. Returns how many files are missing (0 writes nothing).
+/// Writes the missing-files list (see cd.rs) to `path`. Returns how many
+/// system files it asks for (0 writes nothing).
 #[tauri::command]
 pub fn write_missing_list(state: State<AppState>, path: String) -> Result<usize, String> {
-    let slots = cd::missing_slots(&state.library)?;
-    match cd::missing_list(&slots) {
-        Some(list) => std::fs::write(&path, list).map_err(|e| format!("Couldn't save the list: {e}"))?,
-        None => return Ok(0),
+    cd::write_list(&state.library, Path::new(&path))
+}
+
+/// Writes the wanted-apps list (handlers.rs, `docs/app-handlers.md`) to
+/// `path`: the old apps that open old files and aren't in the library
+/// yet. Returns how many it asks for (0 writes nothing).
+#[tauri::command]
+pub fn write_wanted_apps(state: State<AppState>, path: String) -> Result<usize, String> {
+    let apps = state.library.list()?;
+    let Some(list) = handlers::wanted_list(&apps) else { return Ok(0) };
+    std::fs::write(&path, &list).map_err(|e| format!("Couldn't save the list: {e}"))?;
+    Ok(list.lines().filter(|l| !l.is_empty() && !l.starts_with('#')).count())
+}
+
+/// Imports the old apps on an apps disc (a disc image or folder) made
+/// from the wanted-apps list.
+#[tauri::command]
+pub async fn import_apps_disc(app: AppHandle, path: String) -> Result<handlers::AppsImport, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let library = &app.state::<AppState>().library;
+        cd::with_disc(library, &PathBuf::from(path), |root| handlers::import_apps_from_dir(library, root))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Records whether an app opened a document's file type correctly.
+#[tauri::command]
+pub fn record_verification(state: State<AppState>, pending: verify::Pending, worked: bool, note: Option<String>) -> Result<(), String> {
+    let outcome = if worked { verify::Outcome::Worked } else { verify::Outcome::Failed };
+    verify::record(&state.library, &pending, outcome, note.as_deref())
+}
+
+/// Every test result, totalled per app and file type.
+#[tauri::command]
+pub fn handler_tests(state: State<AppState>) -> Vec<verify::Tally> {
+    verify::tallies(&state.library)
+}
+
+/// Writes a handler test report to `path`, for
+/// `scripts/merge-handler-tests.py`. Only when the user asks: nothing
+/// leaves the machine otherwise.
+#[tauri::command]
+pub fn export_handler_tests(state: State<AppState>, path: String) -> Result<usize, String> {
+    let report = verify::report(&state.library);
+    let n = report.tallies.len();
+    let json = serde_json::to_vec_pretty(&report).map_err(|e| e.to_string())?;
+    std::fs::write(&path, json).map_err(|e| format!("Couldn't save the report: {e}"))?;
+    Ok(n)
+}
+
+#[tauri::command]
+pub fn forget_handler_tests(state: State<AppState>) -> Result<(), String> {
+    verify::forget_all(&state.library)
+}
+
+/// What earlier files discs taught Floppy (discs.rs), for the setup panel.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetupTracking {
+    /// Copies on the ignore list.
+    ignored: usize,
+    /// Labels of slots the user's drives couldn't fill, left off the list.
+    not_on_drives: Vec<String>,
+}
+
+#[tauri::command]
+pub fn setup_tracking(state: State<AppState>) -> SetupTracking {
+    SetupTracking {
+        ignored: discs::ignored_files(&state.library).len(),
+        not_on_drives: discs::not_on_drives(&state.library).iter().map(|s| s.label().to_string()).collect(),
     }
-    Ok(slots.len())
+}
+
+/// Empties the ignore list, so the next files disc may bring those copies again.
+#[tauri::command]
+pub fn forget_ignored_files(state: State<AppState>) -> Result<(), String> {
+    discs::forget_ignored(&state.library)
+}
+
+/// Puts a slot the drives couldn't fill back on the missing-files list.
+#[tauri::command]
+pub fn ask_again(state: State<AppState>, slot: String) -> Result<(), String> {
+    discs::ask_again(&state.library, cd::Slot::from_label(&slot).ok_or("Unknown system file.")?)
 }
 
 /// Sets up every guest it can from a files disc (a disc image, or a
@@ -218,16 +304,15 @@ pub fn take_startup_import(state: State<AppState>) -> Option<StartupImport> {
 }
 
 /// Writes the per-launch config for `entry` and returns its path.
-/// `boot_only` boots the guest without the app: a DOS prompt in the
-/// app's folder, or plain Mac OS / Workbench.
-fn write_launch_config(library: &Library, entry: &LibraryApp, boot_only: bool) -> Result<PathBuf, String> {
-    let program = if boot_only { None } else { entry.program.as_deref() };
+/// `program: None` boots the guest without the app: a DOS prompt in the
+/// app's folder, or plain Mac OS / Workbench. `args` go to a DOS program.
+fn write_launch_config(library: &Library, entry: &LibraryApp, program: Option<&str>, args: Option<&str>) -> Result<PathBuf, String> {
     let app_dir = library.os_root(entry.os).join(&entry.dir);
     let run = library.run_dir();
     let (conf, sub, ext) = match entry.os {
         GuestOs::Dos => {
             let mount_root = library.os_root(entry.os);
-            let conf = dos::dosbox_conf(&dos::Launch { mount_root: &mount_root, app_dir: &entry.dir, program, exit_after: true })?;
+            let conf = dos::dosbox_conf(&dos::Launch { mount_root: &mount_root, app_dir: &entry.dir, program, exit_after: true, args })?;
             (conf, "dosbox", "conf")
         }
         GuestOs::MacClassic => {
@@ -278,12 +363,78 @@ fn write_launch_config(library: &Library, entry: &LibraryApp, boot_only: bool) -
 #[tauri::command]
 pub fn launch_app(app: AppHandle, state: State<AppState>, id: String, prompt_only: bool) -> Result<(), String> {
     let entry = state.library.get(&id)?;
-    if let Some(e) = launch_conflict(&id, entry.os, &running_map(&state)) {
+    let program = if prompt_only { None } else { entry.program.clone() };
+    start(app, &state, entry, program, None, None)
+}
+
+/// Opens a document in one of the apps that can open it (documents.rs):
+/// the app's `program` runs with the document's DOS path.
+#[tauri::command]
+pub fn open_document(app: AppHandle, state: State<AppState>, id: String, app_id: String, program: String) -> Result<(), String> {
+    let doc = state.library.document(&id)?;
+    let entry = state.library.get(&app_id)?;
+    if doc.os != GuestOs::Dos || entry.os != GuestOs::Dos {
+        return Err("Only DOS documents can be opened in their app so far.".into());
+    }
+    if !entry.programs.contains(&program) {
+        return Err(format!("{program} isn't one of {}'s programs.", entry.name));
+    }
+    state.library.set_opens_with(&id, &app_id)?;
+    let args = documents::dos_path(&doc);
+    let pending = verify::Pending {
+        os: doc.os,
+        app_name: entry.name.clone(),
+        program: program.rsplit('/').next().unwrap_or(&program).to_string(),
+        handler: handlers::handler_for(doc.os, &program).map(|h| h.name.to_string()),
+        file_type: verify::dos_file_type(&doc.file),
+        document: doc.name.clone(),
+    };
+    start(app, &state, entry, Some(program), Some(args), Some((doc, pending)))
+}
+
+/// What a DOS session saved, sent as `session-ended` when DOSBox quits.
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct SessionReport {
+    os: GuestOs,
+    app_name: String,
+    /// The document's name, when one was opened.
+    document: Option<String>,
+    changes: Vec<SessionChange>,
+    /// For a document session: what to ask the user about (verify.rs).
+    verify: Option<verify::Pending>,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct SessionChange {
+    /// Relative to the guest's library folder.
+    path: String,
+    /// What to call it: a document's original name, else its file name.
+    name: String,
+    new: bool,
+}
+
+/// Launches `entry` (with `program` and its `args`). For DOS, snapshots
+/// drive C: first and reports what changed when DOSBox quits, picking up
+/// files saved into `C:\DOCS` as documents.
+fn start(
+    app: AppHandle,
+    state: &AppState,
+    entry: LibraryApp,
+    program: Option<String>,
+    args: Option<String>,
+    document: Option<(LibraryDoc, verify::Pending)>,
+) -> Result<(), String> {
+    let id = entry.id.clone();
+    if let Some(e) = launch_conflict(&id, entry.os, &running_map(state)) {
         return Err(e);
     }
     let emu = Emulator::for_os(entry.os);
     let (bin, _) = emu.locate(app.path().resource_dir().ok().as_deref()).ok_or(emu.missing_message())?;
-    let conf_path = write_launch_config(&state.library, &entry, prompt_only)?;
+    let conf_path = write_launch_config(&state.library, &entry, program.as_deref(), args.as_deref())?;
+    let os_root = state.library.os_root(entry.os);
+    let before = (entry.os == GuestOs::Dos).then(|| documents::snapshot(&os_root));
 
     let mut child = emu.spawn(&bin, &conf_path).map_err(|e| format!("Couldn't start {}: {e}", emu.name()))?;
     let running = state.running.clone();
@@ -292,9 +443,126 @@ pub fn launch_app(app: AppHandle, state: State<AppState>, id: String, prompt_onl
     std::thread::spawn(move || {
         let _ = child.wait();
         running.lock().unwrap_or_else(|p| p.into_inner()).remove(&id);
+        if let Some(before) = before {
+            let library = &app.state::<AppState>().library;
+            let changes = documents::changes(&before, &documents::snapshot(&os_root));
+            let _ = library.adopt_documents(entry.os);
+            // A document session always reports, to ask whether it worked.
+            if !changes.is_empty() || document.is_some() {
+                let docs = library.documents().unwrap_or_default();
+                let changes = changes.into_iter().map(|c: Change| SessionChange { name: display_name(&docs, entry.os, &c.path), path: c.path, new: c.new }).collect();
+                let (document, verify) = match document {
+                    Some((d, p)) => (Some(d.name), Some(p)),
+                    None => (None, None),
+                };
+                let report = SessionReport { os: entry.os, app_name: entry.name.clone(), document, changes, verify };
+                let _ = app.emit("session-ended", report);
+            }
+        }
         let _ = app.emit("running-changed", ());
     });
     Ok(())
+}
+
+/// A document's original name for a library-relative path, else the
+/// path's file name.
+fn display_name(docs: &[LibraryDoc], os: GuestOs, path: &str) -> String {
+    docs.iter()
+        .find(|d| d.os == os && d.file.eq_ignore_ascii_case(path))
+        .map(|d| d.name.clone())
+        .unwrap_or_else(|| path.rsplit('/').next().unwrap_or(path).to_string())
+}
+
+/// An app or a document, from `import_item`.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportedItem {
+    app: Option<LibraryApp>,
+    document: Option<LibraryDoc>,
+}
+
+/// Imports a dropped or picked path. For DOS, a folder, zip or program is
+/// an app and any other file is a document. Other guests take apps only.
+#[tauri::command]
+pub async fn import_item(app: AppHandle, os: String, path: String) -> Result<ImportedItem, String> {
+    let os = GuestOs::parse(&os).ok_or("Unknown guest OS.")?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let library = &app.state::<AppState>().library;
+        let path = PathBuf::from(path);
+        if os == GuestOs::Dos && !documents::is_dos_app_source(&path) {
+            Ok(ImportedItem { app: None, document: Some(library.import_document(os, &path)?) })
+        } else {
+            Ok(ImportedItem { app: Some(library.import(os, &path)?), document: None })
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub fn list_documents(state: State<AppState>) -> Result<Vec<LibraryDoc>, String> {
+    state.library.documents()
+}
+
+/// The library's apps that can open a document, best first.
+#[tauri::command]
+pub fn document_openers(state: State<AppState>, id: String) -> Result<Vec<Opener>, String> {
+    let doc = state.library.document(&id)?;
+    Ok(match doc.os {
+        GuestOs::Dos => documents::dos_openers(&doc.file, doc.opens_with.as_deref(), &state.library.list()?, &verify::tallies(&state.library)),
+        _ => Vec::new(),
+    })
+}
+
+#[tauri::command]
+pub fn remove_document(state: State<AppState>, id: String) -> Result<(), String> {
+    let doc = state.library.document(&id)?;
+    if running_map(&state).values().any(|os| *os == doc.os) {
+        return Err(format!("Quit {} before removing a document it can see.", Emulator::for_os(doc.os).name()));
+    }
+    state.library.remove_document(&id)
+}
+
+/// Says which document extensions an app opens.
+#[tauri::command]
+pub fn set_app_opens(state: State<AppState>, id: String, exts: Vec<String>) -> Result<LibraryApp, String> {
+    state.library.set_opens(&id, &exts)
+}
+
+/// A library file's absolute path, for Show in Finder. `path` is relative
+/// to the guest's library folder, as `session-ended` reports it.
+#[tauri::command]
+pub fn library_file(state: State<AppState>, os: String, path: String) -> Result<String, String> {
+    Ok(guest_file(&state.library, &os, &path)?.to_string_lossy().into_owned())
+}
+
+fn guest_file(library: &Library, os: &str, path: &str) -> Result<PathBuf, String> {
+    let os = GuestOs::parse(os).ok_or("Unknown guest OS.")?;
+    let rel = Path::new(path);
+    if rel.is_absolute() || rel.components().any(|c| !matches!(c, std::path::Component::Normal(_))) {
+        return Err(format!("Refusing an unexpected path: {path}"));
+    }
+    Ok(library.os_root(os).join(rel))
+}
+
+/// Copies a library file into `dest_dir`, under the document's original
+/// name where it has one, never over an existing file. Returns the copy.
+#[tauri::command]
+pub fn export_file(state: State<AppState>, os: String, path: String, dest_dir: String) -> Result<String, String> {
+    let src = guest_file(&state.library, &os, &path)?;
+    let guest = GuestOs::parse(&os).ok_or("Unknown guest OS.")?;
+    let name = display_name(&state.library.documents()?, guest, &path);
+    let dest_dir = PathBuf::from(dest_dir);
+    let (stem, ext) = match name.rsplit_once('.') {
+        Some((s, e)) if !s.is_empty() => (s.to_string(), format!(".{e}")),
+        _ => (name.clone(), String::new()),
+    };
+    let dest = std::iter::once(dest_dir.join(&name))
+        .chain((2..).map(|n| dest_dir.join(format!("{stem} {n}{ext}"))))
+        .find(|p| !p.exists())
+        .expect("unbounded");
+    std::fs::copy(&src, &dest).map_err(|e| format!("Couldn't export {name}: {e}"))?;
+    Ok(dest.to_string_lossy().into_owned())
 }
 
 #[cfg(test)]
@@ -310,4 +578,55 @@ mod tests {
         assert!(launch_conflict("mac-macpaint", GuestOs::MacClassic, &running).unwrap().contains("Basilisk II"));
         assert!(launch_conflict("amiga-lemmings", GuestOs::Amiga, &running).is_none());
     }
+}
+
+/// Old disks attached now that macOS couldn't mount (media.rs).
+#[tauri::command]
+pub fn old_media(media: State<Arc<MediaWatch>>) -> Vec<OldMedia> {
+    media.list()
+}
+
+/// Stops offering a disk until it's detached.
+#[tauri::command]
+pub fn dismiss_media(app: AppHandle, media: State<Arc<MediaWatch>>, device: String) {
+    media.dismiss(&device);
+    let _ = app.emit("old-media-changed", media.list());
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct MediaProgress {
+    device: String,
+    done: u64,
+    total: u64,
+}
+
+/// Copies an offered old disk into the library, asking macOS for read
+/// access, and imports it into the guest its contents belong to. Emits
+/// `media-progress` while copying. The disk is no longer offered after.
+#[tauri::command]
+pub async fn copy_old_media(app: AppHandle, device: String) -> Result<LibraryApp, String> {
+    let media = app.state::<Arc<MediaWatch>>().find(&device).ok_or("That disk isn't attached any more.")?;
+    let handle = app.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let library = &handle.state::<AppState>().library;
+        let dir = library.run_dir().join(format!("media-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let total = media.size;
+        let emitter = handle.clone();
+        let copied = media::copy_to_image(&media, &dir, |done| {
+            let _ = emitter.emit("media-progress", MediaProgress { device: media.device.clone(), done, total });
+        });
+        let imported = copied.and_then(|(image, os)| library.import(os, &image));
+        let _ = std::fs::remove_dir_all(&dir);
+        imported
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    if result.is_ok() {
+        let watch = app.state::<Arc<MediaWatch>>();
+        watch.dismiss(&device);
+        let _ = app.emit("old-media-changed", watch.list());
+    }
+    result
 }

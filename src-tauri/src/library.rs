@@ -20,7 +20,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
 
-use crate::{amiga, dos, mac};
+use crate::{amiga, documents, dos, mac};
 
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 #[serde(rename_all = "kebab-case")]
@@ -66,6 +66,15 @@ impl GuestOs {
     }
 }
 
+/// What the user calls a guest, as the app's tabs name it.
+pub fn guest_label(os: GuestOs) -> &'static str {
+    match os {
+        GuestOs::Dos => "DOS",
+        GuestOs::MacClassic => "Classic Mac",
+        GuestOs::Amiga => "Amiga",
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct LibraryApp {
@@ -81,6 +90,28 @@ pub struct LibraryApp {
     pub programs: Vec<String>,
     /// File name (never the full path) of what was imported.
     pub source_name: String,
+    /// Unix seconds.
+    pub added: u64,
+    /// Document extensions the user says this app opens (uppercase, no
+    /// dot), on top of the well-known ones (documents.rs).
+    #[serde(default)]
+    pub opens: Vec<String>,
+}
+
+/// An old file in the library, to open in an app that made it
+/// (documents.rs).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryDoc {
+    pub id: String,
+    pub os: GuestOs,
+    /// Its original name, shown and used on export.
+    pub name: String,
+    /// Where it is, relative to the guest's library folder, `/`-separated
+    /// (`DOCS/LETTER.WP5`: an 8.3 name for DOS).
+    pub file: String,
+    /// The app it last opened with, offered first next time.
+    pub opens_with: Option<String>,
     /// Unix seconds.
     pub added: u64,
 }
@@ -111,12 +142,14 @@ struct Manifest {
     version: u32,
     apps: Vec<LibraryApp>,
     #[serde(default)]
+    documents: Vec<LibraryDoc>,
+    #[serde(default)]
     systems: BTreeMap<GuestOs, GuestSystem>,
 }
 
 impl Default for Manifest {
     fn default() -> Self {
-        Manifest { version: 1, apps: Vec::new(), systems: BTreeMap::new() }
+        Manifest { version: 1, apps: Vec::new(), documents: Vec::new(), systems: BTreeMap::new() }
     }
 }
 
@@ -148,6 +181,16 @@ impl Library {
     /// guest's shared folder, so the guest never sees its own ROM.
     pub fn system_dir(&self, os: GuestOs) -> PathBuf {
         self.root.join("system").join(os.dir_name())
+    }
+
+    /// What Floppy remembers about files discs (discs.rs).
+    pub fn files_discs_path(&self) -> PathBuf {
+        self.root.join("files-discs.json")
+    }
+
+    /// Whether apps opened file types correctly, from the user (verify.rs).
+    pub fn verifications_path(&self) -> PathBuf {
+        self.root.join("verifications.json")
     }
 
     /// Per-launch config files and emulator scratch space.
@@ -299,11 +342,13 @@ impl Library {
 
         let os_root = self.os_root(os);
         fs::create_dir_all(&os_root).map_err(|e| e.to_string())?;
-        let taken: HashSet<String> = fs::read_dir(&os_root)
+        let mut taken: HashSet<String> = fs::read_dir(&os_root)
             .map_err(|e| e.to_string())?
             .filter_map(Result::ok)
             .map(|e| e.file_name().to_string_lossy().to_ascii_uppercase())
             .collect();
+        // The documents folder is never an app's.
+        taken.insert(documents::DOS_DOCS_DIR.to_string());
         let dir = match os {
             GuestOs::Dos => dos::to_83(&name, &taken, true),
             GuestOs::MacClassic => unique_name(&mac::sanitize_name(&name, mac::MAX_NAME, "App"), &taken, mac::MAX_NAME),
@@ -324,10 +369,135 @@ impl Library {
             programs,
             source_name: src_name,
             added: SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0),
+            opens: Vec::new(),
         };
         m.apps.push(app.clone());
         self.save(&m)?;
         Ok(app)
+    }
+
+    /// Says which document extensions an app opens, on top of the
+    /// well-known ones. Stored uppercase, without dots or duplicates.
+    pub fn set_opens(&self, id: &str, exts: &[String]) -> Result<LibraryApp, String> {
+        let mut clean: Vec<String> = Vec::new();
+        for e in exts {
+            let e = e.trim().trim_start_matches('.').to_ascii_uppercase();
+            if e.is_empty() {
+                continue;
+            }
+            if e.len() > 3 || !e.chars().all(|c| c.is_ascii_alphanumeric()) {
+                return Err(format!(".{e} isn't a DOS extension: up to 3 letters or digits."));
+            }
+            if !clean.contains(&e) {
+                clean.push(e);
+            }
+        }
+        self.update(id, |a| {
+            a.opens = clean;
+            Ok(())
+        })
+    }
+
+    pub fn documents(&self) -> Result<Vec<LibraryDoc>, String> {
+        let _g = self.guard();
+        Ok(self.load()?.documents)
+    }
+
+    pub fn document(&self, id: &str) -> Result<LibraryDoc, String> {
+        self.documents()?.into_iter().find(|d| d.id == id).ok_or_else(|| "That document is no longer in the library.".into())
+    }
+
+    /// Absolute path of a document.
+    pub fn document_path(&self, doc: &LibraryDoc) -> Result<PathBuf, String> {
+        let rel = Path::new(&doc.file);
+        if rel.is_absolute() || rel.components().any(|c| !matches!(c, std::path::Component::Normal(_))) {
+            return Err(format!("Refusing an unexpected document path: {}", doc.file));
+        }
+        Ok(self.os_root(doc.os).join(rel))
+    }
+
+    /// Copies one file into the guest's documents folder (`C:\DOCS` for
+    /// DOS, under an 8.3 name) and lists it. Only DOS takes documents so
+    /// far.
+    pub fn import_document(&self, os: GuestOs, src: &Path) -> Result<LibraryDoc, String> {
+        let name = src.file_name().map(|n| n.to_string_lossy().into_owned()).ok_or("That path has no file name.")?;
+        if os != GuestOs::Dos {
+            return Err("Only DOS documents can be opened in their app so far.".into());
+        }
+        if !src.is_file() {
+            return Err(format!("{name} isn't a file."));
+        }
+        let _g = self.guard();
+        let dir = self.os_root(os).join(documents::DOS_DOCS_DIR);
+        fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let taken: HashSet<String> =
+            fs::read_dir(&dir).map_err(|e| e.to_string())?.filter_map(Result::ok).map(|e| e.file_name().to_string_lossy().to_ascii_uppercase()).collect();
+        let file = dos::to_83(&name, &taken, false);
+        fs::copy(src, dir.join(&file)).map_err(|e| format!("Couldn't copy {name}: {e}"))?;
+        let mut m = self.load()?;
+        let doc = self.new_document(&mut m, os, name, format!("{}/{file}", documents::DOS_DOCS_DIR));
+        self.save(&m)?;
+        Ok(doc)
+    }
+
+    fn new_document(&self, m: &mut Manifest, os: GuestOs, name: String, file: String) -> LibraryDoc {
+        m.documents.retain(|d| !(d.os == os && d.file.eq_ignore_ascii_case(&file)));
+        let base = format!("doc-{}-{}", os.dir_name(), file.rsplit('/').next().unwrap_or(&file).to_ascii_lowercase().replace(|c: char| !c.is_ascii_alphanumeric(), "-"));
+        let used = |id: &str| m.documents.iter().any(|d| d.id == id);
+        let id = if used(&base) { (2u32..).map(|n| format!("{base}-{n}")).find(|id| !used(id)).expect("unbounded") } else { base };
+        let doc = LibraryDoc { id, os, name, file, opens_with: None, added: SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0) };
+        m.documents.push(doc.clone());
+        doc
+    }
+
+    /// Lists files an app saved into the documents folder that aren't in
+    /// the library yet, under their DOS names. Returns the new ones.
+    pub fn adopt_documents(&self, os: GuestOs) -> Result<Vec<LibraryDoc>, String> {
+        if os != GuestOs::Dos {
+            return Ok(Vec::new());
+        }
+        let _g = self.guard();
+        let dir = self.os_root(os).join(documents::DOS_DOCS_DIR);
+        let Ok(entries) = fs::read_dir(&dir) else { return Ok(Vec::new()) };
+        let mut m = self.load()?;
+        let mut added = Vec::new();
+        let mut names: Vec<String> = entries.filter_map(Result::ok).filter(|e| e.path().is_file()).map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+        names.sort();
+        for name in names {
+            let file = format!("{}/{name}", documents::DOS_DOCS_DIR);
+            if name.starts_with('.') || m.documents.iter().any(|d| d.os == os && d.file.eq_ignore_ascii_case(&file)) {
+                continue;
+            }
+            added.push(self.new_document(&mut m, os, name, file));
+        }
+        if !added.is_empty() {
+            self.save(&m)?;
+        }
+        Ok(added)
+    }
+
+    /// Remembers the app a document last opened with.
+    pub fn set_opens_with(&self, doc_id: &str, app_id: &str) -> Result<(), String> {
+        let _g = self.guard();
+        let mut m = self.load()?;
+        let doc = m.documents.iter_mut().find(|d| d.id == doc_id).ok_or("That document is no longer in the library.")?;
+        doc.opens_with = Some(app_id.to_string());
+        self.save(&m)
+    }
+
+    /// Deletes a document's file from the guest drive and drops it.
+    pub fn remove_document(&self, id: &str) -> Result<(), String> {
+        let doc = self.document(id)?;
+        let path = self.document_path(&doc)?;
+        let _g = self.guard();
+        match fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) => return Err(format!("Couldn't delete {}: {e}", doc.name)),
+        }
+        let mut m = self.load()?;
+        m.documents.retain(|d| d.id != id);
+        self.save(&m)
     }
 
     pub fn system(&self, os: GuestOs) -> Result<GuestSystem, String> {
@@ -747,6 +917,7 @@ mod tests {
             programs: vec![],
             source_name: "x".into(),
             added: 0,
+            opens: vec![],
         }];
         assert_eq!(unique_id(GuestOs::MacClassic, "My App", &apps), "mac-my-app-2");
         assert_eq!(unique_id(GuestOs::MacClassic, "Café", &apps), "mac-caf-");
@@ -901,5 +1072,55 @@ mod tests {
         // The library list still loads, and apps and systems coexist.
         assert!(lib.list().unwrap().is_empty());
         assert_eq!(lib.system(GuestOs::Amiga).unwrap().boot.as_deref(), Some("Workbench"));
+    }
+
+    #[test]
+    fn documents_live_in_c_docs_under_8_3_names() {
+        let t = TempDir::new();
+        let lib = Library::new(t.path().join("lib"));
+        let src = t.path().join("Letter to Bank.wp5");
+        fs::write(&src, b"letter").unwrap();
+        let doc = lib.import_document(GuestOs::Dos, &src).unwrap();
+        assert_eq!((doc.name.as_str(), doc.file.as_str()), ("Letter to Bank.wp5", "DOCS/LETTERTO.WP5"));
+        assert_eq!(fs::read(lib.document_path(&doc).unwrap()).unwrap(), b"letter");
+        // A second file with the same short name gets its own.
+        let src2 = t.path().join("Letter to Tom.wp5");
+        fs::write(&src2, b"tom").unwrap();
+        assert_eq!(lib.import_document(GuestOs::Dos, &src2).unwrap().file, "DOCS/LETTER~1.WP5");
+        // Only DOS takes documents so far, and only files.
+        assert!(lib.import_document(GuestOs::MacClassic, &src).is_err());
+        assert!(lib.import_document(GuestOs::Dos, t.path()).is_err());
+
+        // An app called "Docs" never takes the documents folder.
+        let app_src = t.path().join("Docs");
+        fs::create_dir_all(&app_src).unwrap();
+        fs::write(app_src.join("DOCS.EXE"), b"MZ").unwrap();
+        assert_ne!(lib.import(GuestOs::Dos, &app_src).unwrap().dir, "DOCS");
+
+        // Files an app saved there are picked up, once.
+        fs::write(lib.os_root(GuestOs::Dos).join("DOCS/REPLY.WP5"), b"reply").unwrap();
+        let adopted = lib.adopt_documents(GuestOs::Dos).unwrap();
+        assert_eq!(adopted.iter().map(|d| d.name.as_str()).collect::<Vec<_>>(), ["REPLY.WP5"]);
+        assert!(lib.adopt_documents(GuestOs::Dos).unwrap().is_empty());
+
+        lib.set_opens_with(&doc.id, "dos-wp51").unwrap();
+        assert_eq!(lib.document(&doc.id).unwrap().opens_with.as_deref(), Some("dos-wp51"));
+        lib.remove_document(&doc.id).unwrap();
+        assert!(!lib.os_root(GuestOs::Dos).join("DOCS/LETTERTO.WP5").exists());
+        assert_eq!(lib.documents().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn apps_say_which_extensions_they_open() {
+        let t = TempDir::new();
+        let lib = Library::new(t.path().join("lib"));
+        let src = t.path().join("Editor");
+        fs::create_dir_all(&src).unwrap();
+        fs::write(src.join("ED.COM"), b"").unwrap();
+        let app = lib.import(GuestOs::Dos, &src).unwrap();
+        let set = |v: &[&str]| lib.set_opens(&app.id, &v.iter().map(|s| s.to_string()).collect::<Vec<_>>());
+        assert_eq!(set(&[".txt", "Doc", " TXT ", ""]).unwrap().opens, ["TXT", "DOC"]);
+        assert!(set(&["LONGER"]).is_err());
+        assert!(set(&["A*B"]).is_err());
     }
 }

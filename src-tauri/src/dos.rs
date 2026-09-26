@@ -180,6 +180,9 @@ pub struct Launch<'a> {
     pub program: Option<&'a str>,
     /// Quit DOSBox when the program exits.
     pub exit_after: bool,
+    /// Passed to the program, as DOS sees it (a document's
+    /// `C:\DOCS\LETTER.WP5`).
+    pub args: Option<&'a str>,
 }
 
 /// The config file Floppy passes to DOSBox Staging for one launch.
@@ -200,12 +203,19 @@ pub fn dosbox_conf(l: &Launch) -> Result<String, String> {
     s += &format!("mount c \"{root}\"\n");
     s += "c:\n";
     s += &format!("cd \\{dir}\n");
+    if let Some(args) = l.args {
+        // One autoexec line: a line break would run a second command.
+        if args.contains(['\n', '\r']) {
+            return Err("The program's arguments can't contain a line break.".into());
+        }
+    }
     if let Some(f) = file {
+        let args = l.args.map(|a| format!(" {a}")).unwrap_or_default();
         // A batch file run without CALL never returns to the next line.
         if f.to_ascii_lowercase().ends_with(".bat") {
-            s += &format!("call {f}\n");
+            s += &format!("call {f}{args}\n");
         } else {
-            s += &format!("{f}\n");
+            s += &format!("{f}{args}\n");
         }
         if l.exit_after {
             s += "exit\n";
@@ -280,19 +290,30 @@ mod tests {
     #[test]
     fn conf_runs_program_in_its_folder() {
         let root = PathBuf::from("/lib/dos");
-        let conf = dosbox_conf(&Launch { mount_root: &root, app_dir: "WP51", program: Some("BIN/WP.EXE"), exit_after: true }).unwrap();
+        let conf = dosbox_conf(&Launch { mount_root: &root, app_dir: "WP51", program: Some("BIN/WP.EXE"), exit_after: true, args: None }).unwrap();
         assert!(conf.contains("mount c \"/lib/dos\"\n"));
         assert!(conf.contains("cd \\WP51\\BIN\nWP.EXE\nexit\n"));
-        let conf = dosbox_conf(&Launch { mount_root: &root, app_dir: "GAME", program: Some("GO.BAT"), exit_after: false }).unwrap();
+        let conf = dosbox_conf(&Launch { mount_root: &root, app_dir: "GAME", program: Some("GO.BAT"), exit_after: false, args: None }).unwrap();
         assert!(conf.contains("call GO.BAT\n"));
         assert!(!conf.contains("exit"));
-        let conf = dosbox_conf(&Launch { mount_root: &root, app_dir: "GAME", program: None, exit_after: true }).unwrap();
+        let conf = dosbox_conf(&Launch { mount_root: &root, app_dir: "GAME", program: None, exit_after: true, args: None }).unwrap();
         assert!(conf.ends_with("cd \\GAME\n"));
+    }
+
+    #[test]
+    fn conf_opens_a_document_with_the_program() {
+        let root = PathBuf::from("/lib/dos");
+        let launch = |program, args| Launch { mount_root: &root, app_dir: "WP51", program: Some(program), exit_after: true, args: Some(args) };
+        let conf = dosbox_conf(&launch("WP.EXE", "C:\\DOCS\\LETTER.WP5")).unwrap();
+        assert!(conf.contains("cd \\WP51\nWP.EXE C:\\DOCS\\LETTER.WP5\nexit\n"), "{conf}");
+        assert!(dosbox_conf(&launch("GO.BAT", "C:\\DOCS\\A.TXT")).unwrap().contains("call GO.BAT C:\\DOCS\\A.TXT\n"));
+        // A second autoexec command can't be smuggled in.
+        assert!(dosbox_conf(&launch("WP.EXE", "A.TXT\ndel *.*")).is_err());
     }
 
     #[test]
     fn conf_rejects_quote_in_path() {
         let root = PathBuf::from("/odd\"path");
-        assert!(dosbox_conf(&Launch { mount_root: &root, app_dir: "A", program: None, exit_after: true }).is_err());
+        assert!(dosbox_conf(&Launch { mount_root: &root, app_dir: "A", program: None, exit_after: true, args: None }).is_err());
     }
 }

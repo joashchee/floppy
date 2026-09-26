@@ -94,6 +94,36 @@ Plus), with your own original disks, or with Hyperion's AmigaOS 3.2
 (paid). The AROS m68k boot floppy is free, but it needs the AROS ROM
 above.
 
+## Known-good hashes Floppy looks for
+
+Many users already own these files under a name no list can guess. Each
+section of the missing-files list therefore ends with nameless lines
+giving the size and SHA-1 of known-good copies, so a tool that hashes
+files finds a copy whatever it's called (`cd.rs`). These are hashes
+only: Floppy doesn't download or ship any of the files.
+
+| Setup file | Copies listed | Hashes from |
+|---|---|---|
+| Mac ROM | 20 | [MAME](https://github.com/mamedev/mame/tree/master/src/mame/apple)'s Apple drivers. Only the 32-bit clean dumps Basilisk II runs (IIsi, IIfx, LC, LC III/520, Quadra, Centris, PowerBook 140–180 and Duo, Color Classic, TV). The IIci is missing: MAME lists it only as four separate chips. |
+| Mac startup disk | 4 | Internet Archive file metadata: the installed System 7.5.3 and 7.0.1 disks above, and Mac OS 7.6's two bootable Utilities floppies |
+| Kickstart ROM | 74 | FS-UAE's ROM table (`rommgr.cpp`) and TOSEC's "Commodore Amiga - Firmware" DAT. Includes 4 encrypted Amiga Forever ROMs, which also need their `rom.key`. |
+| Workbench disk | 81 | TOSEC's "Commodore Amiga - Operating Systems - Workbench" DAT (boot disks only, v1.0 to 3.1) and the FS-UAE launcher's list |
+
+Left out on purpose:
+- **Bad dumps and overdumps** (`[b]`, `[o]`) and Kickstart betas.
+- **Install CDs** (System 7.5.3, Mac OS 7.6, 8.0 and 8.1 are all on the
+  Internet Archive). They're read-only, and the startup-disk slot needs
+  a writable disk with the system already installed.
+- **The Workbench sets' other disks** (Install, Extras, Fonts, Locale,
+  Storage).
+
+To refresh the list, run `scripts/update-known-hashes.py`, optionally
+with `--tosec <TOSEC DAT pack zip>`. It regenerates
+`src-tauri/src/known_files.rs` from these sources. Then add a row to the
+check log. To add a Mac startup disk, add it to the script's
+`MAC_BOOT_DISKS`. A user-reported ROM dump that's missing goes in the
+same way, once its source publishes the hash.
+
 ## Emulators
 
 DOSBox Staging and FS-UAE are bundled. Basilisk II isn't bundled yet,
@@ -109,4 +139,5 @@ and it's free under GPL-2.0-or-later:
 
 | Date | What was checked | Result |
 |---|---|---|
+| 2026-09-26 | Known-good hashes: MAME Apple drivers, FS-UAE `rommgr.cpp` and launcher Workbench lists, TOSEC DAT pack 2025-03-13 (Amiga Firmware and Workbench DATs), Internet Archive metadata for System 7.0.1/7.5.3 and Mac OS 7.6 | 20 Mac ROMs, 4 Mac startup disks, 74 Kickstarts, 81 Workbench disks. TOSEC has no Mac OS DAT. The Internet Archive's Mac ROM collections are zipped, so their per-file hashes can't be read without downloading ROMs, which Floppy won't do. |
 | 2026-09-26 | Apple free System releases, Internet Archive items (file lists via `archive.org/metadata/<id>`), Amiga Forever editions, FS-UAE Kickstart docs, AROS nightlies, E-Maculation builds | As above. The Wayback Machine was offline, so Apple's archived download pages and licence text weren't checked. |
