@@ -8,6 +8,33 @@ against the day the change was made.
 
 ## Unreleased
 
+- **Ask Diskette** (2026-09-26): while Diskette is running and Floppy
+  still needs setup files or old apps, a strip (and a gear-menu item)
+  offers to ask it (`request.rs`). Floppy sends one list of everything
+  missing, Diskette offers to Burn A CD, and the disc it makes comes
+  straight back to Floppy, which imports its setup files and apps.
+  - Dropping a Burn A CD disc anywhere on the window now imports both
+    its setup files and its apps, even once setup is done.
+  - List directives (`#gather:`, `#forks:`) now apply to the lines after
+    them, so one list can ask for system files and apps.
+  - Apps on a disc never go on the ignore list: only files that matched
+    a missing-files line can.
+- **Quieter log** (2026-09-26): logging starts at Info, so `tauri dev`
+  no longer prints a flood of `[TRACE]` windowing events.
+- **ANSIapps theme** (2026-09-26): the ansiapps apps' alternative
+  old-school DOS look, switched on from the gear menu and remembered
+  across launches (`docs/ansiapps-theme.md`). Blue double-framed
+  panels, gray Turbo Vision dialogs, 16 text-mode colors, and the
+  IBM VGA 8x16 font by VileR (CC BY-SA 4.0, shipped unmodified,
+  credited in About Floppy). Floppy's green stays its accent.
+- **Gears button** (2026-09-26): a gear at the header's top right opens
+  the app-level menu. Save Wanted-Apps List…, Import Apps Disc…,
+  Import Apps Folder… and Export Test Report… moved there from the
+  library panel, and a new **About Floppy** shows the version, each
+  guest's emulator and the license.
+- **Release builds install themselves** (2026-09-26):
+  `scripts/build-release.sh` now finishes by copying `Floppy.app` into
+  `~/Applications/`, replacing any older copy.
 - **Handler verification** (2026-09-26): a running record of which apps
   really open which file types.
   - After each document session, Floppy asks whether the app opened it

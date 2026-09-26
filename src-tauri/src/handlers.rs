@@ -12,6 +12,11 @@
 //! - `#forks: appledouble`: keep classic Mac resource forks and Finder
 //!   info as AppleDouble `._name` files beside the files, since ISO 9660,
 //!   Joliet and UDF can't hold them.
+//!
+//! Each directive applies to the lines after it, until one says
+//! otherwise (`#gather: file`, `#forks: none`). So a request that asks
+//! for system files and apps in one list (request.rs) gathers folders
+//! only for the apps.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -130,12 +135,22 @@ fn in_library(h: &Handler, apps: &[LibraryApp]) -> bool {
 /// The wanted-apps list (see the module doc) for every handler not in
 /// the library yet, or `None` when the library has them all.
 pub fn wanted_list(apps: &[LibraryApp]) -> Option<String> {
+    let (lines, _) = wanted_lines(apps)?;
+    let mut out = vec!["#columns: name size sha1".to_string()];
+    out.extend(lines);
+    Some(out.join("\n") + "\n")
+}
+
+/// The wanted-apps list without its `#columns:` header, starting with
+/// its `#gather:` and `#forks:` directives, which apply to the lines
+/// after them. So it can follow a missing-files list in one request
+/// (request.rs). Also returns how many apps it asks for.
+pub fn wanted_lines(apps: &[LibraryApp]) -> Option<(Vec<String>, usize)> {
     let wanted: Vec<&Handler> = HANDLERS.iter().filter(|h| !in_library(h, apps)).collect();
     if wanted.is_empty() {
         return None;
     }
     let mut out = vec![
-        "#columns: name size sha1".to_string(),
         "#gather: folder".to_string(),
         "#forks: appledouble".to_string(),
         "# Old apps that open old files, for Floppy. Gather each one with its".to_string(),
@@ -168,7 +183,7 @@ pub fn wanted_list(apps: &[LibraryApp]) -> Option<String> {
             }
         }
     }
-    Some(out.join("\n") + "\n")
+    Some((out, wanted.len()))
 }
 
 /// What Import Apps Disc did.

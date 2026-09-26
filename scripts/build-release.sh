@@ -10,7 +10,8 @@
 # Afterwards the built app is searched for $HOME, and the script fails if
 # it's still there. It then downloads the source of the bundled GPL
 # emulators (scripts/fetch-sources.sh), which every release must ship
-# alongside the DMG. Always build releases with this script.
+# alongside the DMG. Finally the app is installed into ~/Applications,
+# replacing any older copy. Always build releases with this script.
 set -eu
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
@@ -33,3 +34,10 @@ echo "Checked: no $HOME paths in the release build."
 
 # Shipping DOSBox Staging and FS-UAE binaries means shipping their source.
 "$ROOT/scripts/fetch-sources.sh" "$TARGET/bundle/source"
+
+# Install the new build for everyday use.
+APPS="$HOME/Applications"
+mkdir -p "$APPS"
+rm -rf "$APPS/Floppy.app"
+ditto "$TARGET/bundle/macos/Floppy.app" "$APPS/Floppy.app"
+echo "Installed $APPS/Floppy.app"

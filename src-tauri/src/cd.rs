@@ -53,6 +53,7 @@
 //! Only these files (the list, the disc and its manifest) cross between
 //! programs (rule 2).
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
@@ -471,13 +472,29 @@ fn sha256_of(path: &Path) -> std::io::Result<String> {
 /// list. A file counts when it isn't a system file, the library refused
 /// it, or it's damaged. A good copy that just wasn't needed doesn't, and
 /// neither do `rom.key` files, which are only ever companions.
-fn unusable_under(root: &Path, disc: &str, files: &[(PathBuf, u64)], candidates: &[Candidate], filled: &Filled) -> Vec<IgnoredFile> {
+/// `only`: the disc paths (relative, `/`-separated) of the files that
+/// answered a missing-files line, when the disc's list is known
+/// (discs::setup_files). Other files are left alone.
+fn unusable_under(
+    root: &Path,
+    disc: &str,
+    files: &[(PathBuf, u64)],
+    candidates: &[Candidate],
+    filled: &Filled,
+    only: Option<&HashSet<String>>,
+) -> Vec<IgnoredFile> {
     let recorded = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
     let mut out = Vec::new();
     for (path, size) in files.iter().filter(|(p, _)| p.starts_with(root)) {
         let name = file_name(path);
         if name.eq_ignore_ascii_case("rom.key") || filled.used.contains(path) {
             continue;
+        }
+        if let Some(only) = only {
+            let rel = path.strip_prefix(root).map(|r| r.to_string_lossy().replace('\\', "/")).unwrap_or_default();
+            if !only.iter().any(|p| p.eq_ignore_ascii_case(&rel)) {
+                continue;
+            }
         }
         let reason = if let Some((_, e)) = filled.failed.iter().find(|(p, _)| p == path) {
             e.clone()
@@ -504,7 +521,8 @@ fn track_disc(
     filled: &Filled,
     report: &mut CdImport,
 ) -> Result<(), String> {
-    let unusable = unusable_under(root, &manifest.id, files, candidates, filled);
+    let only = discs::setup_files(library, manifest);
+    let unusable = unusable_under(root, &manifest.id, files, candidates, filled, only.as_ref());
     report.unusable.extend(unusable.iter().map(|f| format!("{}: {}", f.name, f.reason)));
     let still_missing: Vec<Slot> = report.still_missing.iter().filter_map(|l| Slot::from_label(l)).collect();
     report.disc = Some(discs::record_import(library, manifest, unusable, &still_missing)?);
@@ -992,6 +1010,41 @@ mod tests {
         discs::ask_again(&lib, Slot::MacBoot).unwrap();
         write_list(&lib, &t.path().join("again.txt")).unwrap();
         assert!(fs::read_to_string(t.path().join("again.txt")).unwrap().contains("System 7.5.3.img"));
+    }
+
+    #[test]
+    fn apps_on_a_request_disc_never_go_on_the_ignore_list() {
+        let t = TempDir::new();
+        let lib = Library::new(t.path().join("lib"));
+        let request = crate::request::build(&lib).unwrap().unwrap();
+        discs::record_list(&lib, &request.text, &request.slot_lines).unwrap();
+        let line_of = |needle: &str| request.text.lines().position(|l| l == needle).unwrap() + 1;
+
+        // An app the request asked for, with its folder gathered, and a
+        // junk file on a setup line.
+        let cd = t.path().join("cd");
+        fs::create_dir_all(cd.join("WP51")).unwrap();
+        fs::write(cd.join("WP51/WP.EXE"), b"MZ wordperfect").unwrap();
+        fs::write(cd.join("WP51/WP.FIL"), b"support file").unwrap();
+        let junk = b"not a ROM at all".to_vec();
+        fs::write(cd.join("Quadra650.ROM"), &junk).unwrap();
+        fs::write(
+            cd.join(discs::MANIFEST),
+            format!(
+                r#"{{"format": "diskette-burn", "version": 1, "id": "disc-2", "list": {{"sha1": "{}"}}, "lines": [],
+                    "files": [{{"path": "WP51/WP.EXE", "lines": [{}]}}, {{"path": "Quadra650.ROM", "lines": [{}]}}]}}"#,
+                crate::sha1::hex(request.text.as_bytes()),
+                line_of("WP.EXE"),
+                line_of("Quadra650.ROM"),
+            ),
+        )
+        .unwrap();
+
+        let report = import_cd(&lib, &cd).unwrap();
+        assert_eq!(report.unusable, vec!["Quadra650.ROM: Not a system file Floppy recognizes.".to_string()]);
+        let ignored = discs::ignored_files(&lib);
+        assert_eq!(ignored.len(), 1);
+        assert_eq!(ignored[0].sha256, sha256_hex(&junk));
     }
 
     #[test]

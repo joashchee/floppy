@@ -13,6 +13,7 @@ use crate::library::{GuestOs, GuestSystem, Library, LibraryApp, LibraryDoc, Syst
 use crate::cd::{self, CdImport};
 use crate::discs;
 use crate::handlers;
+use crate::request;
 use crate::verify;
 use crate::media::{self, MediaWatch, OldMedia};
 use crate::{amiga, dos, mac};
@@ -201,6 +202,69 @@ pub async fn import_apps_disc(app: AppHandle, path: String) -> Result<handlers::
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// Whether Diskette is running, so Floppy can offer to ask it (request.rs).
+#[tauri::command]
+pub async fn diskette_running() -> bool {
+    tauri::async_runtime::spawn_blocking(|| request::is_running(request::DISKETTE)).await.unwrap_or(false)
+}
+
+/// How many setup files and apps a request would ask for.
+#[tauri::command]
+pub fn request_summary(state: State<AppState>) -> Result<request::RequestSummary, String> {
+    request::summary(&state.library)
+}
+
+/// Asks Diskette for every setup file and app Floppy still needs
+/// (request.rs). Its disc comes back as an opened file.
+#[tauri::command]
+pub fn ask_diskette(state: State<AppState>) -> Result<request::RequestSummary, String> {
+    request::send(&state.library)
+}
+
+/// Whether `path` is a disc Diskette's Burn A CD made (discs.rs).
+#[tauri::command]
+pub fn is_burn_disc(path: String) -> bool {
+    let path = Path::new(&path);
+    path.is_file() && discs::iso_application_id(path).as_deref() == Some(discs::APPLICATION_ID)
+}
+
+/// What a disc brought: setup files and apps.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiscImport {
+    setup: CdImport,
+    apps: handlers::AppsImport,
+}
+
+/// Imports everything on a disc that answers a request or a list: the
+/// system files it fills slots with (cd.rs), then the old apps on it
+/// (handlers.rs). One mount for both.
+#[tauri::command]
+pub async fn import_disc(app: AppHandle, path: String) -> Result<DiscImport, String> {
+    let state = app.state::<AppState>();
+    if running_map(&state).values().any(|o| o.single_instance()) {
+        return Err("Quit Basilisk II and FS-UAE before importing a disc.".into());
+    }
+    let handle = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let library = &handle.state::<AppState>().library;
+        cd::with_disc(library, &PathBuf::from(path), |root| {
+            let setup = cd::import_from_dir(library, root)?;
+            let apps = handlers::import_apps_from_dir(library, root)?;
+            Ok(DiscImport { setup, apps })
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Files the system asked Floppy to open (Diskette sending a disc back,
+/// or Open With in Finder), taken once each.
+#[tauri::command]
+pub fn take_opened_files(opened: State<request::Opened>) -> Vec<String> {
+    std::mem::take(&mut *opened.0.lock().unwrap_or_else(|p| p.into_inner())).into_iter().map(|p| p.to_string_lossy().into_owned()).collect()
 }
 
 /// Records whether an app opened a document's file type correctly.

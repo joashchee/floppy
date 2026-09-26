@@ -12,6 +12,7 @@ mod handlers;
 mod known_files;
 mod library;
 mod media;
+mod request;
 mod sha1;
 mod mac;
 #[cfg(test)]
@@ -29,7 +30,9 @@ use tauri::Manager;
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_log::Builder::new().build())
+        // Info and up: Trace/Debug floods the terminal with windowing
+        // (tao) events.
+        .plugin(tauri_plugin_log::Builder::new().level(log::LevelFilter::Info).build())
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let app_data_dir = app.path().app_data_dir().expect("failed to resolve app data dir");
@@ -57,6 +60,7 @@ pub fn run() {
                 });
             }
             app.manage(media);
+            app.manage(request::Opened::default());
             app.manage(AppState {
                 library,
                 running: Arc::new(Mutex::new(HashMap::new())),
@@ -100,7 +104,29 @@ pub fn run() {
             commands::old_media,
             commands::dismiss_media,
             commands::copy_old_media,
+            commands::diskette_running,
+            commands::request_summary,
+            commands::ask_diskette,
+            commands::is_burn_disc,
+            commands::import_disc,
+            commands::take_opened_files,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|handle, event| {
+            // A file opened with Floppy: Diskette sending back a disc it
+            // made for a request (request.rs), or Open With in Finder.
+            // Queued for the window, which may not be listening yet.
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Opened { urls } = event {
+                use tauri::Emitter;
+                let paths: Vec<std::path::PathBuf> = urls.iter().filter_map(|u| u.to_file_path().ok()).collect();
+                if let (false, Some(opened)) = (paths.is_empty(), handle.try_state::<request::Opened>()) {
+                    opened.0.lock().unwrap_or_else(|p| p.into_inner()).extend(paths);
+                    let _ = handle.emit("files-opened", ());
+                }
+            }
+            #[cfg(not(target_os = "macos"))]
+            let _ = (handle, event);
+        });
 }

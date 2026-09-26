@@ -1,18 +1,23 @@
-import { useEffect, useMemo, useState, type ReactElement } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactElement } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { Dialog } from "./components/Dialog";
+import { applyTheme, loadTheme, type Theme } from "./lib/theme";
 import { ProgressBar } from "./components/ProgressBar";
 import {
   AmigaAppIcon,
   AppMarkIcon,
   ChipIcon,
+  DiscIcon,
   DosAppIcon,
+  ExportIcon,
   FileIcon,
   FolderIcon,
+  GearIcon,
+  InfoIcon,
   MacAppIcon,
   PlayIcon,
   PromptIcon,
@@ -138,6 +143,34 @@ function describeImport(r: CdImport): string {
   return from + added + missing + unusable + gone;
 }
 
+/** request.rs `RequestSummary`: what asking Diskette would ask for. */
+interface RequestSummary {
+  setup: number;
+  apps: number;
+}
+
+/** commands.rs `DiscImport`: what a disc brought. */
+interface DiscImport {
+  setup: CdImport;
+  apps: { imported: string[]; already: string[]; failed: string[] };
+}
+
+function plural(n: number, one: string, many = `${one}s`): string {
+  return `${n} ${n === 1 ? one : many}`;
+}
+
+/** What Floppy would ask Diskette for, in words. */
+function describeRequest(r: RequestSummary): string {
+  const parts = [
+    r.setup ? `${r.setup === 1 ? "the setup file" : `the ${r.setup} setup files`}` : null,
+    r.apps ? `${plural(r.apps, "old app")} that open old files` : null,
+  ].filter(Boolean);
+  return parts.join(" and ");
+}
+
+/** How often to check whether Diskette is running. */
+const DISKETTE_POLL_MS = 5000;
+
 function App() {
   const [apps, setApps] = useState<LibraryApp[]>([]);
   const [guest, setGuest] = useState<GuestOs>("dos");
@@ -158,6 +191,14 @@ function App() {
   const [verifyNote, setVerifyNote] = useState("");
   const [tests, setTests] = useState<HandlerTest[]>([]);
   const [confirmRemove, setConfirmRemove] = useState<LibraryApp | null>(null);
+  const [gearOpen, setGearOpen] = useState(false);
+  const [disketteRunning, setDisketteRunning] = useState(false);
+  const [request, setRequest] = useState<RequestSummary>({ setup: 0, apps: 0 });
+  // "Not Now" on the Ask Diskette strip, until Floppy is reopened.
+  const [askDismissed, setAskDismissed] = useState(false);
+  const [aboutOpen, setAboutOpen] = useState(false);
+  const [theme, setTheme] = useState<Theme>(loadTheme);
+  const gearRef = useRef<HTMLDivElement>(null);
   const [nameDraft, setNameDraft] = useState("");
 
   const ui = GUEST_UI[guest];
@@ -175,8 +216,56 @@ function App() {
   const guestRunning = apps.some((a) => a.os === guest && running.has(a.id));
   const missingSetup = useMemo(() => missingSetupFiles(statuses), [statuses]);
   const setupNeeded = missingSetup.length > 0;
+  const requestTotal = request.setup + request.apps;
+
+  // Whether Diskette is running, so Floppy can offer to ask it (request.rs).
+  useEffect(() => {
+    let alive = true;
+    const check = () =>
+      invoke<boolean>("diskette_running").then(
+        (r) => alive && setDisketteRunning(r),
+        () => {},
+      );
+    void check();
+    const timer = setInterval(check, DISKETTE_POLL_MS);
+    return () => {
+      alive = false;
+      clearInterval(timer);
+    };
+  }, []);
+
+  // What a request would ask for, kept current as setup and the library change.
+  useEffect(() => {
+    if (!disketteRunning) return;
+    invoke<RequestSummary>("request_summary").then(setRequest, () => {});
+  }, [disketteRunning, apps, statuses]);
   // Basilisk II and FS-UAE use the system files, so they can't change mid-run.
   const systemInUse = apps.some((a) => a.os !== "dos" && running.has(a.id));
+
+  useEffect(() => applyTheme(theme), [theme]);
+
+  // The gear menu closes on a click outside it or Escape.
+  useEffect(() => {
+    if (!gearOpen) return;
+    function onPointerDown(e: MouseEvent) {
+      if (gearRef.current && !gearRef.current.contains(e.target as Node)) setGearOpen(false);
+    }
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") setGearOpen(false);
+    }
+    document.addEventListener("mousedown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [gearOpen]);
+
+  /** Runs a gear-menu item, closing the menu first. */
+  function fromGear(action: () => void) {
+    setGearOpen(false);
+    action();
+  }
 
   useEffect(() => {
     setNameDraft(selected?.name ?? "");
@@ -260,6 +349,10 @@ function App() {
       }
     })();
     const unlisten = listen("running-changed", () => void refreshRunning());
+    // Files opened with Floppy (a disc Diskette sends back, request.rs).
+    // Taken once here too, for files that arrived before the window.
+    const unlistenOpened = listen("files-opened", () => void openedRef.current());
+    void openedRef.current();
     // Old disks macOS couldn't mount (media.rs), and copy progress.
     invoke<OldMedia[]>("old_media").then(setOldMedia, () => {});
     const unlistenMedia = listen<OldMedia[]>("old-media-changed", (e) => setOldMedia(e.payload));
@@ -272,6 +365,7 @@ function App() {
     return () => {
       unlisten.then((f) => f());
       unlistenSession.then((f) => f());
+      unlistenOpened.then((f) => f());
       unlistenMedia.then((f) => f());
       unlistenProgress.then((f) => f());
     };
@@ -296,8 +390,7 @@ function App() {
         const zone = zoneAt(event.payload.position);
         setDragging(false);
         setDropZone(null);
-        if (zone === "setup") void addSetupFiles(event.payload.paths);
-        else if (zone === "app") void importPaths(event.payload.paths);
+        if (zone) void routeDrop(zone, event.payload.paths);
       }
     });
     return () => {
@@ -307,6 +400,65 @@ function App() {
     // screen) and when setup is finished (the setup target goes away).
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [guest, setupNeeded]);
+
+  /** A disc Diskette made (Burn A CD) is imported whole, wherever it's dropped; anything else goes to the zone. */
+  async function routeDrop(zone: DropZone, paths: string[]) {
+    const discs: string[] = [];
+    const rest: string[] = [];
+    for (const p of paths) (await invoke<boolean>("is_burn_disc", { path: p }) ? discs : rest).push(p);
+    for (const d of discs) await importDisc(d);
+    if (!rest.length) return;
+    if (zone === "setup") await addSetupFiles(rest);
+    else await importPaths(rest);
+  }
+
+  /** Files opened with Floppy: a disc from Diskette, or anything Open With sent. */
+  async function takeOpened() {
+    try {
+      const paths = await invoke<string[]>("take_opened_files");
+      if (paths.length) await routeDrop("app", paths);
+    } catch (e) {
+      fail(e);
+    }
+  }
+  // The listener is registered once, so it calls the latest render's function.
+  const openedRef = useRef(takeOpened);
+  openedRef.current = takeOpened;
+
+  /** Imports everything on a disc Diskette made: setup files, then apps (commands.rs `import_disc`). */
+  async function importDisc(path: string) {
+    setError(null);
+    setMessage(null);
+    setBusy(`Reading ${baseName(path)}`);
+    try {
+      const r = await invoke<DiscImport>("import_disc", { path });
+      await refresh();
+      await refreshStatuses();
+      const apps = r.apps.imported.length ? ` Imported ${r.apps.imported.join(", ")}.` : "";
+      const already = r.apps.already.length ? ` Already in the library: ${r.apps.already.join(", ")}.` : "";
+      setMessage(describeImport(r.setup) + apps + already);
+      const problems = [...r.setup.skipped, ...r.apps.failed];
+      if (problems.length) setError(problems.join("\n"));
+    } catch (e) {
+      fail(e);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  /** Hands Diskette a list of everything still missing (request.rs); its disc comes back as an opened file. */
+  async function askDiskette() {
+    setError(null);
+    try {
+      const r = await invoke<RequestSummary>("ask_diskette");
+      setAskDismissed(true);
+      setMessage(
+        `Asked Diskette for ${describeRequest(r)}. If it finds any on your drives, it offers to Burn A CD, and the disc comes back here.`,
+      );
+    } catch (e) {
+      fail(e);
+    }
+  }
 
   /** Imports one after another: each copy is disk-bound, so running them in parallel wouldn't be faster. */
   async function importPaths(paths: string[]) {
@@ -700,6 +852,77 @@ function App() {
         </div>
         <div className="header-actions">
           <span className={`status-pill${status && !status.found ? " warn" : ""}`}>{emulatorLabel(status)}</span>
+          <div className="gear-menu-wrap" ref={gearRef}>
+            <button
+              type="button"
+              className="small icontext-btn gear-btn"
+              data-testid="gear-button"
+              title="Settings & about"
+              aria-label="Settings & about"
+              aria-haspopup="true"
+              aria-expanded={gearOpen}
+              onClick={() => setGearOpen((v) => !v)}
+            >
+              <GearIcon width={16} height={16} />
+            </button>
+            <div className={`gear-menu${gearOpen ? " open" : ""}`}>
+              <label className="menu-item menu-item-checkbox">
+                <input
+                  type="checkbox"
+                  data-testid="ansiapps-theme-toggle"
+                  checked={theme === "ansiapps"}
+                  onChange={(e) => setTheme(e.currentTarget.checked ? "ansiapps" : "modern")}
+                />
+                <span>ANSIapps theme (old-school DOS look)</span>
+              </label>
+              <div className="menu-sep" />
+              <div className="menu-note">Old apps you own that open old files</div>
+              <button type="button" className="menu-item" disabled={!!busy} onClick={() => fromGear(() => void saveWantedApps())}>
+                <ExportIcon />
+                <span>Save Wanted-Apps List…</span>
+              </button>
+              <button type="button" className="menu-item" disabled={!!busy} onClick={() => fromGear(() => void importAppsDisc(false))}>
+                <DiscIcon />
+                <span>Import Apps Disc…</span>
+              </button>
+              <button type="button" className="menu-item" disabled={!!busy} onClick={() => fromGear(() => void importAppsDisc(true))}>
+                <FolderIcon />
+                <span>Import Apps Folder…</span>
+              </button>
+              <button
+                type="button"
+                className="menu-item"
+                disabled={!!busy || !disketteRunning || requestTotal === 0}
+                title={
+                  !disketteRunning
+                    ? "Open Diskette first: it looks through your cataloged drives"
+                    : requestTotal === 0
+                      ? "Floppy has everything it can ask for"
+                      : undefined
+                }
+                onClick={() => fromGear(() => void askDiskette())}
+              >
+                <DiscIcon />
+                <span>Ask Diskette for Missing Files</span>
+              </button>
+              <div className="menu-sep" />
+              <button
+                type="button"
+                className="menu-item"
+                disabled={tests.length === 0}
+                title="Which apps opened which file types, from your answers. For docs/app-handlers.md; no document names."
+                onClick={() => fromGear(() => void exportTests())}
+              >
+                <ExportIcon />
+                <span>Export Test Report{tests.length > 0 ? ` (${tests.length})` : ""}…</span>
+              </button>
+              <div className="menu-sep" />
+              <button type="button" className="menu-item" onClick={() => fromGear(() => setAboutOpen(true))}>
+                <InfoIcon />
+                <span>About Floppy</span>
+              </button>
+            </div>
+          </div>
         </div>
       </header>
 
@@ -840,6 +1063,24 @@ function App() {
         </div>
       )}
 
+      {disketteRunning && requestTotal > 0 && !askDismissed && (
+        <div className="setup-drop media-offer">
+          <span className="setup-drop-icon">
+            <DiscIcon />
+          </span>
+          <p className="setup-drop-text">
+            <strong>Diskette is running.</strong> Ask it for {describeRequest(request)} Floppy still needs? It looks
+            through your cataloged drives, and if it finds any, offers to Burn A CD and sends the disc back here.
+          </p>
+          <button type="button" className="small primary" onClick={() => void askDiskette()} disabled={!!busy}>
+            Ask Diskette
+          </button>
+          <button type="button" className="small" onClick={() => setAskDismissed(true)}>
+            Not Now
+          </button>
+        </div>
+      )}
+
       {oldMedia.map((m) => (
         <div className="setup-drop media-offer" key={m.device}>
           <span className="setup-drop-icon">
@@ -887,29 +1128,6 @@ function App() {
             {GUEST_LABEL[guest]} Library
           </h2>
           <p className="desc">{ui.libraryDesc}</p>
-          <div className="system-row find-apps">
-            <span className="system-note">Old apps you own that open old files:</span>
-            <button type="button" className="small" disabled={!!busy} onClick={() => void saveWantedApps()}>
-              Save Wanted-Apps List…
-            </button>
-            <button type="button" className="small" disabled={!!busy} onClick={() => void importAppsDisc(false)}>
-              Import Apps Disc…
-            </button>
-            <button type="button" className="small" disabled={!!busy} onClick={() => void importAppsDisc(true)}>
-              Folder…
-            </button>
-            {tests.length > 0 && (
-              <button
-                type="button"
-                className="small"
-                onClick={() => void exportTests()}
-                title="Which apps opened which file types, from your answers. For docs/app-handlers.md; no document names."
-              >
-                Export Test Report ({tests.length})…
-              </button>
-            )}
-          </div>
-
           {guest !== "dos" && status && (
             <SystemSetup
               status={status}
@@ -1094,6 +1312,28 @@ function App() {
           )}
         </section>
       </div>
+
+      <Dialog open={aboutOpen} onClose={() => setAboutOpen(false)} title={`About Floppy v${__APP_VERSION__}`}>
+        <p>Run the old apps your files need, in the OS they were made for.</p>
+        <ul className="about-emulators">
+          {statuses.map((s) => (
+            <li key={s.os}>
+              <span>{GUEST_LABEL[s.os]}</span>
+              <span className={s.found ? "" : "warn"}>{emulatorLabel(s)}</span>
+            </li>
+          ))}
+        </ul>
+        <p>
+          Free software under the GNU GPL, version 2 or later. The emulators run as separate programs under their own
+          licenses. Floppy works offline: no network, no telemetry, no accounts. It never includes ROMs, operating
+          systems or apps; you bring your own.
+        </p>
+        <h3 className="about-section-title">Credits</h3>
+        <p data-testid="about-credits">
+          The ANSIapps theme's font is IBM VGA 8x16 from The Ultimate Oldschool PC Font Pack by VileR
+          (int10h.org/oldschool-pc-fonts), licensed under CC BY-SA 4.0 and included unmodified.
+        </p>
+      </Dialog>
 
       <Dialog
         open={!!confirmRemove}

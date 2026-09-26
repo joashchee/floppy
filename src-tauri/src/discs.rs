@@ -24,6 +24,7 @@
 //!
 //! All of it lives in `library/files-discs.json`.
 
+use std::collections::HashSet;
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
@@ -71,6 +72,18 @@ pub struct Manifest {
     pub list: Option<ManifestList>,
     #[serde(default)]
     pub lines: Vec<ManifestLine>,
+    #[serde(default)]
+    pub files: Vec<ManifestFile>,
+}
+
+/// A file on the disc, and the list lines it matched.
+#[derive(Deserialize, Debug)]
+pub struct ManifestFile {
+    /// Where it is on the disc, `/`-separated from the root.
+    #[serde(default)]
+    pub path: Option<String>,
+    #[serde(default)]
+    pub lines: Vec<usize>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -210,6 +223,31 @@ pub fn record_list(library: &Library, text: &str, lines: &[(usize, Slot)]) -> Re
     let excess = state.lists.len().saturating_sub(MAX_LISTS);
     state.lists.drain(..excess);
     save(library, &state)
+}
+
+/// When `manifest` answers a list Floppy saved, the disc paths of the
+/// files that matched one of its missing-files lines. Anything else on
+/// such a disc (an app a request also asked for, a gathered app's support
+/// files) isn't a system file that failed, so it never goes on the
+/// ignore list. `None` for a list Floppy doesn't know, or a manifest that
+/// doesn't list its files: then every file counts.
+pub fn setup_files(library: &Library, manifest: &Manifest) -> Option<HashSet<String>> {
+    if manifest.files.is_empty() {
+        return None;
+    }
+    let sha1 = &manifest.list.as_ref()?.sha1;
+    let state = load(library);
+    let list = state.lists.iter().find(|l| l.sha1.eq_ignore_ascii_case(sha1))?;
+    let slot_lines: HashSet<usize> = list.lines.iter().map(|(n, _)| *n).collect();
+    Some(
+        manifest
+            .files
+            .iter()
+            .filter(|f| f.lines.iter().any(|n| slot_lines.contains(n)))
+            .filter_map(|f| f.path.as_deref())
+            .map(|p| p.trim_start_matches('/').to_string())
+            .collect(),
+    )
 }
 
 /// What an import learned from a disc's manifest.

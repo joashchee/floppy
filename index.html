@@ -6,6 +6,17 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#14161a" />
     <title>Floppy</title>
+    <style>
+      /* ANSIapps theme (src/ansiapps-theme.css finishes the job once it loads) */
+      html[data-theme="ansiapps"], html[data-theme="ansiapps"] body { background: #0000aa; }
+    </style>
+    <!-- Applies the stored theme before first paint, so the ANSIapps theme
+         never flashes the modern one. Same key and value as src/lib/theme.ts. -->
+    <script>
+      try {
+        if (localStorage.getItem("floppy.theme") === "ansiapps") document.documentElement.dataset.theme = "ansiapps";
+      } catch (e) {}
+    </script>
   </head>
 
   <body>

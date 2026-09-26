@@ -33,7 +33,8 @@ gitignored `CLAUDE.local.md`, never in committed files.
    Other programs talk to it only across a process boundary, through
    documented plain interfaces: `floppy import [--os
    dos|mac-classic|amiga] <path>` and `floppy open <file>` (`cli.rs`), the missing-files list and
-   files disc (`cd.rs`), and later perhaps a URL scheme. Never read
+   files disc (`cd.rs`), the request list and `#reply-to:` disc
+   (`request.rs`), and later perhaps a URL scheme. Never read
    another app's private data (its database or internal files), never
    let Floppy code be linked into a closed-source program, and never copy
    closed-source code into this repo, which would publish it under the
@@ -137,6 +138,27 @@ gitignored `CLAUDE.local.md`, never in committed files.
   disc with its folder, once, nearest the root first, skipping ones
   already in the library.
 
+## Asking Diskette (`request.rs`)
+
+- While Diskette is running (bundle ID via `lsappinfo`, polled every
+  5 s) and something is missing, a strip and a gear-menu item offer
+  **Ask Diskette**. Floppy writes one request list
+  (`library/run/requests/Floppy wants.txt`): the missing-files list,
+  the wanted-apps lines under their `#gather:`/`#forks:` directives
+  (which apply to the lines after them), and `#reply-to:
+  com.ansiapps.floppy`. It's recorded like a saved list, then opened
+  with Diskette (`open -b`).
+- Diskette offers to Burn A CD and opens the finished ISO with Floppy.
+  Files opened with Floppy arrive as `RunEvent::Opened` (`lib.rs`),
+  queued in `request::Opened` until the window takes them. A Burn A CD
+  disc, opened or dropped anywhere, goes to `import_disc`: setup files
+  and apps from one mount.
+- On a disc answering a known list, only files the manifest says
+  matched a missing-files line can go on the ignore list
+  (`discs::setup_files`), so apps never do.
+- `tauri dev` has no bundle ID: Diskette's reply opens the installed
+  `~/Applications/Floppy.app`, not the dev build.
+
 ## Handler verification (`verify.rs`)
 
 - After each document session Floppy asks "Did <app> open <document>
@@ -226,6 +248,9 @@ gitignored `CLAUDE.local.md`, never in committed files.
   source into `src-tauri/target/release/bundle/source/`. Attach those to
   the GitHub release with the DMG: shipping their binaries means offering
   their source.
+  Last, it copies the new `Floppy.app` into `~/Applications/`, replacing
+  the old one, so the installed app is always the latest release build.
+  Outside the sandbox only: `~/Applications` isn't writable in it.
 - **Track platform parity** in `docs/platform-parity.md` whenever a
   feature uses a macOS-specific mechanism. Don't implement the
   Windows/Linux side early.
@@ -235,6 +260,19 @@ gitignored `CLAUDE.local.md`, never in committed files.
   Floppy's own `--accent` (phosphor green). Reuse existing components
   before adding a new UI element (`CLAUDE.local.md` says where the
   reference components live).
+- **There is always a Gears button.** The gear icon at the header's
+  top right (`data-testid="gear-button"`) is the one place for
+  infrequent app-level actions: settings, lists and reports to save,
+  imports from discs, and About Floppy. New actions of that kind go in
+  its menu, grouped with `.menu-sep`, never as extra buttons in the main
+  layout. Never remove it.
+- **Two themes: modern (default) and ANSIapps**, an old-school DOS
+  text-mode look toggled from the gear menu (`docs/ansiapps-theme.md`,
+  `src/ansiapps-theme.css`, `src/lib/theme.ts`). New UI stays on the
+  color tokens so the ANSIapps theme follows it, and gets checked in
+  both themes. The theme's font (`public/fonts/ansiapps/`) is CC BY-SA
+  4.0: ship it unmodified as its own file with its license and the
+  About credit. Never subset, convert or inline it.
 
 ## Not built yet (next steps)
 
