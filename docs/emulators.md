@@ -92,6 +92,16 @@ the end-to-end test runs a real program in it headlessly.
   links only system frameworks and its own SDL2, and it needs macOS 11
   (the arm64 floor). It's signed ad hoc. A copy the user installs or
   locates still works, and a located one wins over the bundled one.
+- **Linux** (2026-09-27): the same workflow's Linux job builds the Unix
+  port of the same commit on Ubuntu 22.04. It uses SDL2 2.32.10 from its
+  release source (SDL2's own SHA-256 pin), linked statically, with no
+  GTK and no GMP/MPFR (x86-64 uses the JIT and the IEEE FPU core). SDL
+  loads X11/Wayland and ALSA/PulseAudio/PipeWire at runtime, so the binary
+  links only libc and libstdc++, and the job checks that. Its extfs keeps
+  forks in `.rsrc/` and `.finf/` (`extfs_unix.cpp`), which is what Floppy
+  writes on Linux. Checked for `892eeb7`: it reads Floppy's generated
+  prefs and refuses a blank ROM cleanly. Booting needs a user's ROM, so
+  it isn't tested beyond that.
 - **Alternatives considered:**
   - Mini vMac (GPL-2.0): Mac Plus/II only, no shared host folder (disk
     images only), so transfers would need HFS image writing.

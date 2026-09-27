@@ -8,6 +8,12 @@ against the day the change was made.
 
 ## Unreleased
 
+- **Basilisk II for Linux** (2026-09-27): the Basilisk II workflow also
+  builds a Linux x86-64 binary (the Unix build with SDL2 linked
+  statically, so it needs only libc and libstdc++). A `platforms` input
+  picks the builds, and publishing to an existing release only adds what
+  it lacks. `fetch-basilisk.sh` fetches it on Linux, and Floppy bundles
+  it there like on macOS.
 - **Linux support, first pass** (2026-09-27):
   - Policy: macOS and Linux are supported, Windows comes later
     (`CLAUDE.md` rule 7, `docs/platform-parity.md`).

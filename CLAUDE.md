@@ -242,7 +242,8 @@ gitignored `CLAUDE.local.md`, never in committed files.
 
 - `mac.rs`: a classic app's code is in its resource fork and it's only an
   app if its Finder info says `APPL`. Basilisk II's extfs on a macOS host
-  reads both natively, so imports keep them: folder copies use `fs::copy`
+  reads both natively (on Linux, from `.rsrc/` and `.finf/` folders beside
+  the file), so imports keep them: folder copies use `fs::copy`
   (which copies forks on macOS), zips made on a Mac get their AppleDouble
   files (`__MACOSX/…/._name`, `._name`) merged back, and MacBinary `.bin`
   files are decoded. StuffIt/BinHex/Compact Pro archives are copied and
@@ -253,12 +254,16 @@ gitignored `CLAUDE.local.md`, never in committed files.
   **Unix** volume. There's no auto-open yet: the user opens the app there.
 - Basilisk II comes from `scripts/fetch-basilisk.sh` into the gitignored
   `src-tauri/resources/basilisk/`. Upstream publishes no binaries, so
-  it's Floppy's own universal build of a pinned kanjitalk755/macemu
-  commit: `.github/workflows/basilisk.yml` builds it and publishes a
-  `basilisk-ii-<date>-<commit>` release of this repo with the exact
-  source plus GMP and MPFR (statically linked, LGPL). A rebuild never
-  gives the same bytes, so after one, re-pin every hash in the fetch
-  script from the release's `SHA256SUMS`. A copy the user picks with
+  it's Floppy's own build of a pinned kanjitalk755/macemu commit: a
+  universal macOS app, and a Linux x86-64 binary (Unix build, SDL2 linked
+  statically, built on Ubuntu 22.04 for glibc reach).
+  `.github/workflows/basilisk.yml` builds them (input `platforms`: both,
+  macos or linux) and publishes a `basilisk-ii-<date>-<commit>` release
+  of this repo with the exact source plus GMP and MPFR (statically
+  linked on macOS, LGPL). Publishing to an existing release only adds the
+  files it lacks. A rebuild never gives the same bytes, so after one,
+  re-pin that platform's hashes in the fetch script from the release's
+  `SHA256SUMS` (macOS, sources) or `SHA256SUMS-Linux`. A copy the user picks with
   **Locate Basilisk II…** in the gear menu wins over the bundled one.
 
 ## How Amiga mode works
@@ -359,7 +364,7 @@ gitignored `CLAUDE.local.md`, never in committed files.
 - SheepShaver for PowerPC-only Mac apps (Mac OS 8.5 to 9.0.4).
 - Windows: Mac fork handling, FS-UAE paths, Basilisk II detection
   (`docs/platform-parity.md`).
-- Linux, still to do: a Basilisk II build to bundle, the old-media
+- Linux, still to do: the old-media
   watcher (udev and a polkit prompt), the Diskette handoff, files opened
   from the desktop (`.desktop` MIME types plus single-instance
   forwarding), and checking udisks disc mounting on a real desktop.
