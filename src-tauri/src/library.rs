@@ -934,7 +934,9 @@ fn is_host_clutter(name: &str) -> bool {
 }
 
 /// Copies a folder. `fs::copy` carries resource forks and Finder info on
-/// macOS, which a classic Mac import (`keep_forks`) depends on.
+/// macOS, which a classic Mac import (`keep_forks`) depends on. Elsewhere
+/// they're the `.rsrc`/`.finf` folders beside each file, copied like any
+/// other folder.
 fn copy_tree(src: &Path, dest: &Path, keep_forks: bool) -> io::Result<()> {
     fs::create_dir_all(dest)?;
     let walker = WalkDir::new(src).min_depth(1).follow_links(false).into_iter();
@@ -1263,7 +1265,25 @@ mod tests {
         assert!(lib.import(GuestOs::MacClassic, &empty).unwrap_err().contains("resource forks"));
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn mac_folder_keeps_basilisk_fork_folders() {
+        let t = TempDir::new();
+        let src = t.path().join("MacPaint");
+        fs::create_dir_all(src.join(".rsrc")).unwrap();
+        fs::create_dir_all(src.join(".finf")).unwrap();
+        fs::write(src.join("MacPaint"), b"").unwrap();
+        fs::write(src.join(".rsrc/MacPaint"), b"CODE").unwrap();
+        let mut info = [0u8; 32];
+        info[..8].copy_from_slice(b"APPLMPNT");
+        fs::write(src.join(".finf/MacPaint"), info).unwrap();
+        let lib = Library::new(t.path().join("lib"));
+        let app = lib.import(GuestOs::MacClassic, &src).unwrap();
+        assert_eq!(app.program.as_deref(), Some("MacPaint"));
+        let file = lib.os_root(GuestOs::MacClassic).join("MacPaint/MacPaint");
+        assert_eq!(crate::mac::resource_fork_len(&file), 4);
+    }
+
     #[test]
     fn mac_zip_with_macosx_folder_keeps_the_app() {
         let t = TempDir::new();

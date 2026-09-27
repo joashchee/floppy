@@ -231,7 +231,7 @@ gitignored `CLAUDE.local.md`, never in committed files.
 - DOSBox Staging is spawned with `--noprimaryconf --nolocalconf --conf
   <file>`, so the user's own DOSBox settings never apply.
 - DOSBox Staging comes from `scripts/fetch-dosbox.sh` (pinned version and
-  SHA-256) into the gitignored `src-tauri/resources/dosbox/`, which
+  SHA-256 per platform: the macOS DMG, the Linux x86-64 tarball) into the gitignored `src-tauri/resources/dosbox/`, which
   tauri.conf.json bundles as a resource. Bump the version and hash there
   together, along with `SRC_URL`/`SRC_SHA256`, the matching source that
   every release ships (`scripts/fetch-sources.sh`).
@@ -270,7 +270,7 @@ gitignored `CLAUDE.local.md`, never in committed files.
   DF0 (its other floppies plus Workbench in the swap list), or Workbench
   for folder apps, and the library as the non-booting `Floppy:` drive.
 - FS-UAE comes from `scripts/fetch-fs-uae.sh` (pinned version and per-arch
-  SHA-256) into the gitignored `src-tauri/resources/fs-uae/`.
+  SHA-256, macOS and Linux x86-64) into the gitignored `src-tauri/resources/fs-uae/`.
 
 ## Testing
 
@@ -281,7 +281,11 @@ gitignored `CLAUDE.local.md`, never in committed files.
   FS-UAE can't run headless (it needs OpenGL and a window server), and
   Basilisk II can't boot without a user's ROM, so Mac and Amiga launches
   are covered by config-generation unit tests only. Fork handling tests
-  run only on a macOS host.
+  run on both hosts, each against its own layout (named forks on macOS,
+  `.rsrc`/`.finf` folders elsewhere); the `fs::copy` one is macOS only.
+- On Linux the build needs Tauri's system libraries (WebKitGTK 4.1,
+  GTK 3, librsvg, libsoup 3; see Tauri's prerequisites) and the fetch
+  scripts' Linux x86-64 pins. The e2e test runs there too.
 - `npx tsc --noEmit` for the frontend.
 - Run all three before calling a change done. A bug report becomes a
   failing test first, then the fix.
@@ -350,8 +354,12 @@ gitignored `CLAUDE.local.md`, never in committed files.
   an Amiga folder app (`user-startup`). Today the guest boots and the
   user opens the app.
 - SheepShaver for PowerPC-only Mac apps (Mac OS 8.5 to 9.0.4).
-- Windows/Linux: Mac fork handling, FS-UAE paths, Basilisk II detection
+- Windows: Mac fork handling, FS-UAE paths, Basilisk II detection
   (`docs/platform-parity.md`).
+- Linux, still to do: a Basilisk II build to bundle, the old-media
+  watcher (udev and a polkit prompt), the Diskette handoff, files opened
+  from the desktop (`.desktop` MIME types plus single-instance
+  forwarding), and checking udisks disc mounting on a real desktop.
 - A universal (arm64 + x86-64) build: the FS-UAE fetch is per-arch.
 - More known-good hashes as users report copies that aren't listed (the
   IIci's single-file ROM dump, for one). `known_files.rs` is generated:

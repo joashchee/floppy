@@ -17,6 +17,10 @@
 //!   for a Mac, `.hdf`/`.adf` for an Amiga), so Launch mounts it in Basilisk
 //!   II or FS-UAE. Neither can add a disk while running, or read `/dev`
 //!   without root, so a copy is the only way in.
+//!
+//! Only the macOS side is built (docs/platform-parity.md); elsewhere the
+//! watcher is a stub and the disk-judging code goes unused.
+#![cfg_attr(not(target_os = "macos"), allow(dead_code, unused_imports))]
 
 use std::collections::{HashMap, HashSet};
 use std::io::{Read, Write};

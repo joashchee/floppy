@@ -8,6 +8,22 @@ against the day the change was made.
 
 ## Unreleased
 
+- **Linux support, first pass** (2026-09-27):
+  - Builds on Linux: `flate2`'s pure-Rust backend is now a direct
+    dependency. Only a macOS-only Tauri dependency had been switching it
+    on, so zip imports failed to compile elsewhere.
+  - `fetch-dosbox.sh` and `fetch-fs-uae.sh` fetch the pinned Linux x86-64
+    releases, which Floppy bundles in its `.deb`/AppImage. Without them,
+    `dosbox-staging` (or a `dosbox` that is Staging), `fs-uae` and
+    `BasiliskII` on `PATH` are used. The DOSBox end-to-end tests pass on
+    Linux.
+  - Classic Mac imports work on Linux: resource forks and Finder info go
+    in the `.rsrc/` and `.finf/` folders Basilisk II reads there.
+  - Disc images (Import Files Disc, dropped setup files) mount read-only
+    through udisks, with no root needed.
+  - `build-release.sh` checks the Linux bundles for home-folder paths.
+    "Show in Finder" reads "Show in Folder", and Locate Basilisk II… takes
+    any program.
 - **Errors field, names that follow Is and Version, exports that don't
   repeat** (2026-09-27):
   - Each app's details panel has an **Errors** field: what goes wrong
