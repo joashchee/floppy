@@ -9,8 +9,9 @@ against the day the change was made.
 ## Unreleased
 
 - **Back up Floppy's system: Burn A CD** (2026-09-27): once the system
-  is complete (the Mac has its ROM and startup disk, or the Amiga its
-  Kickstart, and nothing is half set up), a strip offers to Burn A CD:
+  is fully working (every guest has every setup file: the Mac its ROM
+  and startup disk, the Amiga its Kickstart and Workbench, and any guest
+  added later its own), a strip offers to Burn A CD:
   one compressed disc image (.iso) of the setup files and their
   settings, for restoring after a reinstall or on a new computer. **Not
   Now** holds until the files change. **Backup Floppy System…** in the

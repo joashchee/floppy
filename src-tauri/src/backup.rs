@@ -20,11 +20,12 @@
 //! Apps and documents aren't included: this is the system that makes
 //! Floppy work, not the library.
 //!
-//! Floppy offers to make one ("Burn A CD") once its system is complete:
-//! no guest half set up (a Mac with its ROM and startup disk, an Amiga
-//! with a Kickstart), and at least one ready. It asks once per set of
-//! files: `library/backup.json` remembers the set last backed up or
-//! turned down.
+//! Floppy offers to make one ("Burn A CD") once its system is fully
+//! working: every guest has every setup file, which is every slot in
+//! `cd::SLOTS` (today the Mac ROM and startup disk, the Kickstart and
+//! Workbench; a guest added later joins by adding its slots there).
+//! AROS doesn't count as a Kickstart. It asks once per set of files:
+//! `library/backup.json` remembers the set last backed up or turned down.
 
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -109,7 +110,7 @@ fn save_state(library: &Library, s: &State) -> Result<(), String> {
 pub struct Status {
     /// Setup files a backup would hold ("Mac ROM", …).
     pub slots: Vec<String>,
-    /// No guest is half set up, and at least one is ready.
+    /// Every guest has every setup file (`cd::SLOTS`).
     pub complete: bool,
     /// Offer Burn A CD: complete, and this set wasn't backed up or turned down.
     pub offer: bool,
@@ -150,12 +151,10 @@ fn fingerprint(files: &[(Slot, PathBuf)]) -> String {
 
 pub fn status(library: &Library) -> Result<Status, String> {
     let files = present(library)?;
-    let has = |slot: Slot| files.iter().any(|(s, _)| *s == slot);
-    let mac = (has(Slot::MacRom), has(Slot::MacBoot));
-    let amiga_started = has(Slot::Kickstart) || has(Slot::Workbench);
-    let half = (mac.0 != mac.1) || (amiga_started && !has(Slot::Kickstart));
-    let ready = (mac.0 && mac.1) || has(Slot::Kickstart);
-    let complete = ready && !half;
+    // Every setup file of every guest: `cd::SLOTS` lists them all, so a
+    // guest added later counts as soon as its slots are there. AROS
+    // doesn't stand in for a Kickstart here.
+    let complete = cd::missing_slots(library)?.is_empty();
     let state = load_state(library);
     let print = fingerprint(&files);
     let offer = complete && state.backed_up.as_deref() != Some(&print) && state.declined.as_deref() != Some(&print);
@@ -420,16 +419,27 @@ mod tests {
         let t = TempDir::new();
         let lib = Library::new(t.path().join("lib"));
         assert_eq!(status(&lib).unwrap(), Status::default());
-        // A Mac with only its ROM is half set up.
+        // A whole Mac isn't a whole system while the Amiga lacks anything.
         set(&lib, t.path(), GuestOs::MacClassic, SystemFile::Rom, "q650.rom", &mac_rom());
-        assert!(!status(&lib).unwrap().complete);
         set(&lib, t.path(), GuestOs::MacClassic, SystemFile::Boot, "System 7.5.3.img", &mac_disk());
+        assert!(!status(&lib).unwrap().complete);
+        // Nor does AROS stand in for a Kickstart.
+        lib.set_aros(GuestOs::Amiga, true).unwrap();
+        assert!(!status(&lib).unwrap().complete);
+        set(&lib, t.path(), GuestOs::Amiga, SystemFile::Rom, "kick13.rom", &kick13());
+        assert!(!status(&lib).unwrap().complete, "Workbench is a setup file too");
+        let wb = t.path().join("WB");
+        fs::create_dir_all(&wb).unwrap();
+        fs::write(wb.join("Disk.info"), b"x").unwrap();
+        lib.set_system_file(GuestOs::Amiga, SystemFile::Boot, &wb, None).unwrap();
         let s = status(&lib).unwrap();
         assert!(s.complete && s.offer, "{s:?}");
         decline(&lib).unwrap();
         assert!(!status(&lib).unwrap().offer, "Not Now holds for this set");
-        // A new file makes a new set.
-        set(&lib, t.path(), GuestOs::Amiga, SystemFile::Rom, "kick13.rom", &kick13());
+        // A replaced file makes a new set.
+        let mut other = kick13();
+        other[9] = 1;
+        set(&lib, t.path(), GuestOs::Amiga, SystemFile::Rom, "kick13b.rom", &other);
         assert!(status(&lib).unwrap().offer);
         make(&lib, &t.path().join("b.iso")).unwrap();
         let s = status(&lib).unwrap();

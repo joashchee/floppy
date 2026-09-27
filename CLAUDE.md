@@ -126,9 +126,12 @@ gitignored `CLAUDE.local.md`, never in committed files.
   manifest: slot, name, size, SHA-256 per file) and a `README.TXT` on
   restoring with or without Floppy. Any OS mounts it; the files are
   plain zip entries.
-- **Offered** by a strip once the system is complete (no guest half set
-  up: a Mac with ROM and startup disk, an Amiga with a Kickstart; at
-  least one ready), once per set of files: `library/backup.json` keeps
+- **Offered** by a strip once the system is fully working: every guest
+  has every setup file, meaning `cd::missing_slots` is empty (Mac ROM,
+  startup disk, Kickstart and Workbench today; AROS doesn't count as a
+  Kickstart). **A guest added later must add its setup files to
+  `cd::SLOTS`**, which puts them in the completeness check, the backup
+  and the restore with no other change. Offered once per set of files: `library/backup.json` keeps
   the fingerprint (slot, name, size, mtime) last backed up or turned
   down with **Not Now**. **Backup Floppy System…** in the gear menu
   explains it and does the same on demand.
