@@ -1,4 +1,5 @@
 mod amiga;
+mod backup;
 mod cd;
 mod cli;
 mod commands;
@@ -10,6 +11,7 @@ mod e2e;
 mod emulator;
 mod findings;
 mod handlers;
+mod iso;
 mod known_files;
 mod library;
 mod media;
@@ -83,6 +85,10 @@ pub fn run() {
             commands::write_missing_list,
             commands::import_setup_files,
             commands::setup_sources,
+            commands::backup_status,
+            commands::decline_backup,
+            commands::make_backup,
+            commands::is_backup_disc,
             commands::set_aros,
             commands::add_setup_report,
             commands::import_from_downloads,

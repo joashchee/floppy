@@ -115,6 +115,31 @@ gitignored `CLAUDE.local.md`, never in committed files.
   State is in `library/files-discs.json`. `sha1.rs` exists only to match
   a disc to the list it answers.
 
+## System backup (`backup.rs`, `iso.rs`)
+
+- **Burn A CD** backs up what makes Floppy work: the setup files (Mac
+  ROM and startup disk, Kickstart plus any `rom.key`, Workbench file or
+  folder) and their settings (Amiga model, AROS), not apps or
+  documents. It's one ISO 9660 disc image Floppy writes itself
+  (`iso.rs`, level 1, Application ID `FLOPPY SYSTEM BACKUP`) holding
+  `SYSTEM.ZIP` (Deflate-compressed, with a `floppy-backup.json`
+  manifest: slot, name, size, SHA-256 per file) and a `README.TXT` on
+  restoring with or without Floppy. Any OS mounts it; the files are
+  plain zip entries.
+- **Offered** by a strip once the system is complete (no guest half set
+  up: a Mac with ROM and startup disk, an Amiga with a Kickstart; at
+  least one ready), once per set of files: `library/backup.json` keeps
+  the fingerprint (slot, name, size, mtime) last backed up or turned
+  down with **Not Now**. **Backup Floppy System…** in the gear menu
+  explains it and does the same on demand.
+- **Restoring:** a backup disc dropped or opened anywhere, picked with
+  Import Files Disc or Choose Files, or found by Look in Downloads is
+  read directly, nothing mounted (`backup::restore`, reached through
+  `cd::import_dropped`/`import_cd`). Every file is checked against its
+  SHA-256, and only empty slots are filled (`CdImport.kept` lists the
+  rest). A library restored whole counts as backed up, so the offer
+  doesn't come straight back.
+
 ## Old media (`media.rs`)
 
 - macOS no longer mounts HFS (since 10.15), or Amiga disks. A watcher

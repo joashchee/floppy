@@ -205,6 +205,8 @@ export interface CdImport {
   unusable: string[];
   /** What the disc's manifest told Floppy (discs.rs), when it had one. */
   disc: DiscReport | null;
+  /** Slots a system backup had a file for, kept because they were set up already (backup.rs). */
+  kept: string[];
 }
 
 /** discs.rs `DiscReport`. */
@@ -286,3 +288,19 @@ export interface SetupSource {
 
 /** findings.rs `SETUP_REPORT_KINDS`. */
 export type SetupReportKind = "source-broken" | "didnt-work" | "better-source";
+
+/** backup.rs `Status`: whether to offer a system backup, and what it would hold. */
+export interface BackupStatus {
+  slots: string[];
+  complete: boolean;
+  offer: boolean;
+  /** Unix seconds. */
+  lastBackup: number | null;
+}
+
+/** backup.rs `Made`: what a backup disc held. */
+export interface BackupMade {
+  slots: string[];
+  originalBytes: number;
+  discBytes: number;
+}

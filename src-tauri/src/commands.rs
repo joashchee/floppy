@@ -12,6 +12,7 @@ use crate::documents::{self, Change, Opener};
 use crate::library::{GuestOs, GuestSystem, Library, LibraryApp, LibraryDoc, SystemFile};
 use crate::cd::{self, CdImport};
 use crate::discs;
+use crate::backup;
 use crate::findings;
 use crate::handlers;
 use crate::request;
@@ -276,6 +277,37 @@ pub fn request_summary(state: State<AppState>) -> Result<request::RequestSummary
 #[tauri::command]
 pub fn ask_diskette(state: State<AppState>) -> Result<request::RequestSummary, String> {
     request::send(&state.library)
+}
+
+/// Whether to offer a system backup, and what it would hold (backup.rs).
+#[tauri::command]
+pub fn backup_status(state: State<AppState>) -> Result<backup::Status, String> {
+    backup::status(&state.library)
+}
+
+/// Not Now on the backup offer, until the setup files change.
+#[tauri::command]
+pub fn decline_backup(state: State<AppState>) -> Result<(), String> {
+    backup::decline(&state.library)
+}
+
+/// Burns the system backup disc image to `path` (backup.rs).
+#[tauri::command]
+pub async fn make_backup(app: AppHandle, path: String) -> Result<backup::Made, String> {
+    let state = app.state::<AppState>();
+    if running_map(&state).values().any(|o| o.single_instance()) {
+        return Err("Quit Basilisk II and FS-UAE before backing up, so their disks aren't changing.".into());
+    }
+    let handle = app.clone();
+    tauri::async_runtime::spawn_blocking(move || backup::make(&handle.state::<AppState>().library, Path::new(&path)))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Whether `path` is a system backup disc Floppy made.
+#[tauri::command]
+pub fn is_backup_disc(path: String) -> bool {
+    backup::is_backup(Path::new(&path))
 }
 
 /// Whether `path` is a disc Diskette's Burn A CD made (discs.rs).

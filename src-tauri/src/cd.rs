@@ -481,6 +481,9 @@ pub struct CdImport {
     pub unusable: Vec<String>,
     /// What the disc's manifest told Floppy, when it had one.
     pub disc: Option<DiscReport>,
+    /// Slots a system backup had a file for, left as they were because
+    /// they're set up already (backup.rs).
+    pub kept: Vec<String>,
 }
 
 /// Fills every empty slot from the files under `root`. When `root` has a
@@ -652,6 +655,7 @@ pub fn import_dropped(library: &Library, paths: &[PathBuf]) -> Result<CdImport, 
     let mut mounts: Vec<Mount> = Vec::new();
     let mut files: Vec<(PathBuf, u64)> = Vec::new();
     let mut skipped = Vec::new();
+    let mut restored = CdImport::default();
     // Folders and discs that came with a manifest (discs.rs).
     let mut tracked: Vec<(PathBuf, discs::Manifest)> = Vec::new();
     for (i, path) in paths.iter().enumerate() {
@@ -669,6 +673,18 @@ pub fn import_dropped(library: &Library, paths: &[PathBuf]) -> Result<CdImport, 
             match crate::library::extract_zip(path, &dest, false) {
                 Ok(()) => files.extend(files_under(&dest)),
                 Err(e) => skipped.push(format!("Couldn't unpack {}: {e}", file_name(path))),
+            }
+            continue;
+        }
+        // Floppy's own backup disc is read directly (backup.rs).
+        if crate::backup::is_backup(path) {
+            match crate::backup::restore(library, path) {
+                Ok(r) => {
+                    restored.added.extend(r.added);
+                    restored.kept.extend(r.kept);
+                    skipped.extend(r.skipped);
+                }
+                Err(e) => skipped.push(e),
             }
             continue;
         }
@@ -700,6 +716,8 @@ pub fn import_dropped(library: &Library, paths: &[PathBuf]) -> Result<CdImport, 
     let filled = fill_slots(library, &candidates)?;
     let mut report = filled.report.clone();
     report.skipped = skipped;
+    report.added.splice(0..0, restored.added);
+    report.kept = restored.kept;
     for (root, manifest) in &tracked {
         track_disc(library, root, manifest, &files, &candidates, &filled, &mut report)?;
     }
@@ -724,7 +742,7 @@ fn is_partial_download(name: &str) -> bool {
 /// fetched a setup file in the browser. Only the folder and the folders
 /// directly in it are looked at, hidden entries and unfinished downloads
 /// are skipped, and nothing is ever mounted: a disc image there counts
-/// only when it's a setup file itself. Zips up to `DOWNLOADS_MAX_ZIP` are
+/// only when it's a setup file itself or a system backup (read directly). Zips up to `DOWNLOADS_MAX_ZIP` are
 /// unpacked to look inside. What isn't a setup file isn't reported.
 pub fn import_from_downloads(library: &Library, dir: &Path) -> Result<CdImport, String> {
     if missing_slots(library)?.is_empty() || !dir.is_dir() {
@@ -752,7 +770,11 @@ pub fn import_from_downloads(library: &Library, dir: &Path) -> Result<CdImport, 
             continue;
         }
         let this = (path.clone(), meta.len());
-        if DISC_IMAGE_EXTS.contains(&ext.as_str()) && candidates_in(std::slice::from_ref(&this)).is_empty() {
+        // A system backup (backup.rs) restores from here too.
+        if DISC_IMAGE_EXTS.contains(&ext.as_str())
+            && !crate::backup::is_backup(&path)
+            && candidates_in(std::slice::from_ref(&this)).is_empty()
+        {
             continue;
         }
         paths.push(path);
@@ -765,6 +787,9 @@ pub fn import_from_downloads(library: &Library, dir: &Path) -> Result<CdImport, 
 /// Reads a files disc: a disc image (mounted read-only for the
 /// duration), or a folder (a mounted disc, or its copied contents).
 pub fn import_cd(library: &Library, path: &Path) -> Result<CdImport, String> {
+    if crate::backup::is_backup(path) {
+        return crate::backup::restore(library, path);
+    }
     if path.is_dir() {
         return import_from_dir(library, path);
     }
@@ -1095,6 +1120,7 @@ mod tests {
                 skipped: vec![],
                 unusable: vec![],
                 disc: None,
+                kept: vec![],
             }
         );
         // The undamaged 3.1 copy won, and set the matching model.

@@ -292,6 +292,11 @@ impl Library {
         self.root.join("setup-reports.json")
     }
 
+    /// Which set of setup files was last backed up or turned down (backup.rs).
+    pub fn backup_path(&self) -> PathBuf {
+        self.root.join("backup.json")
+    }
+
     /// Emulators the user located themselves (emulator.rs).
     pub fn emulators_path(&self) -> PathBuf {
         self.root.join("emulators.json")

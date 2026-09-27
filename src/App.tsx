@@ -46,6 +46,8 @@ import {
   type MediaProgress,
   type OldMedia,
   type SetupTracking,
+  type BackupMade,
+  type BackupStatus,
   type SetupReportKind,
   type SetupSource,
   type StartupImport,
@@ -208,7 +210,8 @@ function describeImport(r: CdImport): string {
   const gone = r.disc?.notOnDrives.length
     ? ` Your drives have no usable ${r.disc.notOnDrives.join(" or ")}, so the next list stops asking for ${r.disc.notOnDrives.length === 1 ? "it" : "them"}.`
     : "";
-  return from + added + missing + unusable + gone;
+  const kept = r.kept?.length ? ` Kept what was set up already: ${r.kept.join(", ")}.` : "";
+  return from + added + kept + missing + unusable + gone;
 }
 
 /** request.rs `RequestSummary`: what asking Diskette would ask for. */
@@ -284,6 +287,9 @@ function App() {
   const [reportKind, setReportKind] = useState<SetupReportKind>("source-broken");
   const [reportSource, setReportSource] = useState("");
   const [reportNote, setReportNote] = useState("");
+  // The system backup: whether to offer Burn A CD, and the gear menu's dialog.
+  const [backup, setBackup] = useState<BackupStatus | null>(null);
+  const [backupOpen, setBackupOpen] = useState(false);
   const [theme, setTheme] = useState<Theme>(loadTheme);
   const gearRef = useRef<HTMLDivElement>(null);
   const [nameDraft, setNameDraft] = useState("");
@@ -329,6 +335,11 @@ function App() {
   // Any guest still missing setup files: while one is, a finished download
   // is worth looking for.
   const anySetupMissing = statuses.some((s) => s.os !== "dos" && (!s.system.rom || !s.system.boot));
+
+  // Whether the system is complete and not yet backed up, kept current as setup changes.
+  useEffect(() => {
+    invoke<BackupStatus>("backup_status").then(setBackup, () => {});
+  }, [statuses]);
 
   // However a real Kickstart arrived (dropped, Downloads, a files disc,
   // Choose…), say that it now replaces AROS.
@@ -544,7 +555,13 @@ function App() {
   async function routeDrop(zone: DropZone, paths: string[]) {
     const discs: string[] = [];
     const rest: string[] = [];
-    for (const p of paths) (await invoke<boolean>("is_burn_disc", { path: p }) ? discs : rest).push(p);
+    const backups: string[] = [];
+    for (const p of paths) {
+      if (await invoke<boolean>("is_backup_disc", { path: p })) backups.push(p);
+      else (await invoke<boolean>("is_burn_disc", { path: p }) ? discs : rest).push(p);
+    }
+    // A system backup restores wherever it's dropped (backup.rs, via cd.rs).
+    if (backups.length) await addSetupFiles(backups);
     for (const d of discs) await importDisc(d);
     if (!rest.length) return;
     if (zone === "setup") await addSetupFiles(rest);
@@ -830,6 +847,41 @@ function App() {
       if (!quiet) fail(e);
     } finally {
       if (!quiet) setBusy(null);
+    }
+  }
+
+  /** Burn A CD: a compressed disc image of the system's setup files and settings (backup.rs). */
+  async function burnBackup() {
+    setBackupOpen(false);
+    const day = new Date().toISOString().slice(0, 10);
+    const path = await save({
+      title: "Burn A CD: back up Floppy's system",
+      defaultPath: `Floppy System Backup ${day}.iso`,
+      filters: [{ name: "Disc image", extensions: ["iso"] }],
+    });
+    if (!path) return;
+    setError(null);
+    setMessage(null);
+    setBusy("Burning a CD");
+    try {
+      const r = await invoke<BackupMade>("make_backup", { path });
+      setBackup(await invoke<BackupStatus>("backup_status"));
+      setMessage(
+        `Burned ${baseName(path)}: ${r.slots.join(", ")}, ${formatBytes(r.originalBytes)} compressed to ${formatBytes(r.discBytes)}. Keep it somewhere safe. To restore, open it with Floppy or drop it on this window.`,
+      );
+    } catch (e) {
+      fail(e);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function declineBackup() {
+    try {
+      await invoke("decline_backup");
+      setBackup(await invoke<BackupStatus>("backup_status"));
+    } catch (e) {
+      fail(e);
     }
   }
 
@@ -1244,6 +1296,22 @@ function App() {
                 <span>Export Findings{findings && findingsTotal(findings) > 0 ? ` (${findingsTotal(findings)})` : ""}…</span>
               </button>
               <div className="menu-sep" />
+              <div className="menu-note">Your setup files</div>
+              <button
+                type="button"
+                className="menu-item"
+                disabled={!!busy || !backup?.slots.length}
+                title={
+                  backup?.slots.length
+                    ? "Burn A CD: one compressed disc image of your setup files and settings, to restore Floppy in one step."
+                    : "Nothing to back up yet: add a Mac or Amiga setup file first."
+                }
+                onClick={() => fromGear(() => setBackupOpen(true))}
+              >
+                <DiscIcon />
+                <span>Backup Floppy System…</span>
+              </button>
+              <div className="menu-sep" />
               <button type="button" className="menu-item" onClick={() => fromGear(() => setAboutOpen(true))}>
                 <InfoIcon />
                 <span>About Floppy</span>
@@ -1374,6 +1442,24 @@ function App() {
           </button>
         )}
       </div>
+
+      {backup?.offer && (
+        <div className="setup-drop media-offer">
+          <span className="setup-drop-icon">
+            <DiscIcon />
+          </span>
+          <p className="setup-drop-text">
+            <strong>Floppy's system is complete.</strong> Burn A CD to back it up: one compressed disc image of your{" "}
+            {backup.slots.join(", ")} and their settings, so a new computer or a reinstall is set up again in one step.
+          </p>
+          <button type="button" className="small primary" onClick={() => void burnBackup()} disabled={!!busy}>
+            Burn A CD…
+          </button>
+          <button type="button" className="small" onClick={() => void declineBackup()} disabled={!!busy}>
+            Not Now
+          </button>
+        </div>
+      )}
 
       {status && !status.found && (
         <div className="setup-drop">
@@ -1858,6 +1944,37 @@ function App() {
             onChange={(e) => setReportNote(e.target.value)}
           />
         </label>
+      </Dialog>
+
+      <Dialog
+        open={backupOpen}
+        onClose={() => setBackupOpen(false)}
+        title="Backup Floppy System"
+        actions={
+          <>
+            <button type="button" onClick={() => setBackupOpen(false)}>
+              Cancel
+            </button>
+            <button type="button" className="primary" disabled={!!busy} onClick={() => void burnBackup()}>
+              Burn A CD…
+            </button>
+          </>
+        }
+      >
+        <p>
+          Burns a CD: one compressed disc image (.iso) of everything that makes Floppy work, the same backup Floppy offers
+          when its system is complete. It holds your {backup?.slots.length ? backup.slots.join(", ") : "setup files"}
+          {backup?.slots.includes("Kickstart ROM") ? ", and settings such as the Amiga model" : ""}. Your apps and documents
+          aren't included.
+        </p>
+        <p>
+          To restore, on this computer or a new one, open the disc image with Floppy or drop it on its window. Floppy
+          checks every file and fills in whatever isn't set up yet, and never replaces what is.
+          {backup?.lastBackup
+            ? ` Last backed up ${new Date(backup.lastBackup * 1000).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" })}.`
+            : ""}
+        </p>
+        <p>These are your own copies of copyrighted system software: keep the disc for yourself.</p>
       </Dialog>
 
       <Dialog open={aboutOpen} onClose={() => setAboutOpen(false)} title={`About Floppy v${__APP_VERSION__}`}>

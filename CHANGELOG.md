@@ -8,6 +8,17 @@ against the day the change was made.
 
 ## Unreleased
 
+- **Back up Floppy's system: Burn A CD** (2026-09-27): once the system
+  is complete (the Mac has its ROM and startup disk, or the Amiga its
+  Kickstart, and nothing is half set up), a strip offers to Burn A CD:
+  one compressed disc image (.iso) of the setup files and their
+  settings, for restoring after a reinstall or on a new computer. **Not
+  Now** holds until the files change. **Backup Floppy System…** in the
+  gear menu does the same whenever you like. Floppy writes the ISO
+  itself (no tools needed, same on macOS and Linux). To restore, open or
+  drop the disc (or leave it in Downloads): Floppy reads it without
+  mounting, checks each file's SHA-256, and fills only what isn't set
+  up, keeping the rest. A 25 MB Mac setup made a 72 KB disc in testing.
 - **AROS source notice in every release** (2026-09-27): the release
   script's source step (`scripts/fetch-sources.sh`) also writes
   `AROS-SOURCE.txt`, naming the AROS build inside the bundled FS-UAE (read
