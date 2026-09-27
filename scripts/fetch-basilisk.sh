@@ -18,7 +18,7 @@ set -eu
 
 VERSION=2026-08-30-892eeb7
 MAC_SHA256=795a4ab20e4aa06658eb4d01d9c112c2dd66d5fef95c00063f7cd45b0fc90c26
-LINUX_SHA256=LINUX_SHA256_PENDING
+LINUX_SHA256=dd2dbfeaa7ed1b337f7d476dd03d0414eefe365a61c539b69265c012fa2e1fee
 BASE="https://github.com/joashchee/floppy/releases/download/basilisk-ii-$VERSION"
 # The matching source, shipped with each Floppy release (GPL): the exact
 # macemu commit, plus GMP and MPFR (LGPL-3.0-or-later), which are linked
