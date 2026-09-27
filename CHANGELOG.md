@@ -8,6 +8,11 @@ against the day the change was made.
 
 ## Unreleased
 
+- **Standing rule: friction as close to zero as the law allows**
+  (2026-09-27): CLAUDE.md rule 9 has every new or touched feature
+  checked for what still stands between the user and a working result,
+  and that removed, within the legal and open-source licence rules (1, 3,
+  4, 8), with a checklist drawn from the setup work.
 - **Free forever, from ansiapps.com only** (2026-09-27): Floppy is
   ansiapps' hero app and always free (CLAUDE.md rule 8). It's published
   only on ansiapps.com, no longer planned for itch.io or as GitHub

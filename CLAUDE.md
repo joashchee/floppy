@@ -74,6 +74,30 @@ gitignored `CLAUDE.local.md`, never in committed files.
    extensions to Floppy: separate apps that work with it only through the
    interfaces in rule 2, so Floppy never needs them and never nags about
    them.
+9. **Friction as close to zero as the law allows, for every feature.**
+   Whenever a feature is added or touched, ask what still stands between
+   the user and a working result, and remove it, staying fully legal and
+   compliant with every open-source licence involved. Rules 1, 3, 4 and 8
+   come first: never bundle, download or share guest software; never add
+   network access or telemetry; ship the source every licence asks for.
+   Within those limits, the checklist:
+   - **Do it for the user:** detect, recognize by content, and fill in
+     instead of asking (as with setup files, Downloads pickup, backups).
+   - **Say exactly what's missing and where to get it legally**, with
+     one click to the page, and the caveat when a source is a mirror or
+     a stand-in (`docs/legal-setupfiles.md`, the AROS offer).
+   - **Offer the free, open-source fallback** when one exists, labelled
+     honestly, and switch to the better option by itself once it's there.
+   - **Never dead-end:** every blocker message comes with a button that
+     fixes it (Locate…, Look in Downloads, Report a Setup Problem…).
+   - **Same flow on macOS and Linux** (rule 7), with no extra tools to
+     install.
+   - **Offer, don't nag:** ask once per situation and remember the answer
+     (the backup offer).
+   - **Let users say what's still in the way** through Export Findings,
+     and fold what they report into the living documents.
+   When a friction fix would bend a licence or rule 3, don't ship it: say
+   so, and suggest the closest legal alternative.
 
 ## How the library works
 
