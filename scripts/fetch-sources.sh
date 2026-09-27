@@ -1,7 +1,8 @@
 #!/bin/sh
 # Downloads the source of every GPL emulator Floppy.app bundles, at the
-# exact versions the fetch scripts pin, into a folder to attach to the
-# GitHub release next to the DMG. Shipping GPL binaries means offering
+# exact versions the fetch scripts pin, into a folder to publish on the
+# Floppy repo's GitHub release for that version, linked from the
+# ansiapps.com download page (CLAUDE.md rule 8). Shipping GPL binaries means offering
 # their source too. build-release.sh runs this. Run it alone as
 #   scripts/fetch-sources.sh [output folder]
 # The URLs and SHA-256s live beside each binary's pin (SRC_URL and
@@ -102,5 +103,6 @@ EOF
 aros_notice
 
 TAG=v$(sed -n 's/^  "version": "\(.*\)",$/\1/p' "$ROOT/package.json" | head -1)
-echo "GPL sources and the AROS notice are in $OUT. Attach them to the release with the DMG or Linux packages:"
+echo "GPL sources and the AROS notice are in $OUT. Publish them on the version's GitHub release,"
+echo "and link them from the ansiapps.com download page next to the DMG and Linux packages:"
 echo "  gh release upload $TAG \"$OUT\"/*"

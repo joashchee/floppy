@@ -8,6 +8,13 @@ against the day the change was made.
 
 ## Unreleased
 
+- **Free forever, from ansiapps.com only** (2026-09-27): Floppy is
+  ansiapps' hero app and always free (CLAUDE.md rule 8). It's published
+  only on ansiapps.com, no longer planned for itch.io or as GitHub
+  release downloads; GitHub keeps the source and the emulator sources
+  each release offers. Diskette and Crunchy are paid extensions to it,
+  separate apps Floppy never needs. README, the release scripts'
+  instructions and CLAUDE.md say so.
 - **Back up Floppy's system: Burn A CD** (2026-09-27): once the system
   is fully working (every guest has every setup file: the Mac its ROM
   and startup disk, the Amiga its Kickstart and Workbench, and any guest

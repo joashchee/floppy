@@ -1988,7 +1988,8 @@ function App() {
           ))}
         </ul>
         <p>
-          Free software under the GNU GPL, version 2 or later. The emulators run as separate programs under their own
+          Floppy is free, always, and published only at ansiapps.com. It's free software under the GNU GPL, version 2 or
+          later. The emulators run as separate programs under their own
           licenses. Floppy works offline: no network, no telemetry, no accounts. It never includes ROMs, operating
           systems or apps; you bring your own.
         </p>

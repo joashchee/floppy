@@ -61,9 +61,19 @@ gitignored `CLAUDE.local.md`, never in committed files.
    a hardcoded path.
 7. **macOS and Linux supported, Windows later.** A feature built for one
    of macOS or Linux gets the other side too, or a parity row saying
-   what's missing. Distribution: itch.io (free or pay-what-you-want) plus
-   GitHub releases (the DMG, and the Linux `.deb`/AppImage). Never the Mac App Store,
-   whose terms are incompatible with the GPL.
+   what's missing.
+8. **Always free, downloaded only from ansiapps.com.** Floppy is the hero
+   app of ansiapps.com and costs nothing, ever: no price, no
+   pay-what-you-want, no paid tier or unlock. The app (the DMG, and the
+   Linux `.deb`/AppImage) is published only on ansiapps.com: not itch.io,
+   not the Mac App Store (whose terms are incompatible with the GPL), and
+   not as GitHub release downloads. GitHub keeps the source, the
+   emulator source bundles and AROS notice each release must offer
+   (linked from the download page), and the `basilisk-ii-*` build
+   releases the fetch script pins. Diskette and Crunchy are ansiapps' paid
+   extensions to Floppy: separate apps that work with it only through the
+   interfaces in rule 2, so Floppy never needs them and never nags about
+   them.
 
 ## How the library works
 
@@ -380,8 +390,10 @@ gitignored `CLAUDE.local.md`, never in committed files.
   source into `src-tauri/target/release/bundle/source/`, and writes
   `AROS-SOURCE.txt` there too: which AROS build FS-UAE's `fs-uae.dat`
   carries (read from the ROM itself), its licence and where its source
-  is. Attach all of it to the GitHub release with the DMG or Linux
-  packages: shipping their binaries means offering their source.
+  is. Publish all of it on the Floppy repo's GitHub release for that
+  version, and link it from the ansiapps.com download page next to the
+  DMG and Linux packages (rule 8): shipping their binaries means offering
+  their source.
   Last, it copies the new `Floppy.app` into `~/Applications/`, replacing
   the old one, so the installed app is always the latest release build.
   Outside the sandbox only: `~/Applications` isn't writable in it.
