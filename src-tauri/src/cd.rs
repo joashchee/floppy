@@ -683,8 +683,10 @@ pub fn with_disc<T>(library: &Library, path: &Path, f: impl FnOnce(&Path) -> Res
     f(&mount.0)
 }
 
-/// A disc image attached read-only with `hdiutil`, detached on drop.
-struct Mount(PathBuf);
+/// A disc image attached read-only, detached on drop: with `hdiutil` on
+/// macOS, at `at`; with udisks on Linux, where its loop device is kept
+/// too (the second field) and udisks picks the mount point.
+struct Mount(PathBuf, Option<String>);
 
 impl Mount {
     #[cfg(target_os = "macos")]
@@ -704,21 +706,96 @@ impl Mount {
                 String::from_utf8_lossy(&out.stderr).trim()
             ));
         }
-        Ok(Mount(at.to_path_buf()))
+        Ok(Mount(at.to_path_buf(), None))
     }
 
-    #[cfg(not(target_os = "macos"))]
+    /// udisks lets a desktop user set up a read-only loop device and mount
+    /// it without root. A desktop that mounts new devices on its own may
+    /// get there first; its mount point is used then.
+    #[cfg(target_os = "linux")]
+    fn attach(image: &Path, _at: &Path) -> Result<Self, String> {
+        let fail = |detail: &str| format!("Couldn't open {} as a disc image: {}", file_name(image), detail.trim());
+        let setup = udisksctl(&["loop-setup", "--read-only", "--no-user-interaction", "-f"], Some(image))
+            .map_err(|e| fail(&e))?;
+        let dev = loop_device(&setup).ok_or_else(|| fail(&setup))?;
+        // From here on, dropping the mount frees the loop device.
+        let mut mount = Mount(PathBuf::new(), Some(dev.clone()));
+        let at = match udisksctl(&["mount", "--no-user-interaction", "-o", "ro", "-b", &dev], None) {
+            Ok(out) => mounted_at(&out),
+            Err(e) => already_mounted_at(&e).ok_or_else(|| fail(&e))?.into(),
+        };
+        mount.0 = at.ok_or_else(|| fail("udisks didn't say where it mounted it."))?;
+        Ok(mount)
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     fn attach(_image: &Path, _at: &Path) -> Result<Self, String> {
-        Err("Opening a disc image needs macOS for now. Mount it and choose its folder instead.".into())
+        Err("Opening a disc image isn't supported here yet. Mount it and choose its folder instead.".into())
     }
 }
 
 impl Drop for Mount {
     fn drop(&mut self) {
         #[cfg(target_os = "macos")]
-        let _ = std::process::Command::new("/usr/bin/hdiutil").args(["detach", "-force"]).arg(&self.0).output();
-        let _ = std::fs::remove_dir(&self.0);
+        {
+            let _ = std::process::Command::new("/usr/bin/hdiutil").args(["detach", "-force"]).arg(&self.0).output();
+            let _ = std::fs::remove_dir(&self.0);
+        }
+        #[cfg(target_os = "linux")]
+        if let Some(dev) = &self.1 {
+            if !self.0.as_os_str().is_empty() {
+                let _ = udisksctl(&["unmount", "--no-user-interaction", "-b", dev], None);
+            }
+            let _ = udisksctl(&["loop-delete", "--no-user-interaction", "-b", dev], None);
+        }
     }
+}
+
+/// Runs `udisksctl` with `args` (then `file`, if given): its output, or
+/// its error message.
+#[cfg(target_os = "linux")]
+fn udisksctl(args: &[&str], file: Option<&Path>) -> Result<String, String> {
+    let mut cmd = std::process::Command::new("udisksctl");
+    cmd.args(args);
+    if let Some(f) = file {
+        cmd.arg(f);
+    }
+    let out = cmd.output().map_err(|e| match e.kind() {
+        std::io::ErrorKind::NotFound => "udisks isn't installed (udisksctl). Mount it and choose its folder instead.".to_string(),
+        _ => e.to_string(),
+    })?;
+    if out.status.success() {
+        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+    } else {
+        Err(String::from_utf8_lossy(&out.stderr).into_owned())
+    }
+}
+
+/// The device in udisksctl's `Mapped file /x.iso as /dev/loop7.`
+#[cfg(any(target_os = "linux", test))]
+fn loop_device(out: &str) -> Option<String> {
+    let dev = out.rsplit_once(" as ")?.1.trim().trim_end_matches('.');
+    dev.starts_with("/dev/").then(|| dev.to_string())
+}
+
+/// The folder in udisksctl's `Mounted /dev/loop7 at /media/me/DISC`
+/// (older versions end it with a period).
+#[cfg(any(target_os = "linux", test))]
+fn mounted_at(out: &str) -> Option<PathBuf> {
+    let at = out.trim().split_once(" at ")?.1;
+    let at = if Path::new(at).is_dir() { at } else { at.trim_end_matches('.') };
+    Some(PathBuf::from(at))
+}
+
+/// The folder in udisks' AlreadyMounted error: ``… is already mounted at
+/// `/media/me/DISC'.``
+#[cfg(any(target_os = "linux", test))]
+fn already_mounted_at(err: &str) -> Option<PathBuf> {
+    if !err.contains("AlreadyMounted") {
+        return None;
+    }
+    let rest = err.split_once('`')?.1;
+    Some(PathBuf::from(rest.split_once('\'')?.0))
 }
 
 #[cfg(test)]
@@ -726,6 +803,18 @@ mod tests {
     use super::*;
     use crate::testutil::TempDir;
     use std::fs;
+
+    #[test]
+    fn reads_udisksctl_output() {
+        assert_eq!(loop_device("Mapped file /home/me/Disc.iso as /dev/loop7.\n").as_deref(), Some("/dev/loop7"));
+        assert_eq!(loop_device("Error: nope"), None);
+        assert_eq!(mounted_at("Mounted /dev/loop7 at /media/me/FILES\n"), Some(PathBuf::from("/media/me/FILES")));
+        assert_eq!(mounted_at("Mounted /dev/loop7 at /media/me/FILES.\n"), Some(PathBuf::from("/media/me/FILES")));
+        let busy = "Error mounting /dev/loop7: GDBus.Error:org.freedesktop.UDisks2.Error.AlreadyMounted: \
+                    Device /dev/loop7 is already mounted at `/media/me/MY DISC'.\n";
+        assert_eq!(already_mounted_at(busy), Some(PathBuf::from("/media/me/MY DISC")));
+        assert_eq!(already_mounted_at("Error mounting /dev/loop7: Not authorized"), None);
+    }
 
     fn kickstart(version: u16, valid: bool) -> Vec<u8> {
         let mut r = vec![0u8; 524_288];

@@ -6,6 +6,7 @@ import { open, save } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { Dialog } from "./components/Dialog";
 import { applyTheme, loadTheme, type Theme } from "./lib/theme";
+import { isLinux, SHOW_IN_FILES } from "./lib/platform";
 import { ProgressBar } from "./components/ProgressBar";
 import {
   AmigaAppIcon,
@@ -119,11 +120,15 @@ function basiliskTitle(s: GuestStatus | undefined): string {
     case "bundled":
       return "Using the Basilisk II built into Floppy. Pick another build to use it instead.";
     case "installed":
-      return "Using the Basilisk II in Applications. Pick another build to use it instead.";
+      return isLinux
+        ? "Using the BasiliskII on your PATH. Pick another build to use it instead."
+        : "Using the Basilisk II in Applications. Pick another build to use it instead.";
     case "env":
       return "Using FLOPPY_BASILISK, which overrides any copy picked here.";
     default:
-      return "Basilisk II runs the classic Mac. Pick BasiliskII.app wherever it is.";
+      return isLinux
+        ? "Basilisk II runs the classic Mac. Pick the BasiliskII program wherever it is."
+        : "Basilisk II runs the classic Mac. Pick BasiliskII.app wherever it is.";
   }
 }
 
@@ -708,9 +713,11 @@ function App() {
     }
   }
 
-  /** Points Floppy at a Basilisk II that isn't in /Applications or ~/Applications. */
+  /** Points Floppy at a Basilisk II that isn't in /Applications or ~/Applications (or on PATH). */
   async function locateBasilisk() {
-    const path = await open({ title: "Locate Basilisk II", filters: [{ name: "Application", extensions: ["app"] }] });
+    // Linux programs have no extension to filter on.
+    const filters = isLinux ? [] : [{ name: "Application", extensions: ["app"] }];
+    const path = await open({ title: "Locate Basilisk II", filters });
     if (typeof path !== "string") return;
     setError(null);
     setMessage(null);
@@ -1145,7 +1152,7 @@ function App() {
                   </span>
                 </span>
                 <button type="button" className="small" onClick={() => void revealLibraryFile(session.os, c.path)}>
-                  Show in Finder
+                  {SHOW_IN_FILES}
                 </button>
                 <button type="button" className="small" onClick={() => void exportLibraryFile(session.os, c.path)}>
                   Export…
@@ -1518,7 +1525,7 @@ function App() {
                   <span className="btn-icon">
                     <FolderIcon />
                   </span>
-                  Show in Finder
+                  {SHOW_IN_FILES}
                 </button>
                 <button
                   type="button"
@@ -1854,7 +1861,7 @@ function DocumentDetails({
           <span className="btn-icon">
             <FolderIcon />
           </span>
-          Show in Finder
+          {SHOW_IN_FILES}
         </button>
         <button type="button" className="icontext-btn" onClick={onExport}>
           <span className="btn-icon">

@@ -5,9 +5,10 @@
 //!
 //! - DOS: DOSBox Staging, bundled (`scripts/fetch-dosbox.sh`).
 //! - Amiga: FS-UAE, bundled (`scripts/fetch-fs-uae.sh`).
-//! - Classic Mac: Basilisk II, bundled on macOS (`scripts/fetch-basilisk.sh`,
-//!   Floppy's own build of a pinned upstream commit, since upstream
-//!   publishes no binaries). A separate install or a located copy works too.
+//! - Classic Mac: Basilisk II, bundled on macOS and Linux
+//!   (`scripts/fetch-basilisk.sh`, Floppy's own build of a pinned upstream
+//!   commit, since upstream publishes no binaries). A separate install or a
+//!   located copy works too.
 
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -83,10 +84,19 @@ impl Emulator {
     /// What the user sees when the emulator is missing.
     pub fn missing_message(self) -> &'static str {
         match self {
+            Emulator::DosboxStaging if cfg!(target_os = "linux") => {
+                "DOSBox Staging wasn't found. Run scripts/fetch-dosbox.sh, or install dosbox-staging."
+            }
             Emulator::DosboxStaging => {
                 "DOSBox Staging wasn't found. Run scripts/fetch-dosbox.sh, or install it in /Applications."
             }
+            Emulator::FsUae if cfg!(target_os = "linux") => {
+                "FS-UAE wasn't found. Run scripts/fetch-fs-uae.sh, or install fs-uae."
+            }
             Emulator::FsUae => "FS-UAE wasn't found. Run scripts/fetch-fs-uae.sh, or install it in /Applications.",
+            Emulator::BasiliskII if cfg!(target_os = "linux") => {
+                "Basilisk II wasn't found. Run scripts/fetch-basilisk.sh, install BasiliskII so it's on your PATH, or use Locate Basilisk II… in the gear menu."
+            }
             Emulator::BasiliskII => {
                 "Basilisk II wasn't found. Run scripts/fetch-basilisk.sh, install BasiliskII.app in /Applications (or ~/Applications), or use Locate Basilisk II… in the gear menu."
             }
@@ -226,10 +236,12 @@ const FSUAE_BIN: &str = "Windows/x86-64/fs-uae.exe";
 #[cfg(target_os = "linux")]
 const FSUAE_BIN: &str = "Linux/x86-64/fs-uae";
 
-// Only the macOS build is made so far (.github/workflows/basilisk.yml).
+// Floppy's own builds (.github/workflows/basilisk.yml): macOS and Linux.
 #[cfg(target_os = "macos")]
 const BASILISK_BIN: Option<&str> = Some("BasiliskII.app/Contents/MacOS/BasiliskII");
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "linux")]
+const BASILISK_BIN: Option<&str> = Some("BasiliskII");
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 const BASILISK_BIN: Option<&str> = None;
 
 #[cfg(target_os = "macos")]
@@ -271,7 +283,45 @@ fn find_basilisk_apps(dir: &Path, depth: u32, out: &mut Vec<PathBuf>) {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+/// On Linux an install is a program on `PATH`. Distributions name DOSBox
+/// Staging either `dosbox-staging` or plain `dosbox`, and a plain `dosbox`
+/// may be the original DOSBox, which doesn't take `--noprimaryconf`, so that
+/// one counts only if `--version` says it's Staging.
+#[cfg(target_os = "linux")]
+fn installed_paths(emu: Emulator) -> Vec<PathBuf> {
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    match emu {
+        Emulator::DosboxStaging => {
+            let mut found = on_path(&path, "dosbox-staging");
+            found.extend(on_path(&path, "dosbox").into_iter().filter(|p| is_dosbox_staging(p)));
+            found
+        }
+        Emulator::FsUae => on_path(&path, "fs-uae"),
+        Emulator::BasiliskII => on_path(&path, "BasiliskII"),
+    }
+}
+
+/// Every executable called `name` in the `PATH`-style list `path`, in order.
+#[cfg(target_os = "linux")]
+fn on_path(path: &std::ffi::OsStr, name: &str) -> Vec<PathBuf> {
+    use std::os::unix::fs::PermissionsExt;
+    std::env::split_paths(path)
+        .map(|dir| dir.join(name))
+        .filter(|p| std::fs::metadata(p).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0))
+        .collect()
+}
+
+#[cfg(target_os = "linux")]
+fn is_dosbox_staging(bin: &Path) -> bool {
+    Command::new(bin)
+        .arg("--version")
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .is_ok_and(|out| String::from_utf8_lossy(&out.stdout).to_ascii_lowercase().contains("staging"))
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 fn installed_paths(_emu: Emulator) -> Vec<PathBuf> {
     Vec::new()
 }
@@ -333,14 +383,37 @@ mod tests {
         assert_eq!(chosen(&lib, Emulator::BasiliskII), None);
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     #[test]
     fn the_bundled_copy_is_found_in_resources() {
         let tmp = TempDir::new();
-        let bin = tmp.path().join("basilisk/BasiliskII.app/Contents/MacOS/BasiliskII");
+        let bin = tmp.path().join("basilisk").join(BASILISK_BIN.unwrap());
         exe(&bin);
         let found = Emulator::BasiliskII.locate(Some(tmp.path()), None);
         assert!(matches!(found, Some((_, EmulatorSource::Bundled))), "{found:?}");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn installs_are_found_on_path_and_plain_dosbox_must_be_staging() {
+        let tmp = TempDir::new();
+        let (a, b) = (tmp.path().join("a"), tmp.path().join("b"));
+        std::fs::create_dir_all(&a).unwrap();
+        std::fs::create_dir_all(&b).unwrap();
+        let script = |p: &Path, body: &str| {
+            std::fs::write(p, format!("#!/bin/sh\n{body}\n")).unwrap();
+            std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o755)).unwrap();
+        };
+        script(&a.join("dosbox"), "echo 'DOSBox version 0.74-3'");
+        script(&b.join("dosbox"), "echo 'dosbox-staging, version 0.83.0'");
+        script(&b.join("fs-uae"), "");
+        std::fs::write(a.join("fs-uae"), b"not executable").unwrap();
+        let path = std::env::join_paths([&a, &b]).unwrap();
+
+        let staging: Vec<_> = on_path(&path, "dosbox").into_iter().filter(|p| is_dosbox_staging(p)).collect();
+        assert_eq!(staging, vec![b.join("dosbox")]);
+        assert_eq!(on_path(&path, "fs-uae"), vec![b.join("fs-uae")]);
+        assert!(on_path(&path, "BasiliskII").is_empty());
     }
 
     #[test]

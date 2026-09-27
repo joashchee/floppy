@@ -6,10 +6,12 @@
 //! only treats a file as an app when its Finder info says type `APPL`.
 //! Basilisk II's shared folder (`extfs`) on a macOS host reads both
 //! natively: the fork at `file/..namedfork/rsrc` and Finder info in the
-//! `com.apple.FinderInfo` attribute. So an import has to land both
-//! there:
+//! `com.apple.FinderInfo` attribute. On Linux it keeps them in hidden
+//! helper folders beside the file: `.rsrc/<name>` and `.finf/<name>`.
+//! So an import has to land both there:
 //!
-//! - Folders: `fs::copy` on macOS copies forks and attributes.
+//! - Folders: `fs::copy` on macOS copies forks and attributes. Elsewhere
+//!   the folder copy brings any `.rsrc`/`.finf` folders along.
 //! - Zips made on a Mac carry them as AppleDouble files
 //!   (`__MACOSX/…/._name`, or `._name` next to the file). They're
 //!   merged back into the file they describe (`absorb_appledouble`).
@@ -59,8 +61,7 @@ fn archive_codes(name: &str) -> Option<([u8; 4], [u8; 4])> {
 }
 
 // ---------------------------------------------------------------------
-// Forks and Finder info (host side; macOS only for now, see
-// docs/platform-parity.md).
+// Forks and Finder info (host side, see docs/platform-parity.md).
 
 /// The 32 bytes of Finder info (FInfo + FXInfo).
 pub type FinderInfo = [u8; 32];
@@ -110,19 +111,65 @@ pub fn resource_fork_len(path: &Path) -> u64 {
     fs::metadata(path.join("..namedfork/rsrc")).map(|m| m.len()).unwrap_or(0)
 }
 
+// Elsewhere Basilisk II's extfs keeps them in helper folders beside the
+// file, which it hides from the Mac: the fork in `.rsrc/<name>` and the
+// Finder info (FInfo then FXInfo) in `.finf/<name>`.
+
 #[cfg(not(target_os = "macos"))]
-pub fn read_finder_info(_path: &Path) -> Option<FinderInfo> {
-    None
+pub const HELPER_DIRS: &[&str] = &[".rsrc", ".finf"];
+
+#[cfg(not(target_os = "macos"))]
+fn helper_path(path: &Path, dir: &str) -> io::Result<PathBuf> {
+    let name = path.file_name().ok_or_else(|| io::Error::other("no file name"))?;
+    Ok(path.parent().unwrap_or(Path::new("")).join(dir).join(name))
 }
 
 #[cfg(not(target_os = "macos"))]
-pub fn write_finder_info(_path: &Path, _info: &FinderInfo) -> io::Result<()> {
-    Err(io::Error::other("classic Mac imports need a macOS host for now"))
+fn write_helper(path: &Path, dir: &str, data: &[u8]) -> io::Result<()> {
+    let out = helper_path(path, dir)?;
+    if let Some(d) = out.parent() {
+        fs::create_dir_all(d)?;
+    }
+    fs::write(out, data)
+}
+
+/// Reads a file's Finder info, or `None` if it has none. Basilisk II
+/// accepts a bare FInfo (16 bytes) too, so a short file is padded.
+#[cfg(not(target_os = "macos"))]
+pub fn read_finder_info(path: &Path) -> Option<FinderInfo> {
+    let bytes = fs::read(helper_path(path, ".finf").ok()?).ok()?;
+    if bytes.len() < 16 {
+        return None;
+    }
+    let mut info = [0u8; 32];
+    let n = bytes.len().min(32);
+    info[..n].copy_from_slice(&bytes[..n]);
+    Some(info)
 }
 
 #[cfg(not(target_os = "macos"))]
-pub fn write_resource_fork(_path: &Path, _data: &[u8]) -> io::Result<()> {
-    Err(io::Error::other("classic Mac imports need a macOS host for now"))
+pub fn write_finder_info(path: &Path, info: &FinderInfo) -> io::Result<()> {
+    write_helper(path, ".finf", info)
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn write_resource_fork(path: &Path, data: &[u8]) -> io::Result<()> {
+    write_helper(path, ".rsrc", data)
+}
+
+#[cfg(all(test, not(target_os = "macos")))]
+pub fn resource_fork_len(path: &Path) -> u64 {
+    helper_path(path, ".rsrc").and_then(fs::metadata).map(|m| m.len()).unwrap_or(0)
+}
+
+/// Whether `name` is one of Basilisk II's hidden fork folders, which hold
+/// other files' forks rather than files of their own.
+fn is_fork_helper(name: &std::ffi::OsStr) -> bool {
+    #[cfg(target_os = "macos")]
+    let helpers: &[&str] = &[];
+    #[cfg(not(target_os = "macos"))]
+    let helpers = HELPER_DIRS;
+    helpers.iter().any(|h| name == *h)
 }
 
 /// A file's type code, if it has Finder info.
@@ -359,6 +406,7 @@ pub fn find_programs(root: &Path, name_hint: &str) -> Vec<String> {
         .min_depth(1)
         .max_depth(6)
         .into_iter()
+        .filter_entry(|e| !(e.file_type().is_dir() && is_fork_helper(e.file_name())))
         .filter_map(Result::ok)
         .filter(|e| e.file_type().is_file())
         .filter_map(|e| {
@@ -432,7 +480,9 @@ pub fn bootable_volume(path: &Path) -> Option<String> {
 }
 
 /// The name of the first HFS or HFS+ volume in a disk image, bootable or
-/// not (see `bootable_volume` for the layouts it reads).
+/// not (see `bootable_volume` for the layouts it reads). Only macOS's
+/// old-media watcher (`media.rs`) uses it so far.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub fn volume_name(path: &Path) -> Option<String> {
     first_volume(path, false)
 }
@@ -700,9 +750,15 @@ mod tests {
         assert!(!is_basilisk_rom(&rom[..16], 262_144));
     }
 
-    // The rest touch real forks and Finder info, which only a macOS host has.
+    /// The resource fork as the host stores it for Basilisk II.
+    fn fork(path: &Path) -> Vec<u8> {
+        #[cfg(target_os = "macos")]
+        let at = path.join("..namedfork/rsrc");
+        #[cfg(not(target_os = "macos"))]
+        let at = path.parent().unwrap().join(".rsrc").join(path.file_name().unwrap());
+        fs::read(at).unwrap_or_default()
+    }
 
-    #[cfg(target_os = "macos")]
     #[test]
     fn absorbs_sequestered_and_sibling_appledouble() {
         let t = TempDir::new();
@@ -718,7 +774,7 @@ mod tests {
         absorb_appledouble(root).unwrap();
 
         let app = root.join("MacWrite/MacWrite II");
-        assert_eq!(fs::read(app.join("..namedfork/rsrc")).unwrap(), b"CODE");
+        assert_eq!(fork(&app), b"CODE");
         assert_eq!(read_finder_info(&app), Some(app_info()));
         assert_eq!(resource_fork_len(&root.join("MacWrite/Tools/Helper")), 4);
         assert!(!root.join("__MACOSX").exists());
@@ -727,7 +783,6 @@ mod tests {
         assert_eq!(find_programs(root, "MacWrite"), vec!["MacWrite/MacWrite II", "MacWrite/Tools/Helper"]);
     }
 
-    #[cfg(target_os = "macos")]
     #[test]
     fn decodes_macbinary_to_a_real_file() {
         let t = TempDir::new();
@@ -737,13 +792,33 @@ mod tests {
         assert_eq!(name, "MacWrite II");
         let out = t.path().join(&name);
         assert_eq!(fs::read(&out).unwrap(), b"data");
-        assert_eq!(fs::read(out.join("..namedfork/rsrc")).unwrap(), b"CODE");
+        assert_eq!(fork(&out), b"CODE");
         assert_eq!(file_type(&out), Some(*b"APPL"));
+    }
+
+    #[test]
+    fn forks_mark_apps_and_archives_get_tagged() {
+        let t = TempDir::new();
+        let a = t.path().join("App");
+        fs::write(&a, b"").unwrap();
+        write_resource_fork(&a, b"CODE").unwrap();
+        write_finder_info(&a, &app_info()).unwrap();
+        assert_eq!(resource_fork_len(&a), 4);
+        assert_eq!(file_type(&a), Some(*b"APPL"));
+        // A disk image with a fork of its own is still one disk image.
+        fs::write(t.path().join("Extra.dsk"), b"").unwrap();
+        write_resource_fork(&t.path().join("Extra.dsk"), b"ckid").unwrap();
+
+        let sit = t.path().join("Game.sit");
+        fs::write(&sit, b"SIT!").unwrap();
+        tag_archive(&sit).unwrap();
+        assert_eq!(read_finder_info(&sit).map(|i| i[4..8].to_vec()), Some(b"SIT!".to_vec()));
+        assert_eq!(find_programs(t.path(), "App"), vec!["App", "Extra.dsk", "Game.sit"]);
     }
 
     #[cfg(target_os = "macos")]
     #[test]
-    fn copy_keeps_forks_and_archives_get_tagged() {
+    fn fs_copy_keeps_forks() {
         // library.rs copies folders with fs::copy; this pins down that it
         // carries the resource fork and Finder info on macOS.
         let t = TempDir::new();
@@ -755,13 +830,5 @@ mod tests {
         fs::copy(&a, &b).unwrap();
         assert_eq!(resource_fork_len(&b), 4);
         assert_eq!(file_type(&b), Some(*b"APPL"));
-
-        let sit = t.path().join("Game.sit");
-        fs::write(&sit, b"SIT!").unwrap();
-        tag_archive(&sit).unwrap();
-        assert_eq!(read_finder_info(&sit).map(|i| i[4..8].to_vec()), Some(b"SIT!".to_vec()));
-        let programs = find_programs(t.path(), "App");
-        assert_eq!(programs[0], "App");
-        assert_eq!(programs.last().map(String::as_str), Some("Game.sit"));
     }
 }

@@ -1047,6 +1047,7 @@ dependencies = [
 name = "floppy"
 version = "0.3.0"
 dependencies = [
+ "flate2",
  "libc",
  "log",
  "plist",

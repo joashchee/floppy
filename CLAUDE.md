@@ -54,8 +54,10 @@ gitignored `CLAUDE.local.md`, never in committed files.
    app-data folder (the whole library) on it.
 6. **All user data lives under Tauri's app-data dir** (`library/`), never
    a hardcoded path.
-7. **macOS first, then Windows/Linux.** Distribution: itch.io (free or
-   pay-what-you-want) plus GitHub releases. Never the Mac App Store,
+7. **macOS and Linux supported, Windows later.** A feature built for one
+   of macOS or Linux gets the other side too, or a parity row saying
+   what's missing. Distribution: itch.io (free or pay-what-you-want) plus
+   GitHub releases (the DMG, and the Linux `.deb`/AppImage). Never the Mac App Store,
    whose terms are incompatible with the GPL.
 
 ## How the library works
@@ -231,7 +233,7 @@ gitignored `CLAUDE.local.md`, never in committed files.
 - DOSBox Staging is spawned with `--noprimaryconf --nolocalconf --conf
   <file>`, so the user's own DOSBox settings never apply.
 - DOSBox Staging comes from `scripts/fetch-dosbox.sh` (pinned version and
-  SHA-256) into the gitignored `src-tauri/resources/dosbox/`, which
+  SHA-256 per platform: the macOS DMG, the Linux x86-64 tarball) into the gitignored `src-tauri/resources/dosbox/`, which
   tauri.conf.json bundles as a resource. Bump the version and hash there
   together, along with `SRC_URL`/`SRC_SHA256`, the matching source that
   every release ships (`scripts/fetch-sources.sh`).
@@ -240,7 +242,8 @@ gitignored `CLAUDE.local.md`, never in committed files.
 
 - `mac.rs`: a classic app's code is in its resource fork and it's only an
   app if its Finder info says `APPL`. Basilisk II's extfs on a macOS host
-  reads both natively, so imports keep them: folder copies use `fs::copy`
+  reads both natively (on Linux, from `.rsrc/` and `.finf/` folders beside
+  the file), so imports keep them: folder copies use `fs::copy`
   (which copies forks on macOS), zips made on a Mac get their AppleDouble
   files (`__MACOSX/…/._name`, `._name`) merged back, and MacBinary `.bin`
   files are decoded. StuffIt/BinHex/Compact Pro archives are copied and
@@ -251,12 +254,16 @@ gitignored `CLAUDE.local.md`, never in committed files.
   **Unix** volume. There's no auto-open yet: the user opens the app there.
 - Basilisk II comes from `scripts/fetch-basilisk.sh` into the gitignored
   `src-tauri/resources/basilisk/`. Upstream publishes no binaries, so
-  it's Floppy's own universal build of a pinned kanjitalk755/macemu
-  commit: `.github/workflows/basilisk.yml` builds it and publishes a
-  `basilisk-ii-<date>-<commit>` release of this repo with the exact
-  source plus GMP and MPFR (statically linked, LGPL). A rebuild never
-  gives the same bytes, so after one, re-pin every hash in the fetch
-  script from the release's `SHA256SUMS`. A copy the user picks with
+  it's Floppy's own build of a pinned kanjitalk755/macemu commit: a
+  universal macOS app, and a Linux x86-64 binary (Unix build, SDL2 linked
+  statically, built on Ubuntu 22.04 for glibc reach).
+  `.github/workflows/basilisk.yml` builds them (input `platforms`: both,
+  macos or linux) and publishes a `basilisk-ii-<date>-<commit>` release
+  of this repo with the exact source plus GMP and MPFR (statically
+  linked on macOS, LGPL). Publishing to an existing release only adds the
+  files it lacks. A rebuild never gives the same bytes, so after one,
+  re-pin that platform's hashes in the fetch script from the release's
+  `SHA256SUMS` (macOS, sources) or `SHA256SUMS-Linux`. A copy the user picks with
   **Locate Basilisk II…** in the gear menu wins over the bundled one.
 
 ## How Amiga mode works
@@ -270,7 +277,7 @@ gitignored `CLAUDE.local.md`, never in committed files.
   DF0 (its other floppies plus Workbench in the swap list), or Workbench
   for folder apps, and the library as the non-booting `Floppy:` drive.
 - FS-UAE comes from `scripts/fetch-fs-uae.sh` (pinned version and per-arch
-  SHA-256) into the gitignored `src-tauri/resources/fs-uae/`.
+  SHA-256, macOS and Linux x86-64) into the gitignored `src-tauri/resources/fs-uae/`.
 
 ## Testing
 
@@ -281,7 +288,11 @@ gitignored `CLAUDE.local.md`, never in committed files.
   FS-UAE can't run headless (it needs OpenGL and a window server), and
   Basilisk II can't boot without a user's ROM, so Mac and Amiga launches
   are covered by config-generation unit tests only. Fork handling tests
-  run only on a macOS host.
+  run on both hosts, each against its own layout (named forks on macOS,
+  `.rsrc`/`.finf` folders elsewhere); the `fs::copy` one is macOS only.
+- On Linux the build needs Tauri's system libraries (WebKitGTK 4.1,
+  GTK 3, librsvg, libsoup 3; see Tauri's prerequisites) and the fetch
+  scripts' Linux x86-64 pins. The e2e test runs there too.
 - `npx tsc --noEmit` for the frontend.
 - Run all three before calling a change done. A bug report becomes a
   failing test first, then the fix.
@@ -310,8 +321,9 @@ gitignored `CLAUDE.local.md`, never in committed files.
   the old one, so the installed app is always the latest release build.
   Outside the sandbox only: `~/Applications` isn't writable in it.
 - **Track platform parity** in `docs/platform-parity.md` whenever a
-  feature uses a macOS-specific mechanism. Don't implement the
-  Windows/Linux side early.
+  feature uses a platform-specific mechanism. Build the macOS and Linux
+  sides together where you can, and don't implement the Windows side
+  early.
 - Dev server port is **1430**, kept in sync between `vite.config.ts` and
   `tauri.conf.json`'s `devUrl`.
 - UI follows the shared ansiapps design system: same tokens, with
@@ -350,8 +362,12 @@ gitignored `CLAUDE.local.md`, never in committed files.
   an Amiga folder app (`user-startup`). Today the guest boots and the
   user opens the app.
 - SheepShaver for PowerPC-only Mac apps (Mac OS 8.5 to 9.0.4).
-- Windows/Linux: Mac fork handling, FS-UAE paths, Basilisk II detection
+- Windows: Mac fork handling, FS-UAE paths, Basilisk II detection
   (`docs/platform-parity.md`).
+- Linux, still to do: the old-media
+  watcher (udev and a polkit prompt), the Diskette handoff, files opened
+  from the desktop (`.desktop` MIME types plus single-instance
+  forwarding), and checking udisks disc mounting on a real desktop.
 - A universal (arm64 + x86-64) build: the FS-UAE fetch is per-arch.
 - More known-good hashes as users report copies that aren't listed (the
   IIci's single-file ROM dump, for one). `known_files.rs` is generated:

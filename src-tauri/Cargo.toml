@@ -26,6 +26,9 @@ log = "0.4"
 walkdir = "2"
 # Importing a zipped DOS program — read-only, deflate is all old DOS zips use.
 zip = { version = "8.6.0", default-features = false, features = ["deflate-flate2"] }
+# zip's `deflate-flate2` picks no backend. On macOS a Tauri dependency happens
+# to enable flate2's pure-Rust one; say so here so other platforms build too.
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 # Reading `diskutil -plist` output to spot old media macOS can't mount.
 plist = "1"
 # SHA-256 of files a files disc brought that Floppy couldn't use, for the
