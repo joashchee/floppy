@@ -46,7 +46,10 @@ gitignored `CLAUDE.local.md`, never in committed files.
 3. **Never bundle or download guest software.** That means no ROMs,
    operating systems (Mac OS, Kickstart, Windows 3.x), or applications,
    abandonware included. Users supply their own. DOS needs none: DOSBox
-   provides the DOS. Mac ROMs, startup disks, Kickstarts and Workbench
+   provides the DOS. The one exception is **AROS**, the free, open-source
+   replacement Kickstart that already ships inside FS-UAE's own
+   `fs-uae.dat` (AROS Public License): Floppy doesn't add or download it,
+   and uses it only when the user picks **Use AROS for Now**. Mac ROMs, startup disks, Kickstarts and Workbench
    are copied from the user's own files into `library/system/<os>/`.
 4. **No network access, no telemetry, no accounts.** Floppy works fully
    offline. (`scripts/fetch-*.sh` are build-time steps, not app code.)
@@ -299,6 +302,16 @@ gitignored `CLAUDE.local.md`, never in committed files.
   for folder apps, and the library as the non-booting `Floppy:` drive.
 - FS-UAE comes from `scripts/fetch-fs-uae.sh` (pinned version and per-arch
   SHA-256, macOS and Linux x86-64) into the gitignored `src-tauri/resources/fs-uae/`.
+- **AROS fallback:** with no Kickstart, the setup offers **Use AROS for
+  Now** (`GuestSystem.aros`, `Library::set_aros`), with its caveats: it
+  runs some bootable-disk games and demos, many programs fail, and it
+  can't boot Commodore's Workbench. Launch then writes `kickstart_file =
+  internal`, which makes FS-UAE boot the AROS ROM in its own
+  `fs-uae.dat` (the 2015-05-20 m68k build, exec 51.3) without scanning
+  for ROM files. The Kickstart slot stays empty, so the missing-files
+  list, Look in Downloads, drops and files discs keep looking for a real
+  one; setting one clears `aros` and the app says it switched. A "didn't
+  work" setup report on the Kickstart says AROS was running.
 
 ## Testing
 
@@ -306,8 +319,9 @@ gitignored `CLAUDE.local.md`, never in committed files.
 - `cargo test --manifest-path src-tauri/Cargo.toml -- --ignored`: the
   end-to-end test (`e2e.rs`) runs a real `.COM` in the bundled DOSBox,
   headless via `SDL_VIDEODRIVER=dummy`. It needs the fetch script first.
-  FS-UAE can't run headless (it needs OpenGL and a window server), and
-  Basilisk II can't boot without a user's ROM, so Mac and Amiga launches
+  FS-UAE needs OpenGL and a window server, so it has no headless test
+  (under Xvfb it does run: AROS booted to "Waiting for bootable media",
+  2026-09-27), and Basilisk II can't boot without a user's ROM, so Mac and Amiga launches
   are covered by config-generation unit tests only. Fork handling tests
   run on both hosts, each against its own layout (named forks on macOS,
   `.rsrc`/`.finf` folders elsewhere); the `fs::copy` one is macOS only.

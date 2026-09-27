@@ -212,6 +212,11 @@ pub struct GuestSystem {
     pub boot: Option<String>,
     /// FS-UAE Amiga model. Set from the Kickstart version, changeable.
     pub model: Option<String>,
+    /// Amiga only: the user chose FS-UAE's built-in AROS replacement
+    /// Kickstart until they have a real one. Only used while `rom` is
+    /// empty, and cleared when a real Kickstart is set.
+    #[serde(default)]
+    pub aros: bool,
 }
 
 #[derive(Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
@@ -793,6 +798,29 @@ impl Library {
         if model.is_some() {
             sys.model = model;
         }
+        // A real Kickstart replaces the AROS fallback.
+        if os == GuestOs::Amiga && kind == SystemFile::Rom {
+            sys.aros = false;
+        }
+        let out = sys.clone();
+        self.save(&m)?;
+        Ok(out)
+    }
+
+    /// Turns FS-UAE's built-in AROS replacement Kickstart on or off for the
+    /// Amiga, for while there's no real Kickstart. AROS runs best as an
+    /// A1200, so that's the model when none was chosen.
+    pub fn set_aros(&self, os: GuestOs, on: bool) -> Result<GuestSystem, String> {
+        if os != GuestOs::Amiga {
+            return Err("Only the Amiga has a free replacement for its ROM.".into());
+        }
+        let _g = self.guard();
+        let mut m = self.load()?;
+        let sys = m.systems.entry(os).or_default();
+        sys.aros = on;
+        if on && sys.model.is_none() {
+            sys.model = Some("A1200".into());
+        }
         let out = sys.clone();
         self.save(&m)?;
         Ok(out)
@@ -1314,6 +1342,27 @@ mod tests {
         let file = lib.os_root(GuestOs::MacClassic).join("MacPaint/MacPaint");
         assert_eq!(crate::mac::resource_fork_len(&file), 4);
         assert!(!lib.os_root(GuestOs::MacClassic).join("MacPaint/__MACOSX").exists());
+    }
+
+    #[test]
+    fn aros_is_a_fallback_a_real_kickstart_replaces() {
+        let t = TempDir::new();
+        let lib = Library::new(t.path().join("lib"));
+        assert!(lib.set_aros(GuestOs::MacClassic, true).is_err());
+        let sys = lib.set_aros(GuestOs::Amiga, true).unwrap();
+        assert!(sys.aros && sys.rom.is_none());
+        assert_eq!(sys.model.as_deref(), Some("A1200"));
+        // The slot stays empty, so imports keep looking for a real one.
+        assert!(crate::cd::missing_slots(&lib).unwrap().contains(&crate::cd::Slot::Kickstart));
+
+        let mut ks = vec![0u8; 262_144];
+        ks[..4].copy_from_slice(&[0x11, 0x11, 0x4E, 0xF9]);
+        ks[12..16].copy_from_slice(&[0, 34, 0, 5]);
+        let path = t.path().join("kick13.rom");
+        fs::write(&path, &ks).unwrap();
+        let sys = lib.set_system_file(GuestOs::Amiga, SystemFile::Rom, &path, None).unwrap();
+        assert!(!sys.aros, "a real Kickstart ends the fallback");
+        assert_eq!(sys.model.as_deref(), Some("A500"));
     }
 
     #[test]

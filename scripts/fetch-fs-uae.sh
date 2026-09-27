@@ -6,8 +6,9 @@
 # the machine it runs on: macOS (this Mac's architecture) or Linux x86-64.
 #
 # FS-UAE's own archive also carries the AROS replacement Kickstart
-# (fs-uae.dat, AROS Public License), which FS-UAE falls back to without a
-# ROM. Floppy never relies on it: it asks the user for their own Kickstart.
+# (fs-uae.dat, AROS Public License). Keep it: Floppy offers it as an
+# opt-in fallback until the user has a real Kickstart (kickstart_file =
+# internal, amiga.rs).
 set -eu
 
 VERSION=v3.2.35

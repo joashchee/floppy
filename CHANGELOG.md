@@ -8,6 +8,15 @@ against the day the change was made.
 
 ## Unreleased
 
+- **Start the Amiga now with the free AROS Kickstart** (2026-09-27): with
+  no Kickstart ROM, the Amiga setup offers **Use AROS for Now**, the
+  open-source replacement already inside FS-UAE, with its caveats (some
+  games and demos run, many programs don't, no Commodore Workbench). The
+  Kickstart stays on every "still needed" list, and as soon as Floppy
+  finds a real one (dropped, in Downloads, on a files disc, or chosen) it
+  switches to it and says so. **Stop Using AROS** turns it off. A
+  "didn't work" setup report on the Kickstart notes that AROS was
+  running. CLAUDE.md's rule 3 names AROS as its one exception.
 - **Less friction getting setup files** (2026-09-27):
   - Each missing ROM or startup disk lists where to get it: free, paid,
     or how to copy it from hardware you own, with plain notes (System

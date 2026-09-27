@@ -21,7 +21,7 @@ bottom each time.
 | Mac ROM (IIci, IIsi, Quadra, Centris…) | Classic Mac | **No** | Only a dump of a Mac you own |
 | Mac startup disk (System 7.0.1 or 7.5.3) | Classic Mac | **Free from Apple**, now only on archives (see caveat) | [System 7.5.3 image](https://archive.org/download/AppleMacintoshSystem753/System7_5_3.img), [System 7.0.1 image](https://archive.org/download/AppleMacintoshSystem701/System7_0_1.img) |
 | Mac startup disk (7.1, 7.6, 8.0, 8.1) | Classic Mac | **No**, these were paid releases | Your own install discs |
-| Kickstart ROM | Amiga | **No** (cheapest licensed copy is paid) | [Amiga Forever](https://www.amigaforever.com/), or a dump of an Amiga you own |
+| Kickstart ROM | Amiga | **No** (cheapest licensed copy is paid) | [Amiga Forever](https://www.amigaforever.com/), or a dump of an Amiga you own. Meanwhile: the free AROS replacement, built into FS-UAE (see below) |
 | Workbench | Amiga | **No** | Amiga Forever, or your own disks |
 | Basilisk II (the emulator) | Classic Mac | **Yes** (GPL-2.0-or-later) | Bundled: Floppy's own build for macOS and Linux (`.github/workflows/basilisk.yml`); [E-Maculation builds](https://www.emaculation.com/forum/viewtopic.php?f=6&t=7361) |
 
@@ -110,19 +110,24 @@ licensed seller of ROM files
 - **Your own Amiga:** dump the ROM with a tool such as TransROM or
   GrabKick.
 
-**AROS replacement ROM (free, open source, not usable yet):** AROS
-provides a free Kickstart replacement under the AROS Public License,
-from [AROS nightly builds](https://aros.sourceforge.io/cgi-bin/files?type=nightly2&lang=en)
-(`Boot/Amiga/`). FS-UAE's bundled `fs-uae.dat` contains it too. Floppy
-doesn't accept it today, for two reasons:
+**AROS replacement ROM (free, open source, offered as a fallback):**
+AROS provides a free Kickstart replacement under the AROS Public
+License, from [AROS nightly builds](https://aros.sourceforge.io/cgi-bin/files?type=nightly2&lang=en)
+(`Boot/Amiga/`). FS-UAE's bundled `fs-uae.dat` contains a copy (the
+2015-05-20 m68k build), so there's nothing to download. Floppy's setup
+offers **Use AROS for Now** under the Kickstart sources, with its
+caveats, and FS-UAE then boots that built-in copy:
 
-- AROS ships as a main ROM plus an extended ROM, but
-  `amiga::identify_kickstart` only accepts a single 256 KB or 512 KB
-  Kickstart.
-- It runs much less Amiga software than a real Kickstart.
+- It runs some games and demos on bootable disks, but much Amiga
+  software crashes or won't start on it.
+- It doesn't boot Commodore's Workbench, so apps that need Workbench
+  don't run.
+- It's a stand-in only: the Kickstart stays on the missing-files list,
+  and when Floppy finds a real Kickstart (dropped, in Downloads, on a
+  files disc, or chosen) it switches to it and says so.
 
-Supporting it would be a deliberate feature, not just a setup-file
-source.
+Floppy doesn't take AROS ROM files dropped by the user (a main plus an
+extended ROM), only FS-UAE's built-in copy.
 
 ### Workbench: no free legal source
 
@@ -214,6 +219,7 @@ GPL-2.0-or-later too:
 
 | Date | What was checked | Result |
 |---|---|---|
+| 2026-09-27 | FS-UAE 3.2.35's built-in AROS (`fs-uae.dat`, its `configure_roms` in the source tarball) | `kickstart_file = internal` boots the AROS m68k ROM of 2015-05-20 (exec 51.3) without scanning for ROM files. Offered in setup as **Use AROS for Now**. |
 | 2026-09-27 | Web searches for the System 7.5.3 Internet Archive item, Amiga Forever Essentials, and Mac ROM capture guides (the sandbox blocked direct fetches of archive.org, amigaforever.com and fs-uae.net) | System 7.5.3's installed-disk item is still listed. Amiga Forever Essentials is still on Google Play, with its own page at amigaforever.com/android. Added E-Maculation's ROM capture guide. Links not opened directly: re-check them from a browser. |
 | 2026-09-27 | Floppy's Basilisk II build (macemu `892eeb7`, from `.github/workflows/basilisk.yml`) | Now bundled. Its source tarball matches GitHub's archive of the commit file for file, and the GMP 6.3.0 and MPFR 4.2.2 tarballs match GNU's SHA-256s. |
 | 2026-09-26 | Known-good hashes: MAME Apple drivers, FS-UAE `rommgr.cpp` and launcher Workbench lists, TOSEC DAT pack 2025-03-13 (Amiga Firmware and Workbench DATs), Internet Archive metadata for System 7.0.1/7.5.3 and Mac OS 7.6 | 20 Mac ROMs, 4 Mac startup disks, 74 Kickstarts, 81 Workbench disks. TOSEC has no Mac OS DAT. The Internet Archive's Mac ROM collections are zipped, so their per-file hashes can't be read without downloading ROMs, which Floppy won't do. |

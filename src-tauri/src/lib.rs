@@ -83,6 +83,7 @@ pub fn run() {
             commands::write_missing_list,
             commands::import_setup_files,
             commands::setup_sources,
+            commands::set_aros,
             commands::add_setup_report,
             commands::import_from_downloads,
             commands::import_files_disc,

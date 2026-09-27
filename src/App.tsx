@@ -330,6 +330,20 @@ function App() {
   // is worth looking for.
   const anySetupMissing = statuses.some((s) => s.os !== "dos" && (!s.system.rom || !s.system.boot));
 
+  // However a real Kickstart arrived (dropped, Downloads, a files disc,
+  // Choose…), say that it now replaces AROS.
+  const amigaStatus = statuses.find((s) => s.os === "amiga");
+  const wasOnAros = useRef(false);
+  useEffect(() => {
+    if (!amigaStatus) return;
+    const onAros = amigaStatus.system.aros && !amigaStatus.system.rom;
+    if (wasOnAros.current && amigaStatus.system.rom) {
+      const which = amigaStatus.romNote ?? amigaStatus.system.rom;
+      setMessage(`Floppy found a real Kickstart (${which}) and now starts the Amiga with it instead of AROS.`);
+    }
+    wasOnAros.current = onAros;
+  }, [amigaStatus]);
+
   // After the user opened a source in the browser, look in Downloads each
   // time Floppy comes back to the front, quietly unless something's found.
   useEffect(() => {
@@ -1040,6 +1054,22 @@ function App() {
     }
   }
 
+  /** Turns the Amiga's built-in AROS replacement Kickstart on or off (commands.rs `set_aros`). */
+  async function useAros(on: boolean) {
+    setError(null);
+    try {
+      await invoke<GuestStatus>("set_aros", { on });
+      await refreshStatuses();
+      setMessage(
+        on
+          ? "The Amiga starts with the free AROS Kickstart for now. When Floppy finds a real Kickstart ROM (dropped here, in Downloads, or on a files disc) it switches to it by itself."
+          : "Stopped using AROS. Add a Kickstart ROM to start the Amiga.",
+      );
+    } catch (e) {
+      fail(e);
+    }
+  }
+
   async function launch(app: LibraryApp, promptOnly: boolean) {
     setError(null);
     try {
@@ -1366,6 +1396,12 @@ function App() {
             <ChipIcon />
           </span>
           <p className="setup-drop-text">
+            {guest === "amiga" && status?.system.aros && !status.system.rom && (
+              <>
+                <strong>Running on the free AROS Kickstart for now.</strong> A real Kickstart ROM runs far more Amiga
+                software, and Floppy switches to one by itself as soon as it finds it.{" "}
+              </>
+            )}
             <strong>Setup files needed:</strong> {missingSetup.join(", ")}. Drop them onto this window as files, folders,
             zips or disc images, or download them (see where below) and Floppy picks them up from your Downloads
             folder. It recognizes each one by its contents, whatever it's called.
@@ -1458,6 +1494,7 @@ function App() {
               sources={sources}
               onOpenSource={(src) => void openSource(src)}
               onReport={startReport}
+              onAros={(on) => void useAros(on)}
             />
           )}
 
@@ -1677,7 +1714,12 @@ function App() {
                   Remove
                 </button>
               </div>
-              <LaunchHint app={selected} blocker={blocker} guestRunning={guest !== "dos" && guestRunning} />
+              <LaunchHint
+                app={selected}
+                blocker={blocker}
+                guestRunning={guest !== "dos" && guestRunning}
+                onAros={guest === "amiga" && !!status?.system.aros && !status.system.rom}
+              />
             </div>
           )}
         </section>
@@ -1982,8 +2024,26 @@ function IdentityFields({
 }
 
 /** What pressing Launch will do, when it isn't simply "run this program". */
-function LaunchHint({ app, blocker, guestRunning }: { app: LibraryApp; blocker: string | null; guestRunning: boolean }) {
+function LaunchHint({
+  app,
+  blocker,
+  guestRunning,
+  onAros,
+}: {
+  app: LibraryApp;
+  blocker: string | null;
+  guestRunning: boolean;
+  onAros: boolean;
+}) {
   if (blocker) return <p className="system-note warn">{blocker}</p>;
+  if (onAros && !guestRunning) {
+    return (
+      <p className="launch-hint">
+        Runs on the free AROS Kickstart. If {app.name} crashes or won't start, a real Kickstart ROM most likely fixes it:
+        see the Amiga system box for where to get one.
+      </p>
+    );
+  }
   if (guestRunning) {
     return (
       <p className="launch-hint">
@@ -2111,6 +2171,7 @@ function SystemSetup({
   sources,
   onOpenSource,
   onReport,
+  onAros,
 }: {
   status: GuestStatus;
   disabled: boolean;
@@ -2124,9 +2185,11 @@ function SystemSetup({
   sources: SetupSource[];
   onOpenSource: (src: SetupSource) => void;
   onReport: (slot: string, filled: boolean) => void;
+  onAros: (on: boolean) => void;
 }) {
   const amiga = status.os === "amiga";
-  const { rom, boot, model } = status.system;
+  const { rom, boot, model, aros } = status.system;
+  const runningAros = amiga && aros && !rom;
   // cd.rs slot labels, which the list and discs.rs use.
   const romSlot = amiga ? "Kickstart ROM" : "Mac ROM";
   const bootSlot = amiga ? "Workbench disk" : "Mac startup disk";
@@ -2152,12 +2215,17 @@ function SystemSetup({
       </h3>
       <div className="system-row">
         <span className="system-label">{amiga ? "Kickstart ROM" : "Mac ROM"}</span>
-        <span className={`system-value${rom ? "" : " missing"}`}>
-          {rom ? `${rom}${status.romNote ? ` · ${status.romNote}` : ""}` : "Not added"}
+        <span className={`system-value${rom || runningAros ? "" : " missing"}`}>
+          {rom ? `${rom}${status.romNote ? ` · ${status.romNote}` : ""}` : runningAros ? "AROS (free replacement, built in)" : "Not added"}
         </span>
         <button type="button" className="small" disabled={disabled} onClick={() => onChoose("rom", false)}>
           Choose…
         </button>
+        {runningAros && (
+          <button type="button" className="small" disabled={disabled} onClick={() => onAros(false)}>
+            Stop Using AROS
+          </button>
+        )}
         {!rom && notOnDrives(romSlot)}
       </div>
       <div className="system-row">
@@ -2185,7 +2253,34 @@ function SystemSetup({
           </select>
         </div>
       )}
-      {!rom && <SetupSources slot={romSlot} sources={sources} disabled={disabled} onOpen={onOpenSource} />}
+      {!rom && (
+        <SetupSources
+          slot={romSlot}
+          note={runningAros ? "runs far more software than AROS" : undefined}
+          sources={sources}
+          disabled={disabled}
+          onOpen={onOpenSource}
+        />
+      )}
+      {amiga && !rom && !aros && (
+        <div className="setup-sources">
+          <h4>Or start now with the free AROS Kickstart</h4>
+          <div className="setup-source">
+            <span className="setup-source-name">
+              <span className="source-kind free">Free</span> <strong>AROS replacement Kickstart (built in)</strong>
+            </span>
+            <button type="button" className="small primary" disabled={disabled} onClick={() => onAros(true)}>
+              Use AROS for Now
+            </button>
+            <span className="system-note setup-source-note">
+              An open-source stand-in for Commodore's ROM that comes with FS-UAE, so there's nothing to download. It runs
+              some games and demos on bootable disks, but many programs crash or refuse to start on it, and it doesn't boot
+              Commodore's Workbench, so apps that need Workbench won't run. When Floppy finds a real Kickstart ROM, it
+              switches to it by itself.
+            </span>
+          </div>
+        </div>
+      )}
       {!boot && (
         <SetupSources
           slot={bootSlot}
@@ -2239,12 +2334,15 @@ function SystemSetup({
 function SetupSources({
   slot,
   optional,
+  note,
   sources,
   disabled,
   onOpen,
 }: {
   slot: string;
   optional?: boolean;
+  /** Why it's worth getting, shown after the heading. */
+  note?: string;
   sources: SetupSource[];
   disabled: boolean;
   onOpen: (src: SetupSource) => void;
@@ -2256,6 +2354,7 @@ function SetupSources({
       <h4>
         Where to get a {slot}
         {optional ? " (optional)" : ""}
+        {note ? ` (${note})` : ""}
       </h4>
       <ul>
         {rows.map((src) => (

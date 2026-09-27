@@ -45,10 +45,18 @@ the end-to-end test runs a real program in it headlessly.
     generation is unit-tested.
   - FS-UAE still reads `~/Library/Preferences/fs-uae/*-dir` files if the
     user has them, before `base_dir`. They only move FS-UAE's own folders.
-  - Its archive carries the AROS replacement Kickstart (`fs-uae.dat`,
-    AROS Public License), used when no ROM is configured. That's free
-    software inside FS-UAE's own distribution, not a copyrighted ROM, but
-    Floppy doesn't rely on it: it always passes the user's own Kickstart.
+  - Its archive carries the AROS replacement Kickstart (`fs-uae.dat`: a
+    main and an extended 512 KB ROM, the AROS m68k build of 2015-05-20,
+    exec 51.3, AROS Public License). That's free software inside
+    FS-UAE's own distribution, not a copyrighted ROM. Since 2026-09-27
+    Floppy offers it as an opt-in fallback while the user has no
+    Kickstart (`kickstart_file = internal`, see CLAUDE.md), and switches
+    to a real Kickstart as soon as one is set up. Checked under Xvfb: it
+    boots to AROS's "Waiting for bootable media" screen. FS-UAE's
+    `licenses/` folder has no AROS licence text, and its source tarball
+    has only the ROM binaries: the AROS source is the AROS project's own
+    (github.com/aros-development-team/AROS). Mention that in release
+    notes alongside the emulator sources.
 - **Alternative considered:** Amiberry (GPL-3.0, also fine as a separate
   executable, universal macOS DMG, very active). FS-UAE was picked for
   its long record as a scriptable, config-file-driven emulator with

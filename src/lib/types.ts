@@ -172,6 +172,8 @@ export interface GuestSystem {
   rom: string | null;
   boot: string | null;
   model: string | null;
+  /** Amiga only: FS-UAE's built-in AROS Kickstart stands in while `rom` is empty. */
+  aros: boolean;
 }
 
 /** commands.rs `GuestStatus`. */

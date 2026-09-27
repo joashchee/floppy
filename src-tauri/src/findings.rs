@@ -192,7 +192,11 @@ fn load_setup_reports(library: &Library) -> Vec<SetupReport> {
 /// What the file in `slot` is, for a "didn't work" report: never its
 /// name or where it is.
 fn slot_file(library: &Library, slot: Slot) -> Result<Option<String>, String> {
-    let Some(path) = library.system_file(slot.os(), slot.kind())? else { return Ok(None) };
+    let Some(path) = library.system_file(slot.os(), slot.kind())? else {
+        // What ran instead, when that's the AROS fallback.
+        let aros = slot == Slot::Kickstart && library.system(GuestOs::Amiga)?.aros;
+        return Ok(aros.then(|| "AROS replacement Kickstart (FS-UAE's built-in copy)".to_string()));
+    };
     let Ok(meta) = std::fs::metadata(&path) else { return Ok(None) };
     if !meta.is_file() {
         return Ok(Some("a folder".into()));
@@ -653,6 +657,16 @@ mod tests {
         assert!(!json.contains("secret-name") && !json.contains(&home));
         mark_exported(&lib, &f).unwrap();
         assert_eq!(collect(&lib).unwrap().summary().setup_reports, 0);
+    }
+
+    #[test]
+    fn a_kickstart_report_says_when_aros_was_running() {
+        let t = TempDir::new();
+        let lib = Library::new(t.path().join("lib"));
+        lib.set_aros(GuestOs::Amiga, true).unwrap();
+        add_setup_report(&lib, "Kickstart ROM", "didnt-work", None, "Guru meditation in my game").unwrap();
+        let f = collect(&lib).unwrap();
+        assert_eq!(f.setup_reports[0].file.as_deref(), Some("AROS replacement Kickstart (FS-UAE's built-in copy)"));
     }
 
     #[test]

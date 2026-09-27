@@ -87,7 +87,9 @@ fn guest_status(app: &AppHandle, library: &Library, os: GuestOs) -> Result<Guest
             GuestOs::MacClassic if system.boot.is_none() => {
                 Some("Add a startup disk image (System 7 to Mac OS 8.1) to start the Mac.".into())
             }
-            GuestOs::Amiga if system.rom.is_none() => Some("Add a Kickstart ROM to start the Amiga.".into()),
+            GuestOs::Amiga if system.rom.is_none() && !system.aros => {
+                Some("Add a Kickstart ROM to start the Amiga, or use the free AROS replacement for now.".into())
+            }
             _ => None,
         }
     };
@@ -211,6 +213,14 @@ pub fn locate_emulator(app: AppHandle, state: State<AppState>, os: String, path:
     let os = GuestOs::parse(&os).ok_or("Unknown guest OS.")?;
     emulator::set_chosen(&state.library, Emulator::for_os(os), Path::new(&path))?;
     guest_status(&app, &state.library, os)
+}
+
+/// Turns the Amiga's built-in AROS replacement Kickstart on or off
+/// (`Library::set_aros`).
+#[tauri::command]
+pub fn set_aros(app: AppHandle, state: State<AppState>, on: bool) -> Result<GuestStatus, String> {
+    state.library.set_aros(GuestOs::Amiga, on)?;
+    guest_status(&app, &state.library, GuestOs::Amiga)
 }
 
 #[tauri::command]
@@ -501,7 +511,11 @@ fn write_launch_config(library: &Library, entry: &LibraryApp, program: Option<&s
         }
         GuestOs::Amiga => {
             let sys = library.system(entry.os)?;
-            let kickstart = library.system_file(entry.os, SystemFile::Rom)?.ok_or("Add a Kickstart ROM first.")?;
+            // A real Kickstart always wins over the AROS fallback.
+            let kickstart = library.system_file(entry.os, SystemFile::Rom)?;
+            if kickstart.is_none() && !sys.aros {
+                return Err("Add a Kickstart ROM first, or use the free AROS replacement.".into());
+            }
             let workbench = library.system_file(entry.os, SystemFile::Boot)?;
             // The chosen disk first, then the app's other floppies for the
             // swap list. A chosen program file boots Workbench instead.
@@ -517,7 +531,7 @@ fn write_launch_config(library: &Library, entry: &LibraryApp, program: Option<&s
             let conf = amiga::fsuae_conf(&amiga::Launch {
                 base_dir: &base_dir,
                 model: sys.model.as_deref().unwrap_or("A1200"),
-                kickstart: &kickstart,
+                kickstart: kickstart.as_deref(),
                 workbench: workbench.as_deref(),
                 shared: &shared,
                 app_disks,
