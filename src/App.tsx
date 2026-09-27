@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactElement } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState, type ReactElement } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
@@ -37,7 +37,10 @@ import {
   identityLabel,
   type LibraryApp,
   type CdImport,
-  dosPath,
+  docPath,
+  docTypeFolder,
+  DOCS_DIR,
+  guestFilePath,
   type ImportedItem,
   type LibraryDoc,
   type Opener,
@@ -64,6 +67,7 @@ const GUEST_UI: Record<
     dropHint: string;
     libraryDesc: string;
     emptyHint: string;
+    docsDesc: string;
     bootOnlyLabel: string;
     bootOnlyTitle: string;
   }
@@ -76,6 +80,7 @@ const GUEST_UI: Record<
     libraryDesc: "Everything here is on drive C: in DOSBox, so apps can reach each other's files.",
     emptyHint:
       "Drop a DOS program's folder, a zip, or an .EXE onto this window, or use the Import buttons. Drop an old document (a .WP5, .WK1, .DBF…) to open it in an app that made it.",
+    docsDesc: "Files in C:\\DOCS, in a folder per file type (C:\\DOCS\\WP5). What an app saves there is sorted when DOSBox quits.",
     bootOnlyLabel: "DOS Prompt",
     bootOnlyTitle: "Boot DOSBox at a prompt in this app's folder",
   },
@@ -83,11 +88,13 @@ const GUEST_UI: Record<
     icon: () => <MacAppIcon />,
     importFilter: null,
     importFileLabel: "Import File…",
-    dropHint: "A Mac app's folder, a zip made on a Mac, MacBinary (.bin), StuffIt/BinHex, or a disk image",
+    dropHint: "A Mac app's folder, a zip made on a Mac, MacBinary (.bin), StuffIt/BinHex, a disk image, or a document",
     libraryDesc:
       "Everything here is on the Unix volume on the Mac's desktop. Resource forks are kept, so apps copied from a Mac disk still open.",
     emptyHint:
       "Drop a Mac app's folder, a zip made on a Mac, a MacBinary (.bin) file, a StuffIt or BinHex archive, or a disk image onto this window.",
+    docsDesc:
+      "Files in the Documents folder on the Unix volume, in a folder per file type (Documents:TEXT). What an app saves there is sorted when the Mac quits.",
     bootOnlyLabel: "Start Mac OS",
     bootOnlyTitle: "Start Mac OS without mounting this app's disk image",
   },
@@ -95,13 +102,28 @@ const GUEST_UI: Record<
     icon: () => <AmigaAppIcon />,
     importFilter: null,
     importFileLabel: "Import Disk or File…",
-    dropHint: "An Amiga program's folder, a zip, or a disk image (.adf, .adz, .dms, .hdf)",
+    dropHint: "An Amiga program's folder, a zip, a disk image (.adf, .adz, .dms, .hdf), or a document",
     libraryDesc: "Everything here is on the Floppy: drive in the Amiga, so apps can reach each other's files.",
     emptyHint: "Drop an .adf disk image, a zip, or an Amiga program's folder onto this window.",
+    docsDesc:
+      "Files in Floppy:Documents, in a folder per file type (Documents/ILBM). What an app saves there is sorted when the Amiga quits.",
     bootOnlyLabel: "Start Workbench",
     bootOnlyTitle: "Boot your Workbench without this app's disk",
   },
 };
+
+/** Each guest's emulator, as the Quit button names it. */
+const EMULATOR_LABEL: Record<GuestOs, string> = { dos: "DOSBox", "mac-classic": "Basilisk II", amiga: "FS-UAE" };
+
+/** What quitting a running guest takes, before and after Floppy has asked it to quit. */
+function quitHint(os: GuestOs, asked: boolean): string {
+  if (os === "mac-classic") {
+    return asked
+      ? "The Mac was asked to shut down: answer it in Basilisk II's window. If it can't, Force Quit stops it at once, like switching a real Mac off, so anything unsaved in the Mac is lost."
+      : "To quit, choose Shut Down from the Mac's Special menu, or press Ctrl-Esc in its window. Closing the window only asks the Mac to shut down.";
+  }
+  return asked ? "Still running? Force Quit stops it at once." : "Save your work in the app before quitting.";
+}
 
 function baseName(path: string): string {
   return path.split(/[\\/]/).filter(Boolean).pop() ?? path;
@@ -247,6 +269,8 @@ function App() {
   const [guest, setGuest] = useState<GuestOs>("dos");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [running, setRunning] = useState<Set<string>>(new Set());
+  // Apps Floppy has asked to quit: their Quit button forces it next.
+  const [quitAsked, setQuitAsked] = useState<Set<string>>(new Set());
   const [statuses, setStatuses] = useState<GuestStatus[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
   // For listeners set up once: whether something is already in progress.
@@ -304,6 +328,18 @@ function App() {
   const guestDocs = useMemo(
     () => documents.filter((d) => d.os === guest).sort((a, b) => a.name.localeCompare(b.name)),
     [documents, guest],
+  );
+  // The documents folder's type folders, in order, each with its files.
+  const docGroups = useMemo(
+    () => {
+      const groups = new Map<string, LibraryDoc[]>();
+      for (const d of guestDocs) {
+        const folder = docTypeFolder(d);
+        groups.set(folder, [...(groups.get(folder) ?? []), d]);
+      }
+      return [...groups.entries()].sort(([a], [b]) => a.localeCompare(b));
+    },
+    [guestDocs],
   );
   const selectedDoc = guestDocs.find((d) => d.id === selectedDocId) ?? null;
   const guestRunning = apps.some((a) => a.os === guest && running.has(a.id));
@@ -447,7 +483,21 @@ function App() {
   }
 
   async function refreshRunning() {
-    setRunning(new Set(await invoke<string[]>("running_apps")));
+    const now = new Set(await invoke<string[]>("running_apps"));
+    setRunning(now);
+    setQuitAsked((asked) => new Set([...asked].filter((id) => now.has(id))));
+  }
+
+  /** Asks an app's emulator to quit, and forces it the second time (commands.rs `quit_app`). */
+  async function quitApp(app: LibraryApp) {
+    const force = quitAsked.has(app.id);
+    setError(null);
+    try {
+      await invoke("quit_app", { id: app.id, force });
+      if (!force) setQuitAsked((asked) => new Set(asked).add(app.id));
+    } catch (e) {
+      fail(e);
+    }
   }
 
   function fail(e: unknown) {
@@ -490,7 +540,7 @@ function App() {
         } else if (startup?.document) {
           await refresh();
           selectDoc(startup.document);
-          setMessage(`Added ${startup.document.name} as ${dosPath(startup.document)}. Choose an app to open it with.`);
+          setMessage(`Added ${startup.document.name} as ${docPath(startup.document)}.`);
         } else if (startup?.error) {
           setError(startup.error);
         }
@@ -499,6 +549,8 @@ function App() {
       }
     })();
     const unlisten = listen("running-changed", () => void refreshRunning());
+    // What a guest saved into its documents folder, sorted once it quit.
+    const unlistenDocs = listen("documents-changed", () => void refresh());
     // Files opened with Floppy (a disc Diskette sends back, request.rs).
     // Taken once here too, for files that arrived before the window.
     const unlistenOpened = listen("files-opened", () => void openedRef.current());
@@ -514,6 +566,7 @@ function App() {
     });
     return () => {
       unlisten.then((f) => f());
+      unlistenDocs.then((f) => f());
       unlistenSession.then((f) => f());
       unlistenOpened.then((f) => f());
       unlistenMedia.then((f) => f());
@@ -625,7 +678,7 @@ function App() {
     for (const path of paths) {
       setBusy(`Importing ${baseName(path)}`);
       try {
-        // A DOS document goes to C:\DOCS; anything else is an app.
+        // An app, or else a document for the guest's documents folder.
         last = await invoke<ImportedItem>("import_item", { os: guest, path });
       } catch (e) {
         failures.push(String(e));
@@ -642,7 +695,7 @@ function App() {
       selectDoc(last.document);
       setMessage(
         paths.length === 1
-          ? `Added ${last.document.name} as ${dosPath(last.document)}.`
+          ? `Added ${last.document.name} as ${docPath(last.document)}.`
           : `Imported ${paths.length - failures.length} of ${paths.length}.`,
       );
     }
@@ -663,9 +716,29 @@ function App() {
     if (Array.isArray(picked) && picked.length) await importPaths(picked);
   }
 
+  /** Adds files as documents, whatever they are (a zip too), sorted by type. */
   async function pickDocuments() {
-    const picked = await open({ multiple: true, title: "Add documents to open in a DOS app" });
-    if (Array.isArray(picked) && picked.length) await importPaths(picked);
+    const picked = await open({ multiple: true, title: `Add documents to ${guestFilePath(guest, DOCS_DIR[guest])}` });
+    if (!Array.isArray(picked) || !picked.length) return;
+    setError(null);
+    setMessage(null);
+    let last: LibraryDoc | null = null;
+    const failures: string[] = [];
+    for (const path of picked) {
+      setBusy(`Adding ${baseName(path)}`);
+      try {
+        last = await invoke<LibraryDoc>("add_document", { os: guest, path });
+      } catch (e) {
+        failures.push(String(e));
+      }
+    }
+    setBusy(null);
+    await refresh();
+    if (last) {
+      selectDoc(last);
+      setMessage(picked.length === 1 ? `Added ${last.name} as ${docPath(last)}.` : `Added ${picked.length - failures.length} of ${picked.length}.`);
+    }
+    if (failures.length) setError(failures.join("\n"));
   }
 
   /** Opens a document in the chosen app; what it saves is listed when DOSBox quits. */
@@ -1419,14 +1492,6 @@ function App() {
           </span>
           {ui.importFileLabel}
         </button>
-        {guest === "dos" && (
-          <button type="button" className="icontext-btn" onClick={() => void pickDocuments()} disabled={!!busy}>
-            <span className="btn-icon">
-              <FileIcon />
-            </span>
-            Import Document…
-          </button>
-        )}
         {setupNeeded && (
           <button
             type="button"
@@ -1543,6 +1608,20 @@ function App() {
         </div>
       ))}
 
+      {apps
+        .filter((a) => running.has(a.id))
+        .map((a) => (
+          <div className="setup-drop running-offer" key={`running-${a.id}`}>
+            <span className="setup-drop-icon">{GUEST_UI[a.os].icon()}</span>
+            <p className="setup-drop-text">
+              <strong>{a.name}</strong> is running in {EMULATOR_LABEL[a.os]}. {quitHint(a.os, quitAsked.has(a.id))}
+            </p>
+            <button type="button" className={`small${quitAsked.has(a.id) ? " danger" : ""}`} onClick={() => void quitApp(a)}>
+              {quitAsked.has(a.id) ? "Force Quit" : `Quit ${EMULATOR_LABEL[a.os]}`}
+            </button>
+          </div>
+        ))}
+
       {busy && (
         <div className="scan-status-row">
           <span className="scan-status-label">
@@ -1560,6 +1639,7 @@ function App() {
       )}
 
       <div className="layout">
+        <div className="layout-column">
         <section className="panel">
           <h2>
             <span className="section-icon">{ui.icon()}</span>
@@ -1616,36 +1696,65 @@ function App() {
             </ul>
           )}
 
-          {guest === "dos" && guestDocs.length > 0 && (
-            <>
-              <h3 className="list-heading">
-                <span className="section-icon">
-                  <FileIcon />
-                </span>
-                Documents <span className="list-heading-meta">C:\DOCS</span>
-              </h3>
-              <ul className="app-list">
-                {guestDocs.map((doc) => (
-                  <li key={doc.id}>
-                    <button
-                      type="button"
-                      className={`app-row${doc.id === selectedDocId ? " selected" : ""}`}
-                      onClick={() => selectDoc(doc)}
-                    >
-                      <span className="row-icon">
-                        <FileIcon />
-                      </span>
-                      <span className="row-main">
-                        <span className="row-name">{doc.name}</span>
-                        <span className="row-meta">{dosPath(doc)}</span>
-                      </span>
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            </>
-          )}
         </section>
+
+        <section className="panel docs-panel">
+          <h2>
+            <span className="section-icon">
+              <FileIcon />
+            </span>
+            {GUEST_LABEL[guest]} Docs
+          </h2>
+          <p className="desc">{ui.docsDesc}</p>
+          {docGroups.length === 0 ? (
+            <p className="empty">
+              No documents yet. Add old files here, or drop them on this window, and Floppy sorts them by type.
+            </p>
+          ) : (
+            docGroups.map(([folder, docs]) => (
+              <Fragment key={folder}>
+                <h3 className="list-heading">
+                  <span className="section-icon">
+                    <FolderIcon />
+                  </span>
+                  {folder}{" "}
+                  <span className="list-heading-meta">
+                    {guestFilePath(guest, `${DOCS_DIR[guest]}/${folder}`)} · {docs.length}
+                  </span>
+                </h3>
+                <ul className="app-list">
+                  {docs.map((doc) => (
+                    <li key={doc.id}>
+                      <button
+                        type="button"
+                        className={`app-row${doc.id === selectedDocId ? " selected" : ""}`}
+                        onClick={() => selectDoc(doc)}
+                      >
+                        <span className="row-icon">
+                          <FileIcon />
+                        </span>
+                        <span className="row-main">
+                          <span className="row-name">{doc.name}</span>
+                          {/* Its name in the guest, when that isn't the name it came with. */}
+                          {baseName(doc.file) !== doc.name && <span className="row-meta">{baseName(doc.file)}</span>}
+                        </span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </Fragment>
+            ))
+          )}
+          <div className="detail-actions">
+            <button type="button" className="icontext-btn" onClick={() => void pickDocuments()} disabled={!!busy}>
+              <span className="btn-icon">
+                <FileIcon />
+              </span>
+              Add Documents…
+            </button>
+          </div>
+        </section>
+        </div>
 
         <section className="panel">
           {selectedDoc ? (
@@ -1657,12 +1766,15 @@ function App() {
               onReveal={() => void revealLibraryFile(selectedDoc.os, selectedDoc.file)}
               onExport={() => void exportLibraryFile(selectedDoc.os, selectedDoc.file)}
               onRemove={() => void removeDocument(selectedDoc)}
+              startApp={guestApps.find((a) => a.favorite) ?? guestApps[0] ?? null}
+              startBlocked={launchBlocked || guestRunning}
+              onStart={(a) => void launch(a, true)}
             />
           ) : !selected ? (
             <p className="empty">
               {guest === "dos"
                 ? "Select an app to launch it or change what it opens, or a document to open it in its app."
-                : "Select an app to launch it or change what it opens."}
+                : "Select an app to launch it, or a document to see where it is in the guest."}
             </p>
           ) : (
             <div className="app-details">
@@ -2194,6 +2306,9 @@ function DocumentDetails({
   onReveal,
   onExport,
   onRemove,
+  startApp,
+  startBlocked,
+  onStart,
 }: {
   doc: LibraryDoc;
   apps: LibraryApp[];
@@ -2202,6 +2317,10 @@ function DocumentDetails({
   onReveal: () => void;
   onExport: () => void;
   onRemove: () => void;
+  /** Mac and Amiga: an app of the guest's to start it with, so the user can open the document there. */
+  startApp: LibraryApp | null;
+  startBlocked: boolean;
+  onStart: (app: LibraryApp) => void;
 }) {
   const [openers, setOpeners] = useState<Opener[]>([]);
   const [choice, setChoice] = useState(0);
@@ -2220,7 +2339,14 @@ function DocumentDetails({
   return (
     <div className="app-details">
       <h3 className="doc-title">{doc.name}</h3>
-      {openers.length > 0 ? (
+      {doc.os !== "dos" ? (
+        <p className="system-note">
+          Floppy can't open {GUEST_LABEL[doc.os]} documents in their app by itself yet.{" "}
+          {startApp
+            ? `Start ${doc.os === "mac-classic" ? "Mac OS" : "Workbench"}, then open ${docPath(doc)} there.`
+            : `Import a ${GUEST_LABEL[doc.os]} app that opens it, then start it and open ${docPath(doc)} there.`}
+        </p>
+      ) : openers.length > 0 ? (
         <label className="field">
           <span className="field-label">Open with</span>
           <select value={choice} onChange={(e) => setChoice(Number(e.target.value))}>
@@ -2240,18 +2366,34 @@ function DocumentDetails({
         </p>
       )}
       <dl className="details-grid">
-        <dt>In DOS</dt>
-        <dd className="details-path">{dosPath(doc)}</dd>
+        <dt>In {GUEST_LABEL[doc.os]}</dt>
+        <dd className="details-path">{docPath(doc)}</dd>
+        <dt>Type</dt>
+        <dd>{docTypeFolder(doc) || "Unsorted"}</dd>
         <dt>Added</dt>
         <dd>{new Date(doc.added * 1000).toLocaleString()}</dd>
       </dl>
       <div className="detail-actions">
-        <button type="button" className="primary icontext-btn" disabled={busy || !opener} onClick={() => opener && onOpen(opener)}>
-          <span className="btn-icon">
-            <PlayIcon />
-          </span>
-          Open
-        </button>
+        {doc.os === "dos" ? (
+          <button type="button" className="primary icontext-btn" disabled={busy || !opener} onClick={() => opener && onOpen(opener)}>
+            <span className="btn-icon">
+              <PlayIcon />
+            </span>
+            Open
+          </button>
+        ) : (
+          <button
+            type="button"
+            className="primary icontext-btn"
+            disabled={busy || !startApp || startBlocked}
+            onClick={() => startApp && onStart(startApp)}
+          >
+            <span className="btn-icon">
+              <PlayIcon />
+            </span>
+            {doc.os === "mac-classic" ? "Start Mac OS" : "Start Workbench"}
+          </button>
+        )}
         <button type="button" className="icontext-btn" onClick={onReveal}>
           <span className="btn-icon">
             <FolderIcon />

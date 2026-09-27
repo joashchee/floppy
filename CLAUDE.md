@@ -35,7 +35,7 @@ gitignored `CLAUDE.local.md`, never in committed files.
 2. **Floppy stays a separate program from anything that feeds it.**
    Other programs talk to it only across a process boundary, through
    documented plain interfaces: `floppy import [--os
-   dos|mac-classic|amiga] <path>` and `floppy open <file>` (`cli.rs`), the missing-files list and
+   dos|mac-classic|amiga] <path>` and `floppy open [--os …] <file>` (`cli.rs`), the missing-files list and
    files disc (`cd.rs`), the request list and `#reply-to:` disc
    (`request.rs`), and later perhaps a URL scheme. Never read
    another app's private data (its database or internal files), never
@@ -194,22 +194,56 @@ gitignored `CLAUDE.local.md`, never in committed files.
 
 - An old file is opened in the app that made it: it's imported as a
   document, matched to apps already in the library, and launched with
-  the app. DOS only so far; Amiga and classic Mac are next (see the
-  plan page linked from `CLAUDE.local.md`).
-- DOS documents live in `C:\DOCS` (`library/dos/DOCS/`, reserved: no
-  app folder takes that name) under 8.3 names. The original name is
-  kept in `library.json` (`documents`) and used on export.
+  the app. Opening in the app is DOS only so far; Mac and Amiga
+  documents are kept, sorted and shown, and the user starts the guest
+  and opens them there (auto-open is next: see the plan page linked
+  from `CLAUDE.local.md`).
+- **Every guest has a documents folder**, reserved in its library folder
+  (no app folder takes the name, `documents::docs_dir`): `C:\DOCS`
+  (`library/dos/DOCS/`), the Mac's `Unix:Documents` and the Amiga's
+  `Floppy:Documents` (`library/<os>/Documents/`). **It's sorted into a
+  folder per file type** named the way its guest names things
+  (`documents::type_folder`): the extension for DOS, already 8.3 (`WP5`,
+  `OTHER` for none); the Finder type code on the Mac (`TEXT`), else the
+  extension in capitals; the IFF type on the Amiga (`ILBM`), else the
+  extension. `Library::tidy_documents` keeps it that way whoever put
+  files there: files at any depth move into their type's folder under a
+  free name the guest takes (8.3 for DOS, `Name 2.txt` otherwise), via
+  `.sorting/` so a sort cut short finishes next time, with the Mac's
+  `.rsrc`/`.finf` forks on Linux; new files are listed under their file
+  name, gone ones leave the list, and emptied folders go. It runs when
+  the list loads and when an emulator quits, never while that guest's
+  emulator is running (it would see files move). The UI shows the
+  library panel's apps only, and a **Docs** panel below it grouped by
+  type folder, with **Add Documents…**. The original name is kept in
+  `library.json` (`documents`) and used on export.
+- A dropped or picked file that isn't an app for its guest
+  (`documents::is_app_source`: DOS folders, zips and programs; Mac
+  folders, zips, disk images, archives, `APPL` files and MacBinary apps;
+  Amiga folders, zips, disk images and hunk executables) becomes a
+  document. `floppy open [--os dos|mac-classic|amiga] <file>` does the
+  same from outside (`cli.rs`). A MacBinary document is decoded.
 - Matching: `DOS_APPS`, a public table of well-known programs and the
   extensions they open, plus extensions the user adds per app ("Also
   opens"). The app a document last opened with is offered first.
-- `open_document` runs `PROGRAM C:\DOCS\FILE` in `[autoexec]`. Every
+- `open_document` runs `PROGRAM C:\DOCS\WP5\FILE` in `[autoexec]`. Every
   DOS launch snapshots drive C: and, when DOSBox quits, emits
-  `session-ended` with the files that are new or changed (Show in Finder
-  and Export, which uses the original name). Files saved into `C:\DOCS`
-  become documents.
-- `floppy open [--os dos] <file>` hands Floppy a document (`cli.rs`),
-  like `floppy import` does an app. A dropped file that isn't a folder,
-  zip or program becomes a document on the DOS tab.
+  `session-ended` with the files that are new or changed, at the paths
+  they were sorted to (Show in Finder and Export, which uses the original
+  name).
+
+## Running emulators
+
+- `AppState.children` holds each running emulator's process, reaped only
+  by the thread that waits on it (polling `try_wait`), so its process ID
+  is never reused while Floppy can still signal it. A strip shows each
+  running app with **Quit <emulator>** (`quit_app`: SIGTERM), then
+  **Force Quit** (SIGKILL). DOSBox and FS-UAE quit on SIGTERM. Basilisk
+  II's SDL turns SIGTERM, its window's close button and Cmd-Q into the
+  Mac's power key, which only asks the Mac to shut down, hence Force
+  Quit and the hint (Shut Down, or Ctrl-Esc, its emergency quit).
+- When an emulator quits, Floppy brings its window back to the front,
+  then sorts that guest's documents folder (`documents-changed`).
 
 ## Handler apps (`handlers.rs`)
 

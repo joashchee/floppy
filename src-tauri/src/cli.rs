@@ -1,8 +1,9 @@
 //! Command-line handoff:
 //!
 //! - `floppy import [--os dos|mac-classic|amiga] <path>`: an app.
-//! - `floppy open [--os dos] <file>`: a document, to open in an app that
-//!   made it (documents.rs). DOS only so far.
+//! - `floppy open [--os dos|mac-classic|amiga] <file>`: a document, kept
+//!   in that guest's documents folder under its type (documents.rs). Only
+//!   DOS documents open in their app by themselves so far.
 //!
 //! This is how another program (a catalog app like Diskette, a script)
 //! hands Floppy an app or a file: start Floppy with these arguments, and
@@ -23,7 +24,7 @@ pub enum Cli {
     Error(String),
 }
 
-const USAGE: &str = "Usage: floppy import [--os dos|mac-classic|amiga] <path>, or floppy open [--os dos] <file>";
+const USAGE: &str = "Usage: floppy import [--os dos|mac-classic|amiga] <path>, or floppy open [--os dos|mac-classic|amiga] <file>";
 
 /// Parses `args` without the program name.
 pub fn parse(args: &[String]) -> Cli {

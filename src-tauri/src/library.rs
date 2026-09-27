@@ -461,7 +461,7 @@ impl Library {
             .map(|e| e.file_name().to_string_lossy().to_ascii_uppercase())
             .collect();
         // The documents folder is never an app's.
-        taken.insert(documents::DOS_DOCS_DIR.to_string());
+        taken.insert(documents::docs_dir(os).to_uppercase());
         let dir = match os {
             GuestOs::Dos => dos::to_83(&name, &taken, true),
             GuestOs::MacClassic => unique_name(&mac::sanitize_name(&name, mac::MAX_NAME, "App"), &taken, mac::MAX_NAME),
@@ -619,28 +619,52 @@ impl Library {
         Ok(self.os_root(doc.os).join(rel))
     }
 
-    /// Copies one file into the guest's documents folder (`C:\DOCS` for
-    /// DOS, under an 8.3 name) and lists it. Only DOS takes documents so
-    /// far.
+    /// Copies one file into the guest's documents folder, in the folder for
+    /// its type (documents.rs), and lists it: `DOCS/WP5/LETTERTO.WP5` under
+    /// an 8.3 name for DOS, the Mac's and Amiga's own names otherwise. A
+    /// MacBinary file comes in decoded, with its forks and type.
     pub fn import_document(&self, os: GuestOs, src: &Path) -> Result<LibraryDoc, String> {
         let name = src.file_name().map(|n| n.to_string_lossy().into_owned()).ok_or("That path has no file name.")?;
-        if os != GuestOs::Dos {
-            return Err("Only DOS documents can be opened in their app so far.".into());
-        }
         if !src.is_file() {
             return Err(format!("{name} isn't a file."));
         }
         let _g = self.guard();
-        let dir = self.os_root(os).join(documents::DOS_DOCS_DIR);
+        let staging = Staging::new(&self.root)?;
+        let ext = name.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase()).unwrap_or_default();
+        let name = if os == GuestOs::MacClassic && mac::MACBINARY_EXTS.contains(&ext.as_str()) {
+            let stem = name.rsplit_once('.').map_or(name.as_str(), |(s, _)| s);
+            mac::decode_macbinary(src, staging.path(), stem).map_err(|e| format!("Couldn't decode {name}: {e}"))?
+        } else {
+            // On macOS the copy carries the Mac forks; elsewhere they're
+            // in Basilisk II's folders beside the file.
+            fs::copy(src, staging.path().join(&name)).map_err(|e| format!("Couldn't copy {name}: {e}"))?;
+            #[cfg(not(target_os = "macos"))]
+            if os == GuestOs::MacClassic {
+                for h in mac::HELPER_DIRS {
+                    let fork = src.parent().unwrap_or(Path::new("")).join(h).join(&name);
+                    if fork.is_file() {
+                        fs::create_dir_all(staging.path().join(h)).map_err(|e| e.to_string())?;
+                        fs::copy(&fork, staging.path().join(h).join(&name)).map_err(|e| format!("Couldn't copy {name}'s Mac forks: {e}"))?;
+                    }
+                }
+            }
+            name
+        };
+        let staged = staging.path().join(&name);
+        let kind = documents::type_folder(os, &staged);
+        let dir = self.docs_path(os).join(&kind);
         fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-        let taken: HashSet<String> =
-            fs::read_dir(&dir).map_err(|e| e.to_string())?.filter_map(Result::ok).map(|e| e.file_name().to_string_lossy().to_ascii_uppercase()).collect();
-        let file = dos::to_83(&name, &taken, false);
-        fs::copy(src, dir.join(&file)).map_err(|e| format!("Couldn't copy {name}: {e}"))?;
+        let file = doc_file_name(os, &dir, &name);
+        move_doc(os, &staged, &dir.join(&file)).map_err(|e| format!("Couldn't add {name}: {e}"))?;
         let mut m = self.load()?;
-        let doc = self.new_document(&mut m, os, name, format!("{}/{file}", documents::DOS_DOCS_DIR));
+        let doc = self.new_document(&mut m, os, name, format!("{}/{kind}/{file}", documents::docs_dir(os)));
         self.save(&m)?;
         Ok(doc)
+    }
+
+    /// The guest's documents folder.
+    pub fn docs_path(&self, os: GuestOs) -> PathBuf {
+        self.os_root(os).join(documents::docs_dir(os))
     }
 
     fn new_document(&self, m: &mut Manifest, os: GuestOs, name: String, file: String) -> LibraryDoc {
@@ -653,30 +677,80 @@ impl Library {
         doc
     }
 
-    /// Lists files an app saved into the documents folder that aren't in
-    /// the library yet, under their DOS names. Returns the new ones.
-    pub fn adopt_documents(&self, os: GuestOs) -> Result<Vec<LibraryDoc>, String> {
-        if os != GuestOs::Dos {
-            return Ok(Vec::new());
-        }
+    /// Keeps the guest's documents folder sorted and the library's list of
+    /// it current, whoever put files there (an app in the guest, the user
+    /// in the Finder):
+    /// - every file goes into the folder for its type
+    ///   (`documents::type_folder`), under a name its guest takes,
+    /// - files that aren't listed yet are listed, under their file name,
+    /// - listed documents whose file is gone are dropped,
+    /// - folders left empty are removed.
+    ///
+    /// Only call it while the guest's emulator isn't running: it moves
+    /// files the guest can see. Returns each move, as paths relative to the
+    /// guest's library folder.
+    pub fn tidy_documents(&self, os: GuestOs) -> Result<Vec<(String, String)>, String> {
         let _g = self.guard();
-        let dir = self.os_root(os).join(documents::DOS_DOCS_DIR);
-        let Ok(entries) = fs::read_dir(&dir) else { return Ok(Vec::new()) };
+        let os_root = self.os_root(os);
+        let docs = self.docs_path(os);
         let mut m = self.load()?;
-        let mut added = Vec::new();
-        let mut names: Vec<String> = entries.filter_map(Result::ok).filter(|e| e.path().is_file()).map(|e| e.file_name().to_string_lossy().into_owned()).collect();
-        names.sort();
-        for name in names {
-            let file = format!("{}/{name}", documents::DOS_DOCS_DIR);
-            if name.starts_with('.') || m.documents.iter().any(|d| d.os == os && d.file.eq_ignore_ascii_case(&file)) {
-                continue;
+        let rel = |p: &Path| p.strip_prefix(&os_root).map(|r| r.to_string_lossy().replace('\\', "/")).unwrap_or_default();
+        let mut moves: Vec<(String, String)> = Vec::new();
+        let renamed = |m: &mut Manifest, from: &str, to: &str| {
+            for d in m.documents.iter_mut().filter(|d| d.os == os && d.file.eq_ignore_ascii_case(from)) {
+                d.file = to.to_string();
             }
-            added.push(self.new_document(&mut m, os, name, file));
-        }
-        if !added.is_empty() {
+        };
+        if docs.is_dir() {
+            // First out of the way, each in a numbered folder of its own
+            // (so no name clashes), then into its type's folder. Files a
+            // sort cut short left in `.sorting` are finished now.
+            let sorting = docs.join(documents::SORTING_DIR);
+            let mut n = 0u32;
+            for f in doc_files(&docs) {
+                if f.parent().and_then(Path::parent) == Some(sorting.as_path()) || is_sorted(os, &docs, &f) {
+                    continue;
+                }
+                let slot = loop {
+                    n += 1;
+                    let slot = sorting.join(n.to_string());
+                    if !slot.exists() {
+                        break slot;
+                    }
+                };
+                let to = slot.join(f.file_name().expect("a file"));
+                move_doc(os, &f, &to).map_err(|e| format!("Couldn't sort {}: {e}", rel(&f)))?;
+                renamed(&mut m, &rel(&f), &rel(&to));
+                moves.push((rel(&f), rel(&to)));
+            }
             self.save(&m)?;
+            for f in doc_files(&sorting) {
+                let name = f.file_name().expect("a file").to_string_lossy().into_owned();
+                let dir = docs.join(documents::type_folder(os, &f));
+                fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+                let to = dir.join(doc_file_name(os, &dir, &name));
+                move_doc(os, &f, &to).map_err(|e| format!("Couldn't sort {}: {e}", rel(&f)))?;
+                renamed(&mut m, &rel(&f), &rel(&to));
+                match moves.iter_mut().find(|(_, now)| *now == rel(&f)) {
+                    Some(mv) => mv.1 = rel(&to),
+                    None => moves.push((rel(&f), rel(&to))),
+                }
+            }
+            prune_empty(&docs);
         }
-        Ok(added)
+        // The list follows the folder.
+        m.documents.retain(|d| d.os != os || self.document_path(d).is_ok_and(|p| p.is_file()));
+        let mut files: Vec<PathBuf> = if docs.is_dir() { doc_files(&docs) } else { Vec::new() };
+        files.sort();
+        for f in files {
+            let file = rel(&f);
+            if !m.documents.iter().any(|d| d.os == os && d.file.eq_ignore_ascii_case(&file)) {
+                let name = f.file_name().expect("a file").to_string_lossy().into_owned();
+                self.new_document(&mut m, os, name, file);
+            }
+        }
+        self.save(&m)?;
+        Ok(moves.into_iter().filter(|(a, b)| a != b).collect())
     }
 
     /// Remembers the app a document last opened with.
@@ -698,6 +772,15 @@ impl Library {
             Err(e) if e.kind() == io::ErrorKind::NotFound => {}
             Err(e) => return Err(format!("Couldn't delete {}: {e}", doc.name)),
         }
+        #[cfg(not(target_os = "macos"))]
+        if doc.os == GuestOs::MacClassic {
+            for h in mac::HELPER_DIRS {
+                if let (Some(dir), Some(name)) = (path.parent(), path.file_name()) {
+                    let _ = fs::remove_file(dir.join(h).join(name));
+                }
+            }
+        }
+        prune_empty(&self.docs_path(doc.os));
         let mut m = self.load()?;
         m.documents.retain(|d| d.id != id);
         self.save(&m)
@@ -875,6 +958,98 @@ fn import_file(os: GuestOs, src: &Path, src_name: &str, ext: &str, staging: &Pat
             } else {
                 Err("Floppy imports a folder, a .zip, a disk image (.adf, .adz, .dms, .hdf), or an Amiga program.".into())
             }
+        }
+    }
+}
+
+/// Every file in a documents folder, at any depth: not hidden files
+/// (`.DS_Store`), nor the Mac's fork folders (`.rsrc`, `.finf`), which
+/// belong to the files beside them. `.sorting` is the exception.
+fn doc_files(docs: &Path) -> Vec<PathBuf> {
+    WalkDir::new(docs)
+        .min_depth(1)
+        .into_iter()
+        .filter_entry(|e| {
+            let name = e.file_name().to_string_lossy();
+            !name.starts_with('.') || (e.depth() == 1 && name == documents::SORTING_DIR)
+        })
+        .filter_map(Result::ok)
+        .filter(|e| e.file_type().is_file())
+        .map(|e| e.into_path())
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+/// Whether a file is already where a sort would put it: straight in its
+/// type's folder, under a name its guest takes.
+fn is_sorted(os: GuestOs, docs: &Path, f: &Path) -> bool {
+    let name = f.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let name_ok = match os {
+        GuestOs::Dos => dos::is_valid_83(&name) && name == name.to_ascii_uppercase(),
+        GuestOs::MacClassic => mac::sanitize_name(&name, mac::MAX_NAME, "") == name,
+        GuestOs::Amiga => mac::sanitize_name(&name, amiga::MAX_NAME, "") == name,
+    };
+    name_ok && f.parent() == Some(docs.join(documents::type_folder(os, f)).as_path())
+}
+
+/// A free name for a document in `dir`, as its guest names files: 8.3 for
+/// DOS (`LETTER~1.WP5`), else `Letter 2.txt`.
+fn doc_file_name(os: GuestOs, dir: &Path, name: &str) -> String {
+    let taken: HashSet<String> =
+        fs::read_dir(dir).map(|rd| rd.filter_map(Result::ok).map(|e| e.file_name().to_string_lossy().to_uppercase()).collect()).unwrap_or_default();
+    let max = match os {
+        GuestOs::Dos => return dos::to_83(name, &taken, false),
+        GuestOs::MacClassic => mac::MAX_NAME,
+        GuestOs::Amiga => amiga::MAX_NAME,
+    };
+    let name = mac::sanitize_name(name, max, "Untitled");
+    if !taken.contains(&name.to_uppercase()) {
+        return name;
+    }
+    let (stem, ext) = match name.rsplit_once('.') {
+        Some((s, e)) if !s.is_empty() => (s.to_string(), format!(".{e}")),
+        _ => (name.clone(), String::new()),
+    };
+    (2u32..)
+        .map(|n| {
+            let suffix = format!(" {n}{ext}");
+            let keep = max.saturating_sub(suffix.chars().count());
+            format!("{}{suffix}", stem.chars().take(keep).collect::<String>().trim_end())
+        })
+        .find(|cand| !taken.contains(&cand.to_uppercase()))
+        .expect("unbounded range always finds a free name")
+}
+
+/// Moves a document, and on hosts where Basilisk II keeps a Mac file's
+/// forks beside it (`.rsrc/`, `.finf/`), its forks too.
+fn move_doc(os: GuestOs, from: &Path, to: &Path) -> io::Result<()> {
+    if let Some(d) = to.parent() {
+        fs::create_dir_all(d)?;
+    }
+    fs::rename(from, to)?;
+    #[cfg(not(target_os = "macos"))]
+    if os == GuestOs::MacClassic {
+        let (Some(fd), Some(fname), Some(td), Some(tname)) = (from.parent(), from.file_name(), to.parent(), to.file_name()) else { return Ok(()) };
+        for h in mac::HELPER_DIRS {
+            let fork = fd.join(h).join(fname);
+            if fork.exists() {
+                fs::create_dir_all(td.join(h))?;
+                fs::rename(fork, td.join(h).join(tname))?;
+            }
+        }
+    }
+    #[cfg(target_os = "macos")]
+    let _ = os;
+    Ok(())
+}
+
+/// Removes the folders under `docs` that hold nothing any more (their
+/// empty fork folders included), deepest first. `docs` itself stays.
+fn prune_empty(docs: &Path) {
+    for e in WalkDir::new(docs).min_depth(1).contents_first(true).into_iter().filter_map(Result::ok) {
+        if e.file_type().is_dir() {
+            let _ = fs::remove_dir(e.path());
         }
     }
 }
@@ -1449,14 +1624,15 @@ mod tests {
         let src = t.path().join("Letter to Bank.wp5");
         fs::write(&src, b"letter").unwrap();
         let doc = lib.import_document(GuestOs::Dos, &src).unwrap();
-        assert_eq!((doc.name.as_str(), doc.file.as_str()), ("Letter to Bank.wp5", "DOCS/LETTERTO.WP5"));
+        assert_eq!((doc.name.as_str(), doc.file.as_str()), ("Letter to Bank.wp5", "DOCS/WP5/LETTERTO.WP5"));
         assert_eq!(fs::read(lib.document_path(&doc).unwrap()).unwrap(), b"letter");
         // A second file with the same short name gets its own.
         let src2 = t.path().join("Letter to Tom.wp5");
         fs::write(&src2, b"tom").unwrap();
-        assert_eq!(lib.import_document(GuestOs::Dos, &src2).unwrap().file, "DOCS/LETTER~1.WP5");
-        // Only DOS takes documents so far, and only files.
-        assert!(lib.import_document(GuestOs::MacClassic, &src).is_err());
+        assert_eq!(lib.import_document(GuestOs::Dos, &src2).unwrap().file, "DOCS/WP5/LETTER~1.WP5");
+        let readme = t.path().join("README");
+        fs::write(&readme, b"read me").unwrap();
+        assert_eq!(lib.import_document(GuestOs::Dos, &readme).unwrap().file, "DOCS/OTHER/README");
         assert!(lib.import_document(GuestOs::Dos, t.path()).is_err());
 
         // An app called "Docs" never takes the documents folder.
@@ -1465,17 +1641,113 @@ mod tests {
         fs::write(app_src.join("DOCS.EXE"), b"MZ").unwrap();
         assert_ne!(lib.import(GuestOs::Dos, &app_src).unwrap().dir, "DOCS");
 
-        // Files an app saved there are picked up, once.
-        fs::write(lib.os_root(GuestOs::Dos).join("DOCS/REPLY.WP5"), b"reply").unwrap();
-        let adopted = lib.adopt_documents(GuestOs::Dos).unwrap();
-        assert_eq!(adopted.iter().map(|d| d.name.as_str()).collect::<Vec<_>>(), ["REPLY.WP5"]);
-        assert!(lib.adopt_documents(GuestOs::Dos).unwrap().is_empty());
+        // Files an app saved there are sorted and listed, once.
+        let docs = lib.os_root(GuestOs::Dos).join("DOCS");
+        fs::write(docs.join("REPLY.WP5"), b"reply").unwrap();
+        fs::write(docs.join("LETTER.BK!"), b"backup").unwrap();
+        fs::create_dir_all(docs.join("WP5/OLD")).unwrap();
+        fs::write(docs.join("WP5/OLD/SUMS.WK1"), b"sums").unwrap();
+        let moves = lib.tidy_documents(GuestOs::Dos).unwrap();
+        assert_eq!(
+            moves,
+            [
+                ("DOCS/LETTER.BK!".to_string(), "DOCS/BK!/LETTER.BK!".to_string()),
+                ("DOCS/REPLY.WP5".into(), "DOCS/WP5/REPLY.WP5".into()),
+                ("DOCS/WP5/OLD/SUMS.WK1".into(), "DOCS/WK1/SUMS.WK1".into()),
+            ]
+        );
+        assert!(!docs.join("WP5/OLD").exists(), "emptied folders go");
+        assert!(!docs.join(documents::SORTING_DIR).exists());
+        let names = |lib: &Library| {
+            let mut v: Vec<String> = lib.documents().unwrap().into_iter().map(|d| d.file).collect();
+            v.sort();
+            v
+        };
+        assert_eq!(
+            names(&lib),
+            ["DOCS/BK!/LETTER.BK!", "DOCS/OTHER/README", "DOCS/WK1/SUMS.WK1", "DOCS/WP5/LETTERTO.WP5", "DOCS/WP5/LETTER~1.WP5", "DOCS/WP5/REPLY.WP5"]
+        );
+        assert!(lib.tidy_documents(GuestOs::Dos).unwrap().is_empty());
+        // A name taken in the type's folder gets a free one; a listed
+        // document keeps its original name wherever it moves.
+        fs::write(docs.join("REPLY.WP5"), b"another reply").unwrap();
+        fs::rename(docs.join("WP5/LETTERTO.WP5"), docs.join("LETTERTO.WP5")).unwrap();
+        lib.tidy_documents(GuestOs::Dos).unwrap();
+        assert_eq!(fs::read(docs.join("WP5/REPLY~1.WP5")).unwrap(), b"another reply");
+        assert_eq!(lib.document(&doc.id).unwrap().file, "DOCS/WP5/LETTERTO.WP5");
+        // A document deleted in DOS leaves the list.
+        fs::remove_file(docs.join("WK1/SUMS.WK1")).unwrap();
+        lib.tidy_documents(GuestOs::Dos).unwrap();
+        assert!(!names(&lib).iter().any(|f| f.contains("SUMS")));
+        assert!(!docs.join("WK1").exists());
 
         lib.set_opens_with(&doc.id, "dos-wp51").unwrap();
         assert_eq!(lib.document(&doc.id).unwrap().opens_with.as_deref(), Some("dos-wp51"));
         lib.remove_document(&doc.id).unwrap();
-        assert!(!lib.os_root(GuestOs::Dos).join("DOCS/LETTERTO.WP5").exists());
-        assert_eq!(lib.documents().unwrap().len(), 2);
+        assert!(!docs.join("WP5/LETTERTO.WP5").exists());
+        assert_eq!(lib.documents().unwrap().len(), 5);
+    }
+
+    #[test]
+    fn a_sort_cut_short_is_finished_next_time() {
+        let t = TempDir::new();
+        let lib = Library::new(t.path().join("lib"));
+        let docs = lib.os_root(GuestOs::Dos).join("DOCS");
+        fs::create_dir_all(docs.join(".sorting/1")).unwrap();
+        fs::write(docs.join(".sorting/1/LETTER.WP5"), b"letter").unwrap();
+        lib.tidy_documents(GuestOs::Dos).unwrap();
+        assert!(docs.join("WP5/LETTER.WP5").is_file());
+        assert_eq!(lib.documents().unwrap()[0].file, "DOCS/WP5/LETTER.WP5");
+    }
+
+    #[test]
+    fn mac_and_amiga_documents_sort_by_their_own_types() {
+        let t = TempDir::new();
+        let lib = Library::new(t.path().join("lib"));
+        // Mac: by Finder type, forks moving with the file.
+        let src = t.path().join("Letter");
+        fs::write(&src, b"Dear Sir").unwrap();
+        let mut info = [0u8; 32];
+        info[..8].copy_from_slice(b"TEXTttxt");
+        mac::write_finder_info(&src, &info).unwrap();
+        mac::write_resource_fork(&src, b"styles").unwrap();
+        let doc = lib.import_document(GuestOs::MacClassic, &src).unwrap();
+        assert_eq!(doc.file, "Documents/TEXT/Letter");
+        let path = lib.document_path(&doc).unwrap();
+        assert_eq!(mac::file_type(&path), Some(*b"TEXT"));
+        assert_eq!(mac::resource_fork_len(&path), 6);
+        // A long host name is cut to the Mac's 31 characters, and a taken
+        // one numbered before its extension.
+        let long = t.path().join("A very long name for a Mac document.txt");
+        fs::write(&long, b"x").unwrap();
+        let d = lib.import_document(GuestOs::MacClassic, &long).unwrap();
+        assert_eq!(d.file, "Documents/TXT/A very long name for a Mac docu");
+        let dup = t.path().join("Notes.txt");
+        fs::write(&dup, b"1").unwrap();
+        lib.import_document(GuestOs::MacClassic, &dup).unwrap();
+        assert_eq!(lib.import_document(GuestOs::MacClassic, &dup).unwrap().file, "Documents/TXT/Notes 2.txt");
+        // Saved loose in the Mac: sorted, forks and all.
+        let docs = lib.os_root(GuestOs::MacClassic).join("Documents");
+        let loose = docs.join("Reply");
+        fs::write(&loose, b"Dear Madam").unwrap();
+        mac::write_finder_info(&loose, &info).unwrap();
+        mac::write_resource_fork(&loose, b"styles").unwrap();
+        lib.tidy_documents(GuestOs::MacClassic).unwrap();
+        assert_eq!(mac::resource_fork_len(&docs.join("TEXT/Reply")), 6);
+        assert!(lib.documents().unwrap().iter().any(|d| d.file == "Documents/TEXT/Reply"));
+
+        // Amiga: by IFF type, else extension.
+        let pic = t.path().join("Sunset.iff");
+        fs::write(&pic, b"FORM\0\0\0\x04ILBM").unwrap();
+        assert_eq!(lib.import_document(GuestOs::Amiga, &pic).unwrap().file, "Documents/ILBM/Sunset.iff");
+        let song = t.path().join("mod.intro");
+        fs::write(&song, b"M.K.").unwrap();
+        assert_eq!(lib.import_document(GuestOs::Amiga, &song).unwrap().file, "Documents/INTRO/mod.intro");
+        // An app called "Documents" never takes the folder.
+        let app_src = t.path().join("Documents");
+        fs::create_dir_all(&app_src).unwrap();
+        fs::write(app_src.join("Game.adf"), vec![0u8; 901_120]).unwrap();
+        assert_ne!(lib.import(GuestOs::Amiga, &app_src).unwrap().dir, "Documents");
     }
 
     #[test]

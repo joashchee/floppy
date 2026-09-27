@@ -28,3 +28,6 @@ Just keep the gap tracked.
 | Picking up setup files from Downloads (`cd::import_from_downloads`) | Tauri's `download_dir()` (`~/Downloads`) | Same API (the Known Folder) | Done: `download_dir()` reads `user-dirs.dirs`; without it, `~/Downloads` if it exists |
 | Dropdowns (`select`) | WebKit draws them; Floppy's CSS draws them itself anyway (`appearance: none`) | n/a | Done: WebKitGTK's native ones ignored the theme colors, hence the CSS |
 | System backup disc (`backup.rs`, `iso.rs`) | Floppy writes and reads the ISO itself: no `hdiutil` | Same code | Same code |
+| Quit a running emulator (`quit_app`, `emulator::stop`) | `kill -TERM`, then the child's own `kill` for Force Quit. Basilisk II turns SIGTERM into the Mac's power key, so Force Quit is the way out of a Mac that can't answer | Not implemented (`TerminateProcess` for Force Quit; a close request needs the window) | Done: same as macOS |
+| Floppy back in front when an emulator quits | `set_focus` (tao activates the app) | Same API | Same API; a window manager may only flag the window instead of raising it |
+| Mac documents' forks when sorted (`Library::tidy_documents`) | `rename` carries them (named fork, Finder info xattr) | Not checked (`.rsrc`/`.finf` folders, as Linux) | Done: the `.rsrc/` and `.finf/` entries move with the file |

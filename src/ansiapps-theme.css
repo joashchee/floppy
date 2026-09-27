@@ -181,6 +181,19 @@
 :root[data-theme="ansiapps"] .session-report { --tm-frame: var(--dos-lightgreen); }
 :root[data-theme="ansiapps"] .setup-drop { --tm-frame: var(--dos-lightgreen); }
 :root[data-theme="ansiapps"] .media-offer { --tm-frame: var(--dos-lightcyan); }
+:root[data-theme="ansiapps"] .running-offer { --tm-frame: var(--dos-yellow); }
+/* Panels sit a row apart (their margin), columns two cells apart */
+:root[data-theme="ansiapps"] .layout { gap: 0 2ch; }
+/* Whole-cell columns. A box edge on a half pixel draws each 2px stroke of
+   its ║ 3px wide in WebKitGTK, so the double line fills in. */
+@media (min-width: 721px) {
+  :root[data-theme="ansiapps"] .layout {
+    grid-template-columns: 40ch minmax(0, 1fr);
+    grid-template-columns: round(down, 43%, 1ch) minmax(0, 1fr);
+  }
+}
+:root[data-theme="ansiapps"] .layout-column { gap: 0; }
+:root[data-theme="ansiapps"] .docs-panel > .detail-actions { margin-top: 16px; }
 
 /* Horizontal rules inside boxes: a row of ─ */
 :root[data-theme="ansiapps"] .setup-sources,
@@ -359,8 +372,9 @@
 /* ── App and document lists: lines with a cyan selection bar ───────── */
 
 :root[data-theme="ansiapps"] .app-list { gap: 0; }
-:root[data-theme="ansiapps"] .app-row { background: transparent; padding: 0 1ch; }
-:root[data-theme="ansiapps"] .app-row:hover { background: var(--dos-black); }
+:root[data-theme="ansiapps"] .app-row { background: transparent; color: var(--text); padding: 0 1ch; }
+:root[data-theme="ansiapps"] .app-row:hover:not(:disabled) { background: var(--dos-black); }
+:root[data-theme="ansiapps"] .app-row.selected:hover:not(:disabled) { background: var(--dos-cyan); }
 :root[data-theme="ansiapps"] .app-row.selected {
   --text: var(--dos-black);
   --muted: var(--dos-black);

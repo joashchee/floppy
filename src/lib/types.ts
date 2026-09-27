@@ -163,8 +163,30 @@ export interface IdentifyAsk {
 }
 
 /** A document's path as DOS sees it. */
-export function dosPath(doc: LibraryDoc): string {
-  return `C:\\${doc.file.replace(/\//g, "\\")}`;
+/** A library-relative path as its guest writes it: `C:\\DOCS\\WP5\\LETTER.WP5`, `Unix:Documents:TEXT:Letter`, `Floppy:Documents/ILBM/Sunset.iff`. */
+export function guestFilePath(os: GuestOs, file: string): string {
+  switch (os) {
+    case "dos":
+      return `C:\\${file.replace(/\//g, "\\")}`;
+    case "mac-classic":
+      return `Unix:${file.replace(/\//g, ":")}`;
+    case "amiga":
+      return `Floppy:${file}`;
+  }
+}
+
+/** Where a document is inside its guest. */
+export function docPath(doc: LibraryDoc): string {
+  return guestFilePath(doc.os, doc.file);
+}
+
+/** documents.rs `docs_dir`: each guest's documents folder. */
+export const DOCS_DIR: Record<GuestOs, string> = { dos: "DOCS", "mac-classic": "Documents", amiga: "Documents" };
+
+/** The type folder a document is sorted into (documents.rs `type_folder`): `WP5`, `TEXT`, `ILBM`. */
+export function docTypeFolder(doc: LibraryDoc): string {
+  const parts = doc.file.split("/");
+  return parts.length >= 3 ? parts[1] : "";
 }
 
 /** library.rs `GuestSystem`: user-supplied files under library/system/<os>/. */

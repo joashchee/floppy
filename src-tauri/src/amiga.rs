@@ -40,7 +40,7 @@ pub fn is_disk_image(name: &str) -> bool {
     is_floppy_image(name) || is_hard_disk_image(name)
 }
 
-fn is_executable(path: &Path) -> bool {
+pub fn is_executable(path: &Path) -> bool {
     use std::io::Read;
     let mut magic = [0u8; 4];
     std::fs::File::open(path).and_then(|mut f| f.read_exact(&mut magic)).is_ok() && magic == HUNK_HEADER

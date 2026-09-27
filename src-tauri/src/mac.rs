@@ -173,7 +173,7 @@ fn is_fork_helper(name: &std::ffi::OsStr) -> bool {
 }
 
 /// A file's type code, if it has Finder info.
-fn file_type(path: &Path) -> Option<[u8; 4]> {
+pub fn file_type(path: &Path) -> Option<[u8; 4]> {
     read_finder_info(path).map(|i| [i[0], i[1], i[2], i[3]]).filter(|t| t != &[0; 4])
 }
 

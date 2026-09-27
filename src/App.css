@@ -203,6 +203,10 @@ button.icontext-btn .btn-icon { display: inline-flex; width: 14px; height: 14px;
    min-width: 0, or a long name widens its track. */
 .layout { display: grid; grid-template-columns: 1fr 1.3fr; gap: 22px; align-items: start; }
 .layout > .panel { min-width: 0; }
+/* The left column: the library's apps, then its documents. */
+.layout-column { display: flex; flex-direction: column; min-width: 0; }
+.docs-panel > .detail-actions { margin-top: 12px; }
+.layout-column > .panel { min-width: 0; }
 @media (max-width: 720px) {
   .layout { grid-template-columns: 1fr; }
 }
@@ -463,6 +467,7 @@ button.icontext-btn .btn-icon { display: inline-flex; width: 14px; height: 14px;
    with a solid border, since it's something that just happened rather
    than a standing to-do. */
 .media-offer { border-style: solid; border-color: var(--accent-dim); }
+.running-offer { border-style: solid; }
 
 /* Documents (documents.rs): a second list under the DOS apps. */
 .list-heading { display: flex; align-items: center; gap: 8px; margin: 16px 0 8px; font-size: 12px; font-weight: 600; }

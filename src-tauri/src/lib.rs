@@ -67,6 +67,7 @@ pub fn run() {
             app.manage(AppState {
                 library,
                 running: Arc::new(Mutex::new(HashMap::new())),
+                children: Arc::new(Mutex::new(HashMap::new())),
                 startup: Mutex::new(startup),
             });
             Ok(())
@@ -106,6 +107,8 @@ pub fn run() {
             commands::forget_ignored_files,
             commands::ask_again,
             commands::running_apps,
+            commands::quit_app,
+            commands::add_document,
             commands::take_startup_import,
             commands::launch_app,
             commands::open_document,

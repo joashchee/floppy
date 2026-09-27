@@ -2,7 +2,9 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::process::Child;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -24,6 +26,9 @@ pub struct AppState {
     pub library: Library,
     /// Apps with an emulator window open, and their guest OS.
     pub running: Arc<Mutex<HashMap<String, GuestOs>>>,
+    /// Their emulator processes, for Quit and Force Quit. Reaped only by
+    /// the thread that waits on each, so a process ID here is never reused.
+    pub children: Arc<Mutex<HashMap<String, Arc<Mutex<Child>>>>>,
     /// Result of a `floppy import …` launch, taken once by the frontend.
     pub startup: Mutex<Option<StartupImport>>,
 }
@@ -700,25 +705,55 @@ fn start(
     let ran = program.clone();
     let os_root = state.library.os_root(entry.os);
     let before = (entry.os == GuestOs::Dos).then(|| documents::snapshot(&os_root));
+    // Anything added while the guest was off gets sorted before it starts.
+    let _ = state.library.tidy_documents(entry.os);
 
-    let mut child = emu.spawn(&bin, &conf_path).map_err(|e| format!("Couldn't start {}: {e}", emu.name()))?;
+    let child = emu.spawn(&bin, &conf_path).map_err(|e| format!("Couldn't start {}: {e}", emu.name()))?;
+    let child = Arc::new(Mutex::new(child));
     let running = state.running.clone();
+    let children = state.children.clone();
     running.lock().unwrap_or_else(|p| p.into_inner()).insert(id.clone(), entry.os);
+    children.lock().unwrap_or_else(|p| p.into_inner()).insert(id.clone(), child.clone());
     let _ = app.emit("running-changed", ());
     std::thread::spawn(move || {
-        let _ = child.wait();
+        // Polled, not a blocking wait, so Quit can reach the process
+        // meanwhile (`quit_app`).
+        loop {
+            match child.lock().unwrap_or_else(|p| p.into_inner()).try_wait() {
+                Ok(None) => {}
+                Ok(Some(_)) | Err(_) => break,
+            }
+            std::thread::sleep(Duration::from_millis(250));
+        }
+        children.lock().unwrap_or_else(|p| p.into_inner()).remove(&id);
         running.lock().unwrap_or_else(|p| p.into_inner()).remove(&id);
+        // The emulator was in front: without this, the Mac, Linux or the
+        // window manager picks whatever app comes next, not Floppy.
+        if let Some(w) = app.get_webview_window("main") {
+            let _ = w.unminimize();
+            let _ = w.show();
+            let _ = w.set_focus();
+        }
+        let library = &app.state::<AppState>().library;
+        // What was saved into the documents folder goes in its type's
+        // folder now the guest can't see it move.
+        let moves = library.tidy_documents(entry.os).unwrap_or_default();
+        let _ = app.emit("documents-changed", ());
         if let Some(before) = before {
-            let library = &app.state::<AppState>().library;
             let changes = documents::changes(&before, &documents::snapshot(&os_root));
-            let _ = library.adopt_documents(entry.os);
             // Identified during the session, in its details, needn't be asked.
             let now = library.get(&entry.id).unwrap_or_else(|_| entry.clone());
             let identify = identify_ask(&now, ran.as_deref());
             // A document session always reports, to ask whether it worked.
             if !changes.is_empty() || document.is_some() || identify.is_some() {
                 let docs = library.documents().unwrap_or_default();
-                let changes = changes.into_iter().map(|c: Change| SessionChange { name: display_name(&docs, entry.os, &c.path), path: c.path, new: c.new }).collect();
+                let changes = changes
+                    .into_iter()
+                    .map(|c: Change| {
+                        let path = moves.iter().find(|(from, _)| *from == c.path).map_or(c.path, |(_, to)| to.clone());
+                        SessionChange { name: display_name(&docs, entry.os, &path), path, new: c.new }
+                    })
+                    .collect();
                 let (document, verify) = match document {
                     Some((d, p)) => (Some(d.name), Some(p)),
                     None => (None, None),
@@ -730,6 +765,21 @@ fn start(
         let _ = app.emit("running-changed", ());
     });
     Ok(())
+}
+
+/// Quits a running app's emulator: asks it to (`force` false), or makes
+/// it. DOSBox and FS-UAE quit when asked. Basilisk II passes the request
+/// on to the Mac as its power key, and quits once the Mac has shut down;
+/// a Mac that can't answer (stuck, or with no startup disk) needs
+/// `force`, which is like switching a real one off.
+#[tauri::command]
+pub fn quit_app(state: State<AppState>, id: String, force: bool) -> Result<(), String> {
+    let child = state.children.lock().unwrap_or_else(|p| p.into_inner()).get(&id).cloned().ok_or("That app isn't running.")?;
+    let mut child = child.lock().unwrap_or_else(|p| p.into_inner());
+    if child.try_wait().map_err(|e| e.to_string())?.is_some() {
+        return Ok(());
+    }
+    emulator::stop(&mut child, force).map_err(|e| format!("Couldn't quit it: {e}"))
 }
 
 /// A document's original name for a library-relative path, else the
@@ -749,15 +799,16 @@ pub struct ImportedItem {
     document: Option<LibraryDoc>,
 }
 
-/// Imports a dropped or picked path. For DOS, a folder, zip or program is
-/// an app and any other file is a document. Other guests take apps only.
+/// Imports a dropped or picked path: an app (a folder, a zip, a program or
+/// disk image) or else a document for the guest's documents folder
+/// (`documents::is_app_source`).
 #[tauri::command]
 pub async fn import_item(app: AppHandle, os: String, path: String) -> Result<ImportedItem, String> {
     let os = GuestOs::parse(&os).ok_or("Unknown guest OS.")?;
     tauri::async_runtime::spawn_blocking(move || {
         let library = &app.state::<AppState>().library;
         let path = PathBuf::from(path);
-        if os == GuestOs::Dos && !documents::is_dos_app_source(&path) {
+        if !documents::is_app_source(os, &path) {
             Ok(ImportedItem { app: None, document: Some(library.import_document(os, &path)?) })
         } else {
             Ok(ImportedItem { app: Some(library.import(os, &path)?), document: None })
@@ -767,8 +818,26 @@ pub async fn import_item(app: AppHandle, os: String, path: String) -> Result<Imp
     .map_err(|e| e.to_string())?
 }
 
+/// Adds a file as a document whatever it is (a zip too), in its guest's
+/// documents folder under its type.
+#[tauri::command]
+pub async fn add_document(app: AppHandle, os: String, path: String) -> Result<LibraryDoc, String> {
+    let os = GuestOs::parse(&os).ok_or("Unknown guest OS.")?;
+    tauri::async_runtime::spawn_blocking(move || app.state::<AppState>().library.import_document(os, Path::new(&path)))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Every guest's documents, each guest's folder sorted first unless its
+/// emulator is running (it would see files move).
 #[tauri::command]
 pub fn list_documents(state: State<AppState>) -> Result<Vec<LibraryDoc>, String> {
+    let running = running_map(&state);
+    for os in [GuestOs::Dos, GuestOs::MacClassic, GuestOs::Amiga] {
+        if !running.values().any(|o| *o == os) {
+            state.library.tidy_documents(os)?;
+        }
+    }
     state.library.documents()
 }
 

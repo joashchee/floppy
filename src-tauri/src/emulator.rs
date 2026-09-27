@@ -149,6 +149,23 @@ impl Emulator {
     }
 }
 
+/// Asks an emulator to quit (SIGTERM), or with `force` makes it (SIGKILL).
+/// DOSBox Staging and FS-UAE quit when asked. Basilisk II's SDL turns the
+/// request into its window's close button, which presses the Mac's power
+/// key: the Mac asks whether to shut down, and Basilisk II quits once it
+/// has. Only `force` stops a Mac that can't answer.
+pub fn stop(child: &mut Child, force: bool) -> std::io::Result<()> {
+    if force {
+        return child.kill();
+    }
+    let status = Command::new("kill").arg("-TERM").arg(child.id().to_string()).stdin(Stdio::null()).status()?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(std::io::Error::other(format!("kill exited with {status}")))
+    }
+}
+
 /// The copy of `emu` the user located, if any.
 pub fn chosen(library: &Library, emu: Emulator) -> Option<PathBuf> {
     load_chosen(library).remove(emu.key()).map(PathBuf::from)
@@ -330,6 +347,31 @@ mod tests {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(path, b"#!/bin/sh\n").unwrap();
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    #[test]
+    fn quit_asks_and_force_quit_makes() {
+        let wait_gone = |c: &mut Child| {
+            for _ in 0..40 {
+                if c.try_wait().unwrap().is_some() {
+                    return true;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            false
+        };
+        // An emulator that quits when asked.
+        let mut c = Command::new("sleep").arg("30").spawn().unwrap();
+        stop(&mut c, false).unwrap();
+        assert!(wait_gone(&mut c));
+        // One that only asks its guest (Basilisk II and the Mac's power
+        // key): still running until forced.
+        let mut c = Command::new("sh").arg("-c").arg("trap '' TERM; sleep 30").spawn().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        stop(&mut c, false).unwrap();
+        assert!(!wait_gone(&mut c), "ignored the request, as a Mac that can't answer does");
+        stop(&mut c, true).unwrap();
+        assert!(wait_gone(&mut c));
     }
 
     #[test]

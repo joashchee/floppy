@@ -8,6 +8,31 @@ against the day the change was made.
 
 ## Unreleased
 
+- **A Docs panel for every guest, sorted by file type** (2026-09-27):
+  each guest's library panel lists only its apps now, and a Docs panel
+  below it lists its documents folder (`C:\DOCS`, the Mac's
+  `Unix:Documents`, the Amiga's `Floppy:Documents`), grouped by type.
+  Floppy sorts that folder into a folder per type, named the way the
+  guest names things: the extension for DOS (`C:\DOCS\WP5`, `OTHER` for
+  none), the Finder type code on the Mac (`TEXT`), the IFF type on the
+  Amiga (`ILBM`), else the extension. Whatever an app saved there, or
+  the user put there, is sorted and listed when the emulator quits and
+  whenever the list loads; files deleted in the guest leave the list.
+  Mac and Amiga documents can now be added (Add Documents…, drops,
+  `floppy open --os`), and MacBinary documents come in decoded. Only
+  DOS documents open in their app by themselves so far; for the others,
+  Start Mac OS or Start Workbench and open them there.
+- **Quitting Basilisk II (and any emulator) from Floppy** (2026-09-27):
+  closing Basilisk II's window or pressing Cmd-Q only presses the
+  emulated Mac's power key, so a Mac that couldn't answer (stuck, or at
+  the question-mark disk) kept Basilisk II open, and Floppy stayed
+  behind whatever came next. A strip now shows each running app with
+  **Quit**, which asks the emulator to quit, then **Force Quit**, and
+  says how to quit the Mac itself (Shut Down, or Ctrl-Esc in its
+  window). When an emulator quits, Floppy comes back to the front.
+- ANSIapps theme: rows in lists were drawn in black on blue; columns
+  now snap to whole cells (a half-pixel edge filled in WebKitGTK's `║`).
+
 - **ANSIapps theme redrawn in text** (2026-09-27): everything in the
   theme is now characters from the IBM VGA font on an 8x16 grid. Panels
   and dialogs get double box-drawing frames with their titles in the top
