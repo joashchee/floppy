@@ -3,19 +3,33 @@
 # then pin by SHA-256, as for DOSBox Staging and FS-UAE. Upstream
 # publishes no binaries (see docs/emulators.md), hence this build.
 #
-# One Xcode build makes a universal app: x86_64 with the JIT (uae_cpu),
+# macOS: one Xcode build makes a universal app: x86_64 with the JIT (uae_cpu),
 # arm64 without it (uae_cpu_2021, which needs static GMP and MPFR for the
 # FPU). The Xcode build is the one that uses extfs_macosx.cpp, which reads
 # resource forks and Finder info natively, as Floppy's Mac imports need.
 #
-# The project hardcodes its dependency locations, so this follows
+# Linux (x86-64): the Unix autoconf build, which keeps resource forks and
+# Finder info in .rsrc/ and .finf/ folders (extfs_unix.cpp), as Floppy's
+# Linux imports write them. SDL2 is built from the same pinned source and
+# linked statically; it loads X11/Wayland and ALSA/PulseAudio/PipeWire at
+# runtime, so the binary needs only libc and libstdc++. It's built on the
+# oldest supported Ubuntu for the widest glibc reach. No GTK (Floppy sets
+# nogui), no GMP/MPFR (x86-64 uses the JIT and the IEEE FPU core).
+#
+# The Xcode project hardcodes its dependency locations, so this follows
 # upstream's README: SDL2.framework in /Library/Frameworks, GMP and MPFR
 # in /usr/local. That's fine on a throwaway runner; don't run these steps
 # on your own Mac.
 #
 # GPL: the release carries the exact macemu source plus the GMP and MPFR
 # tarballs that were linked in (both LGPL-3.0-or-later), next to the
-# binary. SDL2 (zlib) ships as Apple's framework, unmodified.
+# binaries. SDL2 (zlib) ships as its official framework on macOS and is
+# linked statically on Linux.
+#
+# Publishing creates the release, or, when it already exists (a new
+# platform for the same commit), uploads only the files it lacks, so the
+# assets fetch scripts already pin are never replaced. Each platform lists
+# its own hashes: SHA256SUMS (macOS and sources), SHA256SUMS-Linux.
 #
 # To bump: change the pins below together, then run the workflow.
 
@@ -28,6 +42,11 @@ on:
         description: Publish a GitHub release (off = build and verify only)
         type: boolean
         default: true
+      platforms:
+        description: Which builds to make
+        type: choice
+        options: [both, macos, linux]
+        default: both
 
 permissions:
   contents: write
@@ -37,13 +56,18 @@ env:
   MACEMU_COMMIT: 892eeb74ab9d70dfb034138a0b39057b14f275bc # 2026-08-30
   SDL2_VERSION: 2.32.10
   SDL2_SHA256: 4a7ac31640d70214e848f994be8a12849c0f97918a7e6c2e27a40036166d1a7f
+  SDL2_SRC_SHA256: 5f5993c530f084535c65a6879e9b26ad441169b3e25d789d83287040a9ca5165
   GMP_VERSION: 6.3.0
   GMP_SHA256: a3c2b80201b89e68616f4ad30bc66aee4927c3ce50e33929ca819d5c43538898
   MPFR_VERSION: 4.2.2
   MPFR_SHA256: b67ba0383ef7e8a8563734e2e889ef5ec3c3b898a01d00fa0a6869ad81c6ce01
 
 jobs:
-  build:
+  macos:
+    if: inputs.platforms != 'linux'
+    outputs:
+      tag: ${{ steps.package.outputs.tag }}
+      date: ${{ steps.package.outputs.date }}
     # Apple Silicon runner: GMP and MPFR are only linked into the arm64
     # slice, so they build natively here (and `make check` can run).
     runs-on: macos-15
@@ -165,28 +189,156 @@ jobs:
       - name: Keep the build
         uses: actions/upload-artifact@v4
         with:
-          name: basilisk-ii
+          name: basilisk-ii-macos
           path: ${{ runner.temp }}/out/
 
-      - name: Publish release
-        if: inputs.publish
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ steps.package.outputs.tag }}
-          DATE: ${{ steps.package.outputs.date }}
+  linux:
+    if: inputs.platforms != 'macos'
+    outputs:
+      tag: ${{ steps.package.outputs.tag }}
+      date: ${{ steps.package.outputs.date }}
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Toolchain
+        run: |
+          cat /etc/os-release
+          ldd --version | head -1
+
+      # SDL2's X11, Wayland and audio backends are only compiled in when
+      # their headers are present; they're loaded at runtime.
+      - name: Install build dependencies
         run: |
           set -eu
-          cat > "$RUNNER_TEMP/notes.md" <<EOF
-          Basilisk II built from [$MACEMU_REPO@$MACEMU_COMMIT](https://github.com/$MACEMU_REPO/tree/$MACEMU_COMMIT) ($DATE) for Floppy to bundle. Universal: x86_64 with JIT, arm64 without.
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq build-essential autoconf automake libtool pkg-config \
+            libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxss-dev \
+            libxkbcommon-dev libwayland-dev wayland-protocols libdecor-0-dev \
+            libpulse-dev libasound2-dev libpipewire-0.3-dev libegl-dev libgles-dev libgl-dev \
+            libdrm-dev libgbm-dev libudev-dev libdbus-1-dev
+
+      - name: Build SDL2 (static)
+        working-directory: ${{ runner.temp }}
+        run: |
+          set -eu
+          curl -sSfLO "https://github.com/libsdl-org/SDL/releases/download/release-$SDL2_VERSION/SDL2-$SDL2_VERSION.tar.gz"
+          echo "$SDL2_SRC_SHA256  SDL2-$SDL2_VERSION.tar.gz" | sha256sum -c -
+          tar -xzf "SDL2-$SDL2_VERSION.tar.gz"
+          cd "SDL2-$SDL2_VERSION"
+          ./configure --prefix="$RUNNER_TEMP/sdl" --disable-shared --enable-static --with-pic
+          make -j"$(nproc)"
+          make install
+
+      - name: Check out macemu
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.MACEMU_REPO }}
+          ref: ${{ env.MACEMU_COMMIT }}
+          path: macemu
+          persist-credentials: false
+
+      - name: Verify commit
+        run: test "$(git -C macemu rev-parse HEAD)" = "$MACEMU_COMMIT"
+
+      - name: Build BasiliskII
+        working-directory: macemu/BasiliskII/src/Unix
+        run: |
+          set -eu
+          export PATH="$RUNNER_TEMP/sdl/bin:$PATH" PKG_CONFIG_PATH="$RUNNER_TEMP/sdl/lib/pkgconfig"
+          NO_CONFIGURE=1 ./autogen.sh
+          ./configure --enable-sdl-video --enable-sdl-audio --enable-sdl-static \
+            --with-gtk=no --with-esd=no --with-mon=no \
+            --disable-xf86-dga --disable-xf86-vidmode --disable-fbdev-dga \
+            --with-bincue=no --with-libvhd=no --with-vdeplug=no
+          make -j"$(nproc)"
+          strip BasiliskII
+
+      # Only the system's C and C++ runtimes may be dynamic. Then check it
+      # runs: with a blank ROM it must start, read the prefs and refuse it.
+      - name: Verify the binary
+        working-directory: macemu/BasiliskII/src/Unix
+        run: |
+          set -eu
+          ldd BasiliskII
+          if ldd BasiliskII | grep -vE '(linux-vdso|ld-linux-x86-64|libc|libm|libstdc\+\+|libgcc_s)\.so'; then
+            echo "BasiliskII links something beyond libc and libstdc++." >&2
+            exit 1
+          fi
+          objdump -T BasiliskII | grep -oE 'GLIBC_[0-9.]+' | sort -Vu | tail -1
+          head -c 1048576 /dev/zero > "$RUNNER_TEMP/blank.rom"
+          printf 'rom %s\nnogui true\nnocdrom true\n' "$RUNNER_TEMP/blank.rom" > "$RUNNER_TEMP/t.prefs"
+          out=$(SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy timeout 30 ./BasiliskII --config "$RUNNER_TEMP/t.prefs" 2>&1 || true)
+          echo "$out"
+          echo "$out" | grep -q 'Unsupported ROM type'
+
+      - name: Package
+        id: package
+        run: |
+          set -eu
+          short=$(printf %.7s "$MACEMU_COMMIT")
+          date=$(git -C macemu show -s --format=%cs HEAD)
+          name="BasiliskII-$date-$short"
+          out="$RUNNER_TEMP/out"
+          mkdir -p "$out/pkg"
+          cp macemu/BasiliskII/src/Unix/BasiliskII "$out/pkg/"
+          cp macemu/BasiliskII/COPYING "$out/pkg/"
+          tar -cJf "$out/$name-Linux-x86_64.tar.xz" -C "$out/pkg" BasiliskII COPYING
+          rm -rf "$out/pkg"
+          git -C macemu archive --format=tar.gz --prefix="macemu-$MACEMU_COMMIT/" \
+            -o "$out/$name-source.tar.gz" HEAD
+          (cd "$out" && sha256sum "$name-Linux-x86_64.tar.xz" > SHA256SUMS-Linux && cat SHA256SUMS-Linux)
+          echo "tag=basilisk-ii-$date-$short" >> "$GITHUB_OUTPUT"
+          echo "date=$date" >> "$GITHUB_OUTPUT"
+
+      - name: Keep the build
+        uses: actions/upload-artifact@v4
+        with:
+          name: basilisk-ii-linux
+          path: ${{ runner.temp }}/out/
+
+  publish:
+    needs: [macos, linux]
+    if: >-
+      always() && inputs.publish
+      && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Collect the builds
+        uses: actions/download-artifact@v4
+        with:
+          pattern: basilisk-ii-*
+          path: out
+          merge-multiple: true
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.macos.outputs.tag || needs.linux.outputs.tag }}
+          DATE: ${{ needs.macos.outputs.date || needs.linux.outputs.date }}
+        run: |
+          set -eu
+          ls -la out
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            have=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets -q '.assets[].name')
+            for f in out/*; do
+              if printf '%s\n' "$have" | grep -qxF "$(basename "$f")"; then
+                echo "Keeping the published $(basename "$f")"
+              else
+                gh release upload "$TAG" "$f" --repo "$GITHUB_REPOSITORY"
+              fi
+            done
+            exit 0
+          fi
+          cat > notes.md <<EOF
+          Basilisk II built from [$MACEMU_REPO@$MACEMU_COMMIT](https://github.com/$MACEMU_REPO/tree/$MACEMU_COMMIT) ($DATE) for Floppy to bundle. macOS: universal, x86_64 with JIT, arm64 without. Linux: x86-64 with JIT.
 
           - Basilisk II: GPL-2.0-or-later. Its exact source is the \`-source.tar.gz\` asset.
-          - GMP $GMP_VERSION and MPFR $MPFR_VERSION (LGPL-3.0-or-later), statically linked into the arm64 slice. Their source tarballs are attached.
-          - SDL $SDL2_VERSION (zlib), the official framework, embedded unmodified.
+          - GMP $GMP_VERSION and MPFR $MPFR_VERSION (LGPL-3.0-or-later), statically linked into the macOS arm64 slice. Their source tarballs are attached.
+          - SDL $SDL2_VERSION (zlib): the official framework, embedded unmodified, on macOS; built from its release source and linked statically on Linux.
 
-          Signed ad hoc only. Built by \`.github/workflows/basilisk.yml\`.
+          macOS signed ad hoc only. Built by \`.github/workflows/basilisk.yml\`.
           EOF
-          gh release create "$TAG" "$RUNNER_TEMP"/out/* \
+          gh release create "$TAG" out/* \
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
             --title "Basilisk II $DATE ($(printf %.7s "$MACEMU_COMMIT"))" \
-            --notes-file "$RUNNER_TEMP/notes.md"
+            --notes-file notes.md

@@ -5,9 +5,10 @@
 //!
 //! - DOS: DOSBox Staging, bundled (`scripts/fetch-dosbox.sh`).
 //! - Amiga: FS-UAE, bundled (`scripts/fetch-fs-uae.sh`).
-//! - Classic Mac: Basilisk II, bundled on macOS (`scripts/fetch-basilisk.sh`,
-//!   Floppy's own build of a pinned upstream commit, since upstream
-//!   publishes no binaries). A separate install or a located copy works too.
+//! - Classic Mac: Basilisk II, bundled on macOS and Linux
+//!   (`scripts/fetch-basilisk.sh`, Floppy's own build of a pinned upstream
+//!   commit, since upstream publishes no binaries). A separate install or a
+//!   located copy works too.
 
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -94,7 +95,7 @@ impl Emulator {
             }
             Emulator::FsUae => "FS-UAE wasn't found. Run scripts/fetch-fs-uae.sh, or install it in /Applications.",
             Emulator::BasiliskII if cfg!(target_os = "linux") => {
-                "Basilisk II wasn't found. Install BasiliskII so it's on your PATH, or use Locate Basilisk II… in the gear menu."
+                "Basilisk II wasn't found. Run scripts/fetch-basilisk.sh, install BasiliskII so it's on your PATH, or use Locate Basilisk II… in the gear menu."
             }
             Emulator::BasiliskII => {
                 "Basilisk II wasn't found. Run scripts/fetch-basilisk.sh, install BasiliskII.app in /Applications (or ~/Applications), or use Locate Basilisk II… in the gear menu."
@@ -235,10 +236,12 @@ const FSUAE_BIN: &str = "Windows/x86-64/fs-uae.exe";
 #[cfg(target_os = "linux")]
 const FSUAE_BIN: &str = "Linux/x86-64/fs-uae";
 
-// Only the macOS build is made so far (.github/workflows/basilisk.yml).
+// Floppy's own builds (.github/workflows/basilisk.yml): macOS and Linux.
 #[cfg(target_os = "macos")]
 const BASILISK_BIN: Option<&str> = Some("BasiliskII.app/Contents/MacOS/BasiliskII");
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "linux")]
+const BASILISK_BIN: Option<&str> = Some("BasiliskII");
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 const BASILISK_BIN: Option<&str> = None;
 
 #[cfg(target_os = "macos")]
@@ -380,11 +383,11 @@ mod tests {
         assert_eq!(chosen(&lib, Emulator::BasiliskII), None);
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     #[test]
     fn the_bundled_copy_is_found_in_resources() {
         let tmp = TempDir::new();
-        let bin = tmp.path().join("basilisk/BasiliskII.app/Contents/MacOS/BasiliskII");
+        let bin = tmp.path().join("basilisk").join(BASILISK_BIN.unwrap());
         exe(&bin);
         let found = Emulator::BasiliskII.locate(Some(tmp.path()), None);
         assert!(matches!(found, Some((_, EmulatorSource::Bundled))), "{found:?}");
