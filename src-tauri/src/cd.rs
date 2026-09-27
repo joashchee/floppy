@@ -175,8 +175,11 @@ impl Slot {
 
 /// Whether a copy with this SHA-1 is already known for `slot`: published
 /// or reported by users.
+/// Copies learned from findings dropped on Floppy (learned.rs) count too.
 pub fn is_known(slot: Slot, sha1: &str) -> bool {
-    slot.known().iter().any(|f| f.sha1.eq_ignore_ascii_case(sha1)) || slot.reported().any(|r| r.sha1.eq_ignore_ascii_case(sha1))
+    slot.known().iter().any(|f| f.sha1.eq_ignore_ascii_case(sha1))
+        || slot.reported().any(|r| r.sha1.eq_ignore_ascii_case(sha1))
+        || crate::learned::current().system_files.iter().any(|f| f.slot == slot.label() && f.sha1.eq_ignore_ascii_case(sha1))
 }
 
 /// A setup file users reported, by size and SHA-1.
@@ -434,6 +437,48 @@ fn classify(path: &Path, len: u64, keys: &[PathBuf]) -> Option<Candidate> {
         }
     }
     None
+}
+
+/// The setup file `path` is, judged by its contents (drops.rs). An
+/// encrypted Amiga Forever ROM counts as a Kickstart before its `rom.key`
+/// turns up, and a `rom.key` counts too.
+pub fn setup_slot(path: &Path) -> Option<Slot> {
+    if file_name(path).eq_ignore_ascii_case("rom.key") {
+        return Some(Slot::Kickstart);
+    }
+    let len = std::fs::metadata(path).ok()?.len();
+    let head = crate::library::read_head(path, 16).ok()?;
+    if amiga::identify_kickstart(&head, len) == Some(amiga::Kickstart::Encrypted) {
+        return Some(Slot::Kickstart);
+    }
+    classify(path, len, &[]).map(|c| c.slot)
+}
+
+/// The setup files in a folder, by content, looking at no more than
+/// `limit` files (a big folder is an app, not a setup bundle).
+pub fn setup_slots_in(root: &Path, limit: usize) -> Vec<Slot> {
+    let files = files_under(root);
+    if files.len() > limit {
+        return Vec::new();
+    }
+    let mut out: Vec<Slot> = candidates_in(&files).into_iter().map(|c| c.slot).collect();
+    out.dedup();
+    out
+}
+
+/// The setup files a list of names (a zip's entries) looks like, by the
+/// names they're commonly stored under.
+pub fn setup_slots_named<'a>(names: impl IntoIterator<Item = &'a str>) -> Vec<Slot> {
+    let mut out = Vec::new();
+    for name in names {
+        let base = name.rsplit('/').next().unwrap_or(name);
+        for slot in SLOTS {
+            if !out.contains(&slot) && slot.names().iter().any(|n| n.eq_ignore_ascii_case(base)) {
+                out.push(slot);
+            }
+        }
+    }
+    out
 }
 
 /// Every file under `root`, with its size. No depth limit: two copies

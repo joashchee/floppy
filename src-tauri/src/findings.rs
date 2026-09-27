@@ -20,11 +20,20 @@
 //!   app, version and program fingerprint. Into "Reported problems", for
 //!   a person to read. A known app's always go. Another app's go only
 //!   when the user ticks "Share", and then under its name in the library.
+//! - **Drop choices** (drops.rs): where the user said a dropped item goes
+//!   when Floppy had no clear winner, keyed by what kind of item it was
+//!   (file, folder or zip, extension, what its contents look like), never
+//!   its name. Into `docs/file-handling.md`'s "Drop choices", which Floppy
+//!   follows before asking.
 //! - **Setup reports**: what the user reported about getting a setup file:
 //!   a source that stopped working, a file that didn't work once set up
 //!   (with what Floppy recognized it as), or a better source. Into
 //!   `docs/legal-setupfiles.md`'s "Reported setup notes", for a person to
 //!   check before changing where the setup screen points.
+//!
+//! Findings are Floppy's training data. Merged into the living documents
+//! they teach every later release; dropped on another Floppy (learned.rs)
+//! they teach that one straight away, with no update.
 //!
 //! Each export holds only what earlier ones didn't: `library/findings.json`
 //! keeps what was shared, and each test result is marked exported
@@ -42,6 +51,7 @@ use serde::{Deserialize, Serialize};
 use crate::cd::{self, Slot};
 use crate::handlers;
 use crate::library::{GuestOs, IdentifiedBy, Library, SystemFile};
+use crate::drops;
 use crate::verify::{self, Tally};
 use crate::{amiga, sha1};
 
@@ -60,14 +70,20 @@ pub struct Findings {
     pub floppy_version: String,
     /// Unix seconds.
     pub exported: u64,
+    #[serde(default)]
     pub handler_tests: Vec<Tally>,
+    #[serde(default)]
     pub identities: Vec<IdentityFinding>,
+    #[serde(default)]
     pub file_types: Vec<FileTypeFinding>,
+    #[serde(default)]
     pub system_files: Vec<SystemFileFinding>,
     #[serde(default)]
     pub app_errors: Vec<AppErrorsFinding>,
     #[serde(default)]
     pub setup_reports: Vec<SetupReport>,
+    #[serde(default)]
+    pub drop_choices: Vec<DropChoiceFinding>,
     /// How many test results `handler_tests` was totalled from, to mark
     /// them exported. Not shared.
     #[serde(skip)]
@@ -126,6 +142,25 @@ pub struct AppErrorsFinding {
     pub size: Option<u64>,
     pub sha256: Option<String>,
     pub errors: String,
+}
+
+/// Where the user said a dropped item goes (drops.rs).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DropChoiceFinding {
+    pub signature: drops::Signature,
+    pub choice: drops::Choice,
+    /// What the dialog offered.
+    pub offered: Vec<drops::Choice>,
+    /// Unix seconds.
+    pub answered: u64,
+}
+
+impl DropChoiceFinding {
+    fn key(&self) -> String {
+        let s = &self.signature;
+        format!("drop {} {} {} {:?} {}", s.kind, s.ext, s.content, self.choice, self.answered)
+    }
 }
 
 /// What a setup report is about.
@@ -223,13 +258,14 @@ pub struct Summary {
     pub system_files: usize,
     pub app_errors: usize,
     pub setup_reports: usize,
+    pub drop_choices: usize,
     /// Unix seconds of the last export, if any.
     pub last_exported: Option<u64>,
 }
 
 impl Summary {
     fn total(&self) -> usize {
-        self.handler_tests + self.identities + self.file_types + self.system_files + self.app_errors + self.setup_reports
+        self.handler_tests + self.identities + self.file_types + self.system_files + self.app_errors + self.setup_reports + self.drop_choices
     }
 }
 
@@ -242,6 +278,7 @@ impl Findings {
             system_files: self.system_files.len(),
             app_errors: self.app_errors.len(),
             setup_reports: self.setup_reports.len(),
+            drop_choices: self.drop_choices.len(),
             last_exported: None,
         }
     }
@@ -285,6 +322,15 @@ struct Shared {
     last_exported: Option<u64>,
     /// Every identity, file type, system file and errors note exported.
     keys: BTreeSet<String>,
+    /// The IDs of this Floppy's own exports, so dropping one back on it
+    /// teaches it nothing twice (learned.rs).
+    #[serde(default)]
+    exported_ids: BTreeSet<String>,
+}
+
+/// Whether findings `id` came from this Floppy.
+pub fn is_own(library: &Library, id: &str) -> bool {
+    load_shared(library).exported_ids.contains(id)
 }
 
 fn load_shared(library: &Library) -> Shared {
@@ -307,6 +353,8 @@ pub fn mark_exported(library: &Library, findings: &Findings) -> Result<(), Strin
     shared.keys.extend(findings.system_files.iter().map(SystemFileFinding::key));
     shared.keys.extend(findings.app_errors.iter().map(AppErrorsFinding::key));
     shared.keys.extend(findings.setup_reports.iter().map(SetupReport::key));
+    shared.keys.extend(findings.drop_choices.iter().map(DropChoiceFinding::key));
+    shared.exported_ids.insert(findings.id.clone());
     let path = library.findings_path();
     let tmp = path.with_extension("json.tmp");
     let json = serde_json::to_vec_pretty(&shared).map_err(|e| e.to_string())?;
@@ -405,6 +453,11 @@ pub fn collect(library: &Library) -> Result<Findings, String> {
     system_files.retain(|f| !shared.keys.contains(&f.key()));
     let mut setup_reports = load_setup_reports(library);
     setup_reports.retain(|r| !shared.keys.contains(&r.key()));
+    let drop_choices: Vec<DropChoiceFinding> = drops::load_answers(library)
+        .into_iter()
+        .map(|a| DropChoiceFinding { signature: a.signature, choice: a.choice, offered: a.offered, answered: a.answered })
+        .filter(|f| !shared.keys.contains(&f.key()))
+        .collect();
     Ok(Findings {
         format: FORMAT.into(),
         version: 1,
@@ -417,6 +470,7 @@ pub fn collect(library: &Library) -> Result<Findings, String> {
         system_files,
         app_errors,
         setup_reports,
+        drop_choices,
         verifications_seen,
     })
 }
@@ -475,17 +529,26 @@ size and SHA-256), file types you said an app opens, and setup files
 what you wrote in a known app's Errors field (or another app's,
 with its name, when you ticked Share), and what you reported about
 getting setup files: a source that stopped working, a file that didn't
-work (with what Floppy recognized it as), or a better source.
+work (with what Floppy recognized it as), or a better source, and where
+you said dropped files go when Floppy couldn't tell (by the kind of file:
+its extension and what its contents look like, never its name).
 
 It holds no documents, no document names, no programs or ROMs, and no
 file or folder names from your Mac. floppy-findings.json is all of it,
 as plain text, so you can read exactly what's there. Each export holds
 only what's new since the one before.
 
-Floppy never sends this anywhere. To share it, send the zip to Floppy's
-maintainers (see the GitHub repo). They merge it into Floppy's living
-documents with scripts/merge-findings.py, and the next release
-recognizes what you found.
+These are Floppy's training data. Floppy never sends them anywhere;
+you choose who gets them:
+
+- Drop this zip on anyone's Floppy window (or use Learn from Findings…
+  in its gear menu), and that Floppy learns what's in it straight away:
+  the app versions, file types, test results, setup files and drop
+  choices. Nothing it already knows is overruled, and it can forget
+  what it learned at any time.
+- Send it to Floppy's maintainers (see the GitHub repo). They merge it
+  into Floppy's living documents with scripts/merge-findings.py, and
+  every Floppy knows it from the next release on.
 ";
 
 /// Writes `findings` as a zip: the JSON and a README saying what's in it.

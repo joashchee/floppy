@@ -5,6 +5,7 @@ mod cli;
 mod commands;
 mod discs;
 mod documents;
+mod drops;
 mod dos;
 #[cfg(test)]
 mod e2e;
@@ -13,6 +14,7 @@ mod findings;
 mod handlers;
 mod iso;
 mod known_files;
+mod learned;
 mod library;
 mod media;
 mod request;
@@ -40,6 +42,7 @@ pub fn run() {
         .setup(|app| {
             let app_data_dir = app.path().app_data_dir().expect("failed to resolve app data dir");
             let library = Library::new(app_data_dir.join("library"));
+            learned::load(&library);
             let args: Vec<String> = std::env::args().skip(1).collect();
             let startup = match cli::parse(&args) {
                 cli::Cli::None => None,
@@ -109,6 +112,13 @@ pub fn run() {
             commands::running_apps,
             commands::quit_app,
             commands::add_document,
+            commands::classify_drop,
+            commands::import_as,
+            commands::record_drop_choice,
+            commands::is_findings,
+            commands::learn_findings,
+            commands::knowledge_summary,
+            commands::forget_learned,
             commands::take_startup_import,
             commands::launch_app,
             commands::open_document,

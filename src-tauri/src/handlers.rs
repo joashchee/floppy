@@ -30,7 +30,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
 
 use crate::library::{GuestOs, IdentifiedBy, Identity, Library, LibraryApp, ProgramId};
@@ -152,13 +152,16 @@ pub fn opens_ext(h: &Handler, ext: &str) -> bool {
 }
 
 /// Whether users reported that the handler `app` opens `.ext` documents.
+/// Learned file types (findings dropped on Floppy, learned.rs) count too.
 pub fn reported_ext(os: GuestOs, app: &str, ext: &str) -> bool {
-    reported_file_types().iter().any(|r| r.os == os && r.app == app && r.ext.eq_ignore_ascii_case(ext))
+    let matches = |r: &ReportedFileType| r.os == os && r.app == app && r.ext.eq_ignore_ascii_case(ext);
+    reported_file_types().iter().any(matches) || crate::learned::current().file_types.iter().any(matches)
 }
 
 /// A document extension users said a handler opens, from the "Reported
 /// file types" table in `docs/app-handlers.md` (merged findings).
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct ReportedFileType {
     pub os: GuestOs,
     pub app: String,
@@ -214,7 +217,7 @@ fn parse_reported_file_types(doc: &str) -> Result<Vec<ReportedFileType>, String>
 /// A version of a handler, known by its program's fingerprint. From the
 /// "Known versions" table in `docs/app-handlers.md`, which test reports
 /// fill (findings.rs, `scripts/merge-findings.py`).
-#[derive(Serialize, Clone, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct KnownVersion {
     pub os: GuestOs,
@@ -229,8 +232,16 @@ pub struct KnownVersion {
     pub failed: u32,
 }
 
+/// The known versions: Floppy's own, then any learned from findings
+/// dropped on it (learned.rs), which never contradict Floppy's own.
+pub fn known_versions() -> Vec<KnownVersion> {
+    let mut all = builtin_known_versions().to_vec();
+    all.extend(crate::learned::current().versions.iter().cloned());
+    all
+}
+
 /// The known versions, read once from `docs/app-handlers.md`.
-pub fn known_versions() -> &'static [KnownVersion] {
+pub fn builtin_known_versions() -> &'static [KnownVersion] {
     static KNOWN: OnceLock<Vec<KnownVersion>> = OnceLock::new();
     KNOWN.get_or_init(|| parse_known_versions(include_str!("../../docs/app-handlers.md")).unwrap_or_default())
 }

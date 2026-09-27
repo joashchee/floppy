@@ -7,7 +7,9 @@ why each emulator was picked and its licensing and reliability checks,
 and `docs/floppy-notes.md` is a condensed history of the work so far.
 `docs/legal-setupfiles.md` is a living list of free, legal sources for
 the system files setup asks for. `docs/app-handlers.md` is a living list
-of old apps that open old formats (confidence and sources per entry).
+of old apps that open old formats (confidence and sources per entry),
+and `docs/file-handling.md` of where dropped files go ("Drop choices",
+read at build time, `drops.rs`).
 Its code copy is `HANDLERS` in `handlers.rs`, and a test keeps the two in
 step. Its "Known versions" and "Reported file types" tables, and
 `legal-setupfiles.md`'s "Reported by users", have no code copy: Floppy
@@ -132,6 +134,19 @@ gitignored `CLAUDE.local.md`, never in committed files.
   unfinished downloads, zips up to 64 MB, nothing mounted) and adds what
   it recognizes. **Look in Downloads** does the same on demand. On
   Linux without `user-dirs.dirs`, Downloads is `~/Downloads`.
+- **Drops (`drops.rs`):** every dropped file, folder or zip (and every
+  file opened with Floppy) is judged by contents (3), name or the tab it
+  was dropped on (2), or could-go-there (1), per destination: an app,
+  document or setup file of any guest. A single top option at 2+ wins,
+  even for another guest than the tab. Otherwise: the user's remembered
+  answer for that **signature** (kind, extension, contents, never a
+  name), then `docs/file-handling.md`'s "Drop choices", then choices
+  learned from other users' findings, then the **"Where does this go?"**
+  dialog (every option with why; "Do the same for other …" remembers).
+  Answers are kept in `library/drop-choices.json` and exported as
+  findings. Findings files dropped on the window are learned from
+  instead (`learned.rs`). The Import buttons still import into the tab's
+  guest as asked.
 - A missing emulator gets its own strip with **Locate <emulator>…**
   (any guest, not only the Mac). Its message says to reinstall Floppy in
   a release build, and to run the fetch script in a development one.
@@ -305,7 +320,16 @@ gitignored `CLAUDE.local.md`, never in committed files.
   record.
 - Test results leave only in an **Export Findings…** zip (below).
 
-## Findings (`findings.rs`)
+## Findings (`findings.rs`, `learned.rs`)
+
+- **Findings are Floppy's training data**, for how it handles obsolete
+  formats, app handlers and everything else it manages. Two ways they
+  teach: Claude merges them into the living documents (below), which
+  permanently refines every later release, and any user can drop them
+  on their own Floppy to teach it at once. Whatever Floppy learns to
+  decide, or asks the user about, should end up in findings, and every
+  kind of finding should have a living document to merge into and a
+  way for `learned.rs` to apply it.
 
 - **Export Findings…** (gear menu, only when asked: rule 4) writes
   `Floppy findings <date>.zip`: `floppy-findings.json` plus a README.
@@ -319,8 +343,22 @@ gitignored `CLAUDE.local.md`, never in committed files.
   under the system files keeps a note that a source stopped working, a
   file didn't work (with what Floppy recognized it as: type, size and,
   for ROMs and floppies, SHA-1) or a better source, in
-  `library/setup-reports.json` until the next export. Never documents, their
-  names, files, or file and folder names.
+  `library/setup-reports.json` until the next export, and **drop
+  choices** (drops.rs: signature, choice, what was offered). Never
+  documents, their names, files, or file and folder names.
+- **Learning from findings** (`learned.rs`): a findings zip or JSON
+  dropped on the window, or picked with **Learn from Findings…** (gear
+  menu), is applied on top of what Floppy was built knowing, and kept in
+  `library/learned.json`: app versions by fingerprint
+  (`handlers::known_versions`), file types (`handlers::opens_ext`), test
+  results (ranking "Open with"), setup files (`cd::is_known`) and drop
+  choices (`drops::classify`). Errors notes and setup reports are only
+  counted: they need a person. Floppy's own knowledge wins (a
+  fingerprint it knows as another app or version is skipped and
+  listed), malformed entries are skipped, each file is learned once by
+  ID, the library's own exports (`findings.json`'s `exportedIds`) not at
+  all, and **Forget What Was Learned…** empties it. Learning only ever
+  reads a file the user brings (rule 4).
 - Each export holds only what's new: `library/findings.json` keeps the
   keys of what went, and test results are marked `exported`
   (`verify.rs`), since merging adds counts up. "Open with" still ranks
@@ -330,9 +368,10 @@ gitignored `CLAUDE.local.md`, never in committed files.
   per findings ID: "Tested in Floppy", "Known versions", "Reported
   file types" and "Reported problems" (people only, not read by Floppy)
   in `docs/app-handlers.md`, "Reported by users" and "Reported setup
-  notes" (people only) in `docs/legal-setupfiles.md`. For a setup note,
+  notes" (people only) in `docs/legal-setupfiles.md`, and "Drop choices"
+  in `docs/file-handling.md`. For a setup note,
   check the source yourself, then fix "Where Floppy points you" and
-  delete the note's row. `handlers.rs` and `cd.rs` read those
+  delete the note's row. `handlers.rs`, `cd.rs` and `drops.rs` read those
   tables at build time (`include_str!`), so the next release recognizes
   the new versions, offers apps for the new file types, and asks for the
   new setup files. A unit test fails on a malformed row.
@@ -340,9 +379,11 @@ gitignored `CLAUDE.local.md`, never in committed files.
   conversation:** run `scripts/merge-findings.py <path>…` and read its
   output and the diff. It prints conflicts (a fingerprint listed as
   another app or version: ask the user), *believed* entries tests now
-  back, and reported file types with 2+ reports. For those, add the
-  extension to the app's row and to `HANDLERS`, and delete the reported
-  row. Then run the tests and add a CHANGELOG bullet. Findings come from
+  back, reported file types with 2+ reports, and kinds of dropped item
+  users sent different ways. For file types, add the extension to the
+  app's row and to `HANDLERS`, and delete the reported row. For drop
+  choices that differ, or that always go one way, consider teaching
+  `drops::options` to tell by itself. Then run the tests and add a CHANGELOG bullet. Findings come from
   users: sanity-check anything odd before committing.
 
 ## How DOS mode works

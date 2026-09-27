@@ -499,6 +499,13 @@ button.icontext-btn .btn-icon { display: inline-flex; width: 14px; height: 14px;
 .field-check { display: flex; align-items: flex-start; gap: 8px; font-size: 13px; color: var(--text); line-height: 1.4; }
 .field-check input[type="checkbox"] { flex-shrink: 0; width: 15px; height: 15px; margin: 2px 0 0; accent-color: var(--accent); }
 .dialog-box .field { margin-top: 12px; }
+/* "Where does this go?": one radio per option, with why */
+.drop-options { display: flex; flex-direction: column; gap: 8px; margin: 12px 0; }
+.drop-option { display: flex; align-items: flex-start; gap: 8px; cursor: pointer; font-size: 13px; line-height: 1.4; }
+.drop-option input[type="radio"] { flex-shrink: 0; width: 15px; height: 15px; margin: 2px 0 0; accent-color: var(--accent); }
+.drop-option-label { display: block; color: var(--text); font-weight: 600; }
+.drop-option-why { display: block; color: var(--muted); }
+.drop-remember { margin-bottom: 8px; }
 
 /* CP437 twins of the icons, shown only by the ANSIapps theme */
 .icon-glyph { display: none; }

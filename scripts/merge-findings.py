@@ -33,8 +33,13 @@ What goes where:
                          didn't work, or a better source. For people to
                          check before changing "Where Floppy points you";
                          Floppy doesn't use it.
+  docs/file-handling.md
+    Drop choices         where users said a dropped file, folder or zip
+                         goes when Floppy had no clear winner, per kind of
+                         item (kind, extension, contents). Counts add up;
+                         Floppy follows the choice with most answers.
 
-Floppy reads the other four tables straight from the documents when it's
+Floppy reads the other five tables straight from the documents when it's
 built, so merging is all it takes. Each findings file is merged once
 (its ID is recorded in app-handlers.md), and both documents get a
 check-log row. A fingerprint already listed as a different app or
@@ -63,7 +68,9 @@ HEADERS = {
     "reported": "| Slot | What | Size | SHA-1 | Reports | Last reported |",
     "problems": "| Guest | App | Version | Program | Errors | Reported |",
     "setup-notes": "| Slot | Kind | Source | Note | File | Reports | Last reported |",
+    "drops": "| Kind | Extension | Contents | Goes to | Answers | Last answered |",
 }
+DEST = {"app": "App", "document": "Document", "setup": "Setup file"}
 SETUP_KINDS = {"source-broken": "Source broken", "didnt-work": "Didn't work", "better-source": "Better source"}
 
 
@@ -139,9 +146,11 @@ def main():
         sys.exit(__doc__.split("\n\n")[1])
     handlers_path = os.path.join(root, "docs", "app-handlers.md")
     setup_path = os.path.join(root, "docs", "legal-setupfiles.md")
+    drops_path = os.path.join(root, "docs", "file-handling.md")
     known_rs = os.path.join(root, "src-tauri", "src", "known_files.rs")
     hdoc = open(handlers_path, encoding="utf-8").read()
     sdoc = open(setup_path, encoding="utf-8").read()
+    ddoc = open(drops_path, encoding="utf-8").read()
     published = set(re.findall(r'sha1: "([0-9a-f]{40})"', open(known_rs, encoding="utf-8").read()))
 
     reg = re.search(r"<!-- merged-reports:(.*?)-->", hdoc)
@@ -189,6 +198,13 @@ def main():
             setup_notes[(slot, kind, source, note, file)] = {
                 "slot": slot, "kind": kind, "source": source, "note": note, "file": file,
                 "reports": int(reports or 0), "last": last}
+    drops = {}
+    for c in block(ddoc, "drops")[1]:
+        if len(c) == 6:
+            kind, ext, content, goes, answers, last = c
+            ext = ext.lstrip(".").lower()
+            drops[(kind, ext, content, goes)] = {"kind": kind, "ext": ext, "content": content, "goes": goes,
+                                                 "answers": int(answers or 0), "last": last}
     table_exts = handler_exts(hdoc)
 
     merged, skipped, conflicts, new_problems, new_setup_notes = 0, 0, [], [], []
@@ -287,6 +303,19 @@ def main():
             row["last"] = max(row["last"], day(r["reported"]) if r.get("reported") else exported)
             new_setup_notes.append(row)
 
+        for d in data.get("dropChoices", []):
+            sig, choice = d.get("signature", {}), d.get("choice", {})
+            kind, ext, content = cell(sig.get("kind", "")), cell(sig.get("ext", "")).lower(), cell(sig.get("content", ""))
+            if kind not in ("file", "folder", "zip") or choice.get("to") not in DEST or choice.get("os") not in GUEST:
+                continue
+            if "`" in ext + content or len(ext) > 12 or len(content) > 48:
+                continue
+            goes = f"{DEST[choice['to']]}, {GUEST[choice['os']]}"
+            row = drops.setdefault((kind, ext, content, goes), {"kind": kind, "ext": ext, "content": content,
+                                                                "goes": goes, "answers": 0, "last": ""})
+            row["answers"] += 1
+            row["last"] = max(row["last"], day(d["answered"]) if d.get("answered") else exported)
+
         merged_ids.append(data["id"])
         merged += 1
 
@@ -323,6 +352,10 @@ def main():
         f"| {r['slot']} | {r['kind']} | {r['source']} | {r['note']} | {r['file']} | {r['reports']} | {r['last']} |"
         for r in sorted(setup_notes.values(), key=lambda r: (r["slot"], r["kind"], r["last"]))])
 
+    ddoc = replace_block(ddoc, "drops", [
+        f"| {r['kind']} | {'.' + r['ext'] if r['ext'] else ''} | {r['content']} | {r['goes']} | {r['answers']} | {r['last']} |"
+        for r in sorted(drops.values(), key=lambda r: (r["kind"], r["ext"], r["content"], -r["answers"], r["goes"]))])
+
     files = f"{merged} findings {'file' if merged == 1 else 'files'}"
     hdoc = add_log_row(hdoc, f"Merged {files} | {len(tested)} tested combinations, {len(versions)} known versions, "
                              f"{len(filetypes)} reported file types, {len(problems)} reported problems")
@@ -330,10 +363,12 @@ def main():
                              f"{len(setup_notes)} setup notes")
     open(handlers_path, "w", encoding="utf-8").write(hdoc)
     open(setup_path, "w", encoding="utf-8").write(sdoc)
+    ddoc = add_log_row(ddoc, f"Merged {files} | {len(drops)} drop choices")
+    open(drops_path, "w", encoding="utf-8").write(ddoc)
 
     print(f"Merged {files}{f', skipped {skipped}' if skipped else ''}: {len(tested)} tested combinations, "
           f"{len(versions)} known versions, {len(filetypes)} reported file types, {len(problems)} reported problems, "
-          f"{len(reported)} reported setup files.")
+          f"{len(reported)} reported setup files, {len(drops)} drop choices.")
     for r in new_problems:
         print(f"Problem reported with {r['app']} {r['version']}".rstrip() + f": {r['errors']}")
     for r in new_setup_notes:
@@ -355,6 +390,15 @@ def main():
                     and f"`{r['program']}`".lower() in line.lower()):
                 print(f"Consider marking verified (tested in Floppy {r['worked']}x): "
                       f"{line.split('|')[1].strip()} ({r['program']}, {r['type']})")
+    # Kinds of item users sent different ways: Floppy follows the most
+    # answers, and asks on a tie. Worth a look: maybe drops.rs should tell.
+    by_sig = {}
+    for r in drops.values():
+        by_sig.setdefault((r["kind"], r["ext"], r["content"]), []).append(r)
+    for (kind, ext, content), rows in sorted(by_sig.items()):
+        if len(rows) > 1:
+            ways = ", ".join(f"{r['goes']} ({r['answers']})" for r in sorted(rows, key=lambda r: -r["answers"]))
+            print(f"Drop choices differ for {kind} .{ext} {content}: {ways}")
     for r in filetypes.values():
         if r["reports"] >= 2:
             print(f"Consider adding .{r['ext']} to {r['app']}'s row ({r['reports']} reports), then delete it "

@@ -84,7 +84,7 @@ palette, Turbo Vision recipes, web rendering); these are its rules:
   (`☺ ☻ ○ ■ ¶ ► » ≡ ↑ ◘ ▬ ◙ i x`), shown instead of the SVG.
 - **Rules and separators**: rows of `─`; the gear menu's separators join
   its frame as `├───┤`.
-- **Controls**: `[ ]`/`[X]` checkboxes; black input strips; each select
+- **Controls**: `[ ]`/`[X]` checkboxes and `( )`/`(•)` radio buttons; black input strips; each select
   gets a `▼` cell (`.tm-arrow`) over its right end; status pills and
   source kinds as `[text]`.
 - **Progress**: `█` over a `░` track.
@@ -112,7 +112,8 @@ dialog (a color, like an attribute change).
 - **Selection**: list rows are borderless lines, and the selected one
   (an app, a document, the chosen guest) is a cyan bar with black
   text. Menus highlight in green.
-- **Controls**: checkboxes render as `[ ]` / `[X]`, text fields and
+- **Controls**: checkboxes render as `[ ]` / `[X]`, radio buttons as
+  `( )` / `(•)`, text fields and
   pickers are black strips with a `▼` cell, and focus is reverse video
   (black on white).
 - **No motion** beyond the indeterminate progress bar.

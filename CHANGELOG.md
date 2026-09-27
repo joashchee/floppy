@@ -8,6 +8,25 @@ against the day the change was made.
 
 ## Unreleased
 
+- **Drops that could go more than one way ask you** (2026-09-27): each
+  dropped file, folder or zip is judged by its contents, then its name,
+  then the tab it was dropped on (`drops.rs`). A clear winner is used
+  straight away, even when it belongs to another guest (an `.adf`
+  dropped on the DOS tab becomes an Amiga app). Otherwise a "Where does
+  this go?" dialog lists every option with why, best first, and your
+  answer is remembered for that kind of item (unless you untick it) and
+  shared by the next Export Findings as a drop choice. Kinds of item are
+  described by extension and contents, never by name.
+- **Findings teach other Floppys** (2026-09-27): drop an Export Findings
+  zip on Floppy's window, or use Learn from Findings… in the gear menu,
+  and Floppy learns what's in it at once (`learned.rs`): app versions by
+  fingerprint, file types known apps open, test results for "Open with",
+  setup files others used, and drop choices. Floppy's own knowledge is
+  never overruled (conflicts are listed), each file is learned once, its
+  own exports not at all, and Forget What Was Learned… undoes it.
+  `scripts/merge-findings.py` merges drop choices into the new living
+  document `docs/file-handling.md`, which Floppy reads when it's built.
+
 - **A Docs panel for every guest, sorted by file type** (2026-09-27):
   each guest's library panel lists only its apps now, and a Docs panel
   below it lists its documents folder (`C:\DOCS`, the Mac's

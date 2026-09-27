@@ -45,6 +45,10 @@ import {
   type LibraryDoc,
   type Opener,
   type FindingsSummary,
+  type DropChoice,
+  type DropClassification,
+  type LearnSummary,
+  type KnowledgeSummary,
   type SessionReport,
   type MediaProgress,
   type OldMedia,
@@ -168,7 +172,7 @@ function basiliskTitle(s: GuestStatus | undefined): string {
 }
 
 function findingsTotal(f: FindingsSummary): number {
-  return f.handlerTests + f.identities + f.fileTypes + f.systemFiles + f.appErrors + f.setupReports;
+  return f.handlerTests + f.identities + f.fileTypes + f.systemFiles + f.appErrors + f.setupReports + f.dropChoices;
 }
 
 /** "3 test results, 1 app version": what a findings export holds. */
@@ -182,10 +186,34 @@ function describeFindings(f: FindingsSummary): string {
       part(f.systemFiles, "unlisted setup file", "unlisted setup files"),
       part(f.appErrors, "app's errors", "apps' errors"),
       part(f.setupReports, "setup report", "setup reports"),
+      part(f.dropChoices, "drop choice", "drop choices"),
     ]
       .filter(Boolean)
       .join(", ") || "nothing yet"
   );
+}
+
+/** "2 app versions, 1 file type": what learning from findings added. */
+function describeLearned(l: LearnSummary | KnowledgeSummary): string {
+  const part = (n: number, one: string, many: string) => (n ? `${n} ${n === 1 ? one : many}` : "");
+  const drops = "dropChoices" in l ? l.dropChoices : l.dropRules;
+  return (
+    [
+      part(l.versions, "app version", "app versions"),
+      part(l.fileTypes, "file type", "file types"),
+      part(l.tests, "test result", "test results"),
+      part(l.systemFiles, "setup file", "setup files"),
+      part(drops, "drop choice", "drop choices"),
+    ]
+      .filter(Boolean)
+      .join(", ") || "nothing new"
+  );
+}
+
+/** Where a drop was decided to go, for the message after it. */
+function describeChoice(c: DropChoice): string {
+  const guest = GUEST_LABEL[c.os];
+  return c.to === "app" ? `a ${guest} app` : c.to === "document" ? `a ${guest} document` : `a ${guest} setup file`;
 }
 
 /** " Last exported 27 Sep 2026.", or nothing before the first export. */
@@ -294,6 +322,13 @@ function App() {
   const [identifyVersion, setIdentifyVersion] = useState("");
   // What Export Findings would share, counted when the gear menu opens.
   const [findings, setFindings] = useState<FindingsSummary | null>(null);
+  // What Floppy learned from findings dropped on it (learned.rs).
+  const [knowledge, setKnowledge] = useState<KnowledgeSummary | null>(null);
+  // Drops with no clear winner, asked about one at a time (drops.rs).
+  const [askDrops, setAskDrops] = useState<DropClassification[]>([]);
+  const [dropPick, setDropPick] = useState(0);
+  const [dropRemember, setDropRemember] = useState(true);
+  const [confirmForget, setConfirmForget] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState<LibraryApp | null>(null);
   const [gearOpen, setGearOpen] = useState(false);
   const [disketteRunning, setDisketteRunning] = useState(false);
@@ -436,6 +471,7 @@ function App() {
 
   useEffect(() => {
     if (gearOpen) invoke<FindingsSummary>("findings_summary").then(setFindings, () => setFindings(null));
+    if (gearOpen) invoke<KnowledgeSummary>("knowledge_summary").then(setKnowledge, () => setKnowledge(null));
   }, [gearOpen]);
 
   /** Runs a gear-menu item, closing the menu first. */
@@ -617,8 +653,133 @@ function App() {
     if (backups.length) await addSetupFiles(backups);
     for (const d of discs) await importDisc(d);
     if (!rest.length) return;
-    if (zone === "setup") await addSetupFiles(rest);
-    else await importPaths(rest);
+    if (zone === "setup") return addSetupFiles(rest);
+    // Findings teach Floppy (learned.rs); everything else finds its place.
+    const others: string[] = [];
+    for (const p of rest) {
+      if (await invoke<boolean>("is_findings", { path: p })) await learnFindings(p);
+      else others.push(p);
+    }
+    if (others.length) await placePaths(others);
+  }
+
+  /**
+   * Puts each dropped item where it belongs (drops.rs): straight away when
+   * there's a clear winner or an answer for its kind, else it's queued for
+   * the "Where does this go?" dialog.
+   */
+  async function placePaths(paths: string[]) {
+    setError(null);
+    setMessage(null);
+    const ask: DropClassification[] = [];
+    const failures: string[] = [];
+    const done: string[] = [];
+    let last: ImportedItem | null = null;
+    for (const path of paths) {
+      setBusy(`Looking at ${baseName(path)}`);
+      try {
+        const c = await invoke<DropClassification>("classify_drop", { os: guest, path });
+        if (!c.decided) {
+          ask.push(c);
+          continue;
+        }
+        if (c.decided.to === "setup") {
+          setBusy(null);
+          await addSetupFiles([path]);
+          continue;
+        }
+        setBusy(`Adding ${c.name}`);
+        last = await invoke<ImportedItem>("import_as", { path, choice: c.decided });
+        const by = c.decidedBy && c.decidedBy !== "its contents" && c.decidedBy !== "nothing else fits" ? ` (going by ${c.decidedBy})` : "";
+        done.push(`${c.name} as ${describeChoice(c.decided)}${by}`);
+      } catch (e) {
+        failures.push(String(e));
+      }
+    }
+    setBusy(null);
+    await refresh();
+    if (last?.app) select(last.app);
+    else if (last?.document) selectDoc(last.document);
+    if (done.length) setMessage(`Added ${done.join("; ")}.`);
+    if (failures.length) setError(failures.join("\n"));
+    if (ask.length) {
+      setDropPick(0);
+      setDropRemember(true);
+      setAskDrops((queue) => [...queue, ...ask]);
+    }
+  }
+
+  /** The user's answer for the first queued drop: kept (and remembered, if ticked), then carried out. */
+  async function answerDrop(skip: boolean) {
+    const c = askDrops[0];
+    if (!c) return;
+    setAskDrops((queue) => queue.slice(1));
+    setDropPick(0);
+    setDropRemember(true);
+    if (skip) return;
+    const option = c.options[dropPick];
+    if (!option) return;
+    try {
+      await invoke("record_drop_choice", {
+        signature: c.signature,
+        choice: option.choice,
+        offered: c.options.map((o) => o.choice),
+        remember: dropRemember,
+      });
+      if (option.choice.to === "setup") {
+        await addSetupFiles([c.path]);
+        return;
+      }
+      setBusy(`Adding ${c.name}`);
+      const item = await invoke<ImportedItem>("import_as", { path: c.path, choice: option.choice });
+      setBusy(null);
+      await refresh();
+      if (item.app) select(item.app);
+      else if (item.document) selectDoc(item.document);
+      setMessage(`Added ${c.name} as ${describeChoice(option.choice)}.`);
+    } catch (e) {
+      setBusy(null);
+      fail(e);
+    }
+  }
+
+  /** Learns from another Floppy's findings (learned.rs). */
+  async function learnFindings(path: string) {
+    setError(null);
+    setBusy(`Learning from ${baseName(path)}`);
+    try {
+      const l = await invoke<LearnSummary>("learn_findings", { path });
+      await refresh();
+      if (l.own) setMessage(`${baseName(path)} is this Floppy's own findings: nothing to learn from it.`);
+      else if (l.already) setMessage(`Floppy already learned from ${baseName(path)}.`);
+      else {
+        const people = l.forMaintainers
+          ? ` ${l.forMaintainers} note${l.forMaintainers === 1 ? "" : "s"} for Floppy's maintainers (errors, setup reports) stay in the file.`
+          : "";
+        setMessage(`Learned from ${baseName(path)}: ${describeLearned(l)}.${people}`);
+      }
+      if (l.skipped.length) setError(`Left out:\n${l.skipped.join("\n")}`);
+    } catch (e) {
+      fail(e);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function pickFindings() {
+    const picked = await open({ multiple: true, title: "Learn from Floppy findings", filters: [{ name: "Findings", extensions: ["zip", "json"] }] });
+    if (Array.isArray(picked)) for (const p of picked) await learnFindings(p);
+  }
+
+  async function forgetLearned() {
+    setConfirmForget(false);
+    try {
+      await invoke("forget_learned");
+      await refresh();
+      setMessage("Forgot everything learned from findings. Your own answers and test results are kept.");
+    } catch (e) {
+      fail(e);
+    }
   }
 
   /** Files opened with Floppy: a disc from Diskette, or anything Open With sent. */
@@ -1057,7 +1218,7 @@ function App() {
     try {
       const n = await invoke<FindingsSummary>("export_findings", { path });
       setMessage(
-        `Saved ${baseName(path)}: ${describeFindings(n)}. It holds no documents, files or file names. Send it to Floppy's maintainers so the next release knows it too.`,
+        `Saved ${baseName(path)}: ${describeFindings(n)}. It holds no documents, files or file names. Drop it on another Floppy to teach it, or send it to Floppy's maintainers so every Floppy learns it from the next release.`,
       );
     } catch (e) {
       fail(e);
@@ -1358,7 +1519,7 @@ function App() {
                 disabled={!findings || findingsTotal(findings) === 0}
                 title={
                   findings && findingsTotal(findings) > 0
-                    ? `New since the last export: ${describeFindings(findings)}, as a zip for Floppy's maintainers. No documents, files or file names.${lastExported(findings)}`
+                    ? `New since the last export: ${describeFindings(findings)}, as a zip to teach another Floppy or Floppy's maintainers. No documents, files or file names.${lastExported(findings)}`
                     : findings?.lastExported
                       ? `Nothing new since the last export.${lastExported(findings)}`
                       : "Nothing to share yet: test results, apps you identified, file types you added, unlisted ROMs and apps' errors show up here."
@@ -1368,6 +1529,31 @@ function App() {
                 <ExportIcon />
                 <span>Export Findings{findings && findingsTotal(findings) > 0 ? ` (${findingsTotal(findings)})` : ""}…</span>
               </button>
+              <button
+                type="button"
+                className="menu-item"
+                disabled={!!busy}
+                title={
+                  knowledge?.sources
+                    ? `Learned from ${knowledge.sources} findings file${knowledge.sources === 1 ? "" : "s"} so far: ${describeLearned(knowledge)}. Add another's, or drop one on the window.`
+                    : "Teach this Floppy what another Floppy learned: pick its Export Findings zip, or drop it on the window."
+                }
+                onClick={() => fromGear(() => void pickFindings())}
+              >
+                <FolderIcon />
+                <span>Learn from Findings…</span>
+              </button>
+              {!!knowledge?.sources && (
+                <button
+                  type="button"
+                  className="menu-item"
+                  title={`Forget ${describeLearned(knowledge)}, learned from ${knowledge.sources} findings file${knowledge.sources === 1 ? "" : "s"}.`}
+                  onClick={() => fromGear(() => setConfirmForget(true))}
+                >
+                  <TrashIcon />
+                  <span>Forget What Was Learned…</span>
+                </button>
+              )}
               <div className="menu-sep" />
               <div className="menu-note">Your setup files</div>
               <button
@@ -1922,6 +2108,70 @@ function App() {
           )}
         </section>
       </div>
+
+      <Dialog
+        open={!!askDrops[0]}
+        onClose={() => void answerDrop(true)}
+        title={askDrops[0] ? `Where does ${askDrops[0].name} go?` : "Where does this go?"}
+        actions={
+          <>
+            <button type="button" onClick={() => void answerDrop(true)}>
+              Skip
+            </button>
+            <button type="button" className="primary" onClick={() => void answerDrop(false)}>
+              Add
+            </button>
+          </>
+        }
+      >
+        {askDrops[0] && (
+          <>
+            <p>
+              Floppy can't tell for sure, so you decide.
+              {askDrops.length > 1 ? ` ${askDrops.length - 1} more after this one.` : ""}
+            </p>
+            <div className="drop-options" role="radiogroup" aria-label="Where it goes">
+              {askDrops[0].options.map((o, i) => (
+                <label key={`${o.choice.to}-${o.choice.os}`} className="drop-option">
+                  <input type="radio" name="drop-choice" checked={dropPick === i} onChange={() => setDropPick(i)} />
+                  <span>
+                    <span className="drop-option-label">{o.label}</span>
+                    <span className="drop-option-why">{o.why}</span>
+                  </span>
+                </label>
+              ))}
+            </div>
+            <label className="field-check drop-remember">
+              <input type="checkbox" checked={dropRemember} onChange={(e) => setDropRemember(e.target.checked)} />
+              <span>Do the same for other {askDrops[0].sameFor} without asking</span>
+            </label>
+            <p className="system-note">
+              Your answer also goes in your next Export Findings, so Floppy learns where these go.
+            </p>
+          </>
+        )}
+      </Dialog>
+
+      <Dialog
+        open={confirmForget}
+        onClose={() => setConfirmForget(false)}
+        title="Forget what was learned?"
+        actions={
+          <>
+            <button type="button" onClick={() => setConfirmForget(false)}>
+              Cancel
+            </button>
+            <button type="button" className="danger" onClick={() => void forgetLearned()}>
+              Forget
+            </button>
+          </>
+        }
+      >
+        <p>
+          Floppy forgets {knowledge ? describeLearned(knowledge) : "what it learned"} from findings dropped on it. What it was
+          built knowing, your own answers and your test results stay. Drop the findings again to relearn them.
+        </p>
+      </Dialog>
 
       <Dialog
         open={!!session?.identify}

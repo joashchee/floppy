@@ -288,6 +288,16 @@ impl Library {
     }
 
     /// What the user reported about getting setup files (findings.rs).
+    /// The user's answers to "where does this go?" (drops.rs).
+    pub fn drop_answers_path(&self) -> PathBuf {
+        self.root.join("drop-choices.json")
+    }
+
+    /// What Floppy learned from findings dropped on it (learned.rs).
+    pub fn learned_path(&self) -> PathBuf {
+        self.root.join("learned.json")
+    }
+
     pub fn setup_reports_path(&self) -> PathBuf {
         self.root.join("setup-reports.json")
     }
@@ -451,7 +461,7 @@ impl Library {
         }
 
         let program_ids = if os == GuestOs::Dos { program_ids(&content, &programs) } else { BTreeMap::new() };
-        let identity = handlers::identify(os, &program_ids, handlers::known_versions());
+        let identity = handlers::identify(os, &program_ids, &handlers::known_versions());
 
         let os_root = self.os_root(os);
         fs::create_dir_all(&os_root).map_err(|e| e.to_string())?;
@@ -509,7 +519,7 @@ impl Library {
             }
             app.program_ids = program_ids(&self.os_root(app.os).join(&app.dir), &app.programs);
             if app.identity.is_none() {
-                app.identify_as(handlers::identify(app.os, &app.program_ids, handlers::known_versions()));
+                app.identify_as(handlers::identify(app.os, &app.program_ids, &handlers::known_versions()));
             }
             changed |= !app.program_ids.is_empty();
         }

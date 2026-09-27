@@ -130,6 +130,8 @@ export interface FindingsSummary {
   systemFiles: number;
   appErrors: number;
   setupReports: number;
+  /** Where you said dropped files go (drops.rs). */
+  dropChoices: number;
   /** Unix seconds of the last export, if any. */
   lastExported: number | null;
 }
@@ -325,4 +327,64 @@ export interface BackupMade {
   slots: string[];
   originalBytes: number;
   discBytes: number;
+}
+
+/** drops.rs `Choice`: where a dropped item goes. */
+export interface DropChoice {
+  to: "app" | "document" | "setup";
+  os: GuestOs;
+}
+
+/** drops.rs `Signature`: what kind of item was dropped, never its name. */
+export interface DropSignature {
+  kind: "file" | "folder" | "zip";
+  ext: string;
+  content: string;
+}
+
+/** drops.rs `DropOption`: one place a dropped item could go. */
+export interface DropOption {
+  choice: DropChoice;
+  /** "Document, DOS". */
+  label: string;
+  /** 1 to 3: it could, its name says so, its contents say so. */
+  score: number;
+  why: string;
+}
+
+/** drops.rs `Classification`: what Floppy made of a dropped item. */
+export interface DropClassification {
+  path: string;
+  name: string;
+  signature: DropSignature;
+  /** Best first. */
+  options: DropOption[];
+  /** Set when there's no need to ask. */
+  decided: DropChoice | null;
+  decidedBy: string | null;
+  /** ".wp5 files like this". */
+  sameFor: string;
+}
+
+/** learned.rs `LearnSummary`: what learning from one findings file did. */
+export interface LearnSummary {
+  already: boolean;
+  own: boolean;
+  versions: number;
+  fileTypes: number;
+  tests: number;
+  systemFiles: number;
+  dropChoices: number;
+  forMaintainers: number;
+  skipped: string[];
+}
+
+/** learned.rs `KnowledgeSummary`: what Floppy has learned from findings. */
+export interface KnowledgeSummary {
+  sources: number;
+  versions: number;
+  fileTypes: number;
+  tests: number;
+  systemFiles: number;
+  dropRules: number;
 }

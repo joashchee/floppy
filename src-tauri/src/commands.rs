@@ -14,6 +14,8 @@ use crate::documents::{self, Change, Opener};
 use crate::library::{GuestOs, GuestSystem, Library, LibraryApp, LibraryDoc, SystemFile};
 use crate::cd::{self, CdImport};
 use crate::discs;
+use crate::drops;
+use crate::learned;
 use crate::backup;
 use crate::findings;
 use crate::handlers;
@@ -818,6 +820,71 @@ pub async fn import_item(app: AppHandle, os: String, path: String) -> Result<Imp
     .map_err(|e| e.to_string())?
 }
 
+/// What a dropped item is and where it could go, dropped on the `os`
+/// tab (drops.rs). `decided` is set when there's no need to ask.
+#[tauri::command]
+pub async fn classify_drop(app: AppHandle, os: String, path: String) -> Result<drops::Classification, String> {
+    let os = GuestOs::parse(&os).ok_or("Unknown guest OS.")?;
+    tauri::async_runtime::spawn_blocking(move || drops::classify(&app.state::<AppState>().library, Path::new(&path), os))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Imports a dropped item where it was decided to go: an app or a
+/// document. Setup files go through `import_setup_files`.
+#[tauri::command]
+pub async fn import_as(app: AppHandle, path: String, choice: drops::Choice) -> Result<ImportedItem, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let library = &app.state::<AppState>().library;
+        let path = PathBuf::from(path);
+        match choice.to {
+            drops::Dest::App => Ok(ImportedItem { app: Some(library.import(choice.os, &path)?), document: None }),
+            drops::Dest::Document => Ok(ImportedItem { app: None, document: Some(library.import_document(choice.os, &path)?) }),
+            drops::Dest::Setup => Err("Setup files are added with the setup files.".into()),
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Keeps the user's answer to "where does this go?", for next time when
+/// `remember`, and for the next Export Findings either way.
+#[tauri::command]
+pub fn record_drop_choice(
+    state: State<AppState>,
+    signature: drops::Signature,
+    choice: drops::Choice,
+    offered: Vec<drops::Choice>,
+    remember: bool,
+) -> Result<(), String> {
+    drops::record(&state.library, signature, choice, offered, remember)
+}
+
+/// Whether a dropped file is Floppy findings, to learn from (learned.rs).
+#[tauri::command]
+pub async fn is_findings(path: String) -> bool {
+    tauri::async_runtime::spawn_blocking(move || learned::is_findings(Path::new(&path))).await.unwrap_or(false)
+}
+
+/// Learns from findings another Floppy exported (learned.rs).
+#[tauri::command]
+pub async fn learn_findings(app: AppHandle, path: String) -> Result<learned::LearnSummary, String> {
+    tauri::async_runtime::spawn_blocking(move || learned::learn(&app.state::<AppState>().library, Path::new(&path)))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// How much Floppy has learned from findings, for the gear menu.
+#[tauri::command]
+pub fn knowledge_summary() -> learned::KnowledgeSummary {
+    learned::summary()
+}
+
+#[tauri::command]
+pub fn forget_learned(state: State<AppState>) -> Result<(), String> {
+    learned::forget(&state.library)
+}
+
 /// Adds a file as a document whatever it is (a zip too), in its guest's
 /// documents folder under its type.
 #[tauri::command]
@@ -846,7 +913,12 @@ pub fn list_documents(state: State<AppState>) -> Result<Vec<LibraryDoc>, String>
 pub fn document_openers(state: State<AppState>, id: String) -> Result<Vec<Opener>, String> {
     let doc = state.library.document(&id)?;
     Ok(match doc.os {
-        GuestOs::Dos => documents::dos_openers(&doc.file, doc.opens_with.as_deref(), &state.library.list()?, &verify::tallies(&state.library)),
+        GuestOs::Dos => {
+            // Other Floppys' test results (learned.rs) rank too.
+            let mut tests = verify::tallies(&state.library);
+            tests.extend(learned::current().tests.iter().cloned());
+            documents::dos_openers(&doc.file, doc.opens_with.as_deref(), &state.library.list()?, &tests)
+        }
         _ => Vec::new(),
     })
 }
