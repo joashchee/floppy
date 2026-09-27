@@ -8,6 +8,17 @@ against the day the change was made.
 
 ## Unreleased
 
+- **ANSIapps theme redrawn in text** (2026-09-27): everything in the
+  theme is now characters from the IBM VGA font on an 8x16 grid. Panels
+  and dialogs get double box-drawing frames with their titles in the top
+  border, the gear menu and setup boxes single frames with `├─┤`
+  separators, windows and menus Turbo Vision's shadow cells
+  (`src/lib/textmode.ts`, `aria-hidden` over the real HTML). Buttons are
+  Turbo Vision's green bars with `▄`/`▀` shadows, icons CP437 glyphs,
+  selects get a `▼` cell, progress bars are `█` over `░`, status pills
+  `[text]`, and rows are exactly 16px so box characters join. No CSS
+  borders, box-shadows or SVG remain in the theme; the modern theme is
+  unchanged.
 - **ANSIapps theme: text only, as a standing convention** (2026-09-27):
   in the ANSIapps theme everything is to be drawn with characters from
   the one monospaced font, as DOS text mode did (CLAUDE.md, Dev

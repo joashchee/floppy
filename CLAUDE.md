@@ -452,7 +452,9 @@ gitignored `CLAUDE.local.md`, never in committed files.
   theme. The how-to, with glyph tables, the exact 16-color palette and
   Turbo Vision's component recipes, is `docs/ansiapps-textmode.md`;
   follow it and extend it. Every new UI element gets its text-mode form
-  when it's built, and touched UI gets polished toward it. The theme's font (`public/fonts/ansiapps/`) is CC BY-SA
+  when it's built, and touched UI gets polished toward it. Floppy's
+  frames come from `src/lib/textmode.ts` (add a box to its `FRAMES`
+  list) and its icons' CP437 twins from `components/icons.tsx`. The theme's font (`public/fonts/ansiapps/`) is CC BY-SA
   4.0: ship it unmodified as its own file with its license and the
   About credit. Never subset, convert or inline it.
 

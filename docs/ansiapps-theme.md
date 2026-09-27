@@ -63,13 +63,36 @@ palette, Turbo Vision recipes, web rendering); these are its rules:
   HTML controls and headings; colors pass WCAG AA (the reference lists
   which classic pairs fail and their replacements).
 
-### Migrating today's theme
+### How Floppy draws it
 
-Floppy's theme predates the rule and still uses CSS for some of it:
-`line-height: 1.25` (20px rows) in `src/ansiapps-theme.css`, CSS
-double borders on panels and dialogs, `box-shadow` shadows, inline SVG
-icons, and a solid-fill progress bar. Move each to its text form as
-it's touched, starting with the line height and the frames.
+- **Frames** (`src/lib/textmode.ts`): panels, dialogs, the gear menu,
+  setup boxes, guest tiles, drop targets and messages get an
+  `aria-hidden` layer of box characters: top and bottom rows of long
+  `═`/`─` runs in a flex row that CSS clips to the box, `║`/`│` columns
+  for the sides, the title (from the box's real heading, which stays for
+  screen readers but is visually hidden) centered in the top border, and
+  for windows and menus Turbo Vision's shadow, two cells of `█` right and
+  one row below in black. Nothing is measured, so frames follow any size.
+  A MutationObserver decorates boxes as React renders them;
+  `stopTextMode()` removes every layer when the theme goes back to
+  modern.
+- **Buttons**: Turbo Vision's green bar, with `▄` beside it and a row of
+  `▀` under it, drawn as CSS generated text with empty alt text
+  (`content: "▄" / ""`) so screen readers skip it. Pressed, the face
+  moves one cell right and the shadow goes.
+- **Icons**: each icon in `components/icons.tsx` renders a CP437 twin
+  (`☺ ☻ ○ ■ ¶ ► » ≡ ↑ ◘ ▬ ◙ i x`), shown instead of the SVG.
+- **Rules and separators**: rows of `─`; the gear menu's separators join
+  its frame as `├───┤`.
+- **Controls**: `[ ]`/`[X]` checkboxes; black input strips; each select
+  gets a `▼` cell (`.tm-arrow`) over its right end; status pills and
+  source kinds as `[text]`.
+- **Progress**: `█` over a `░` track.
+- **Grid**: 16px font, 16px rows everywhere, spacing in whole cells.
+
+What's still drawn by the platform: the page scrollbars (styled in
+text-mode colors), native tooltips, and the dimmed overlay behind a
+dialog (a color, like an attribute change).
 
 ### Current rules
 
@@ -81,17 +104,20 @@ it's touched, starting with the line height and the frames.
 - **Type**: one bitmap font, IBM VGA 8x16, at 16px only, with no bold
   or italic and font smoothing off. Hierarchy comes from color and
   position.
-- **Shapes**: square corners. Panels get a double-line frame with the
-  title set into the top border. Dialog titles sit on a double rule
-  (`═══ About Floppy ═══`). Boxes inside panels get single-line frames.
-- **Depth**: hard black shadows with no blur (16px windows, 8px
-  buttons). A pressed button shifts into its shadow.
+- **Frames**: panels and dialogs double (`╔═╗`), menus and boxes inside
+  panels single (`┌─┐`), titles centered in the top border.
+- **Depth**: Turbo Vision shadows in text: `█` cells two columns right
+  and one row down for windows and menus, `▄`/`▀` for buttons. A pressed
+  button shifts into its shadow.
 - **Selection**: list rows are borderless lines, and the selected one
   (an app, a document, the chosen guest) is a cyan bar with black
   text. Menus highlight in green.
 - **Controls**: checkboxes render as `[ ]` / `[X]`, text fields and
-  pickers are black strips, and focus is a dashed white outline.
+  pickers are black strips with a `▼` cell, and focus is reverse video
+  (black on white).
 - **No motion** beyond the indeterminate progress bar.
+- **Buttons** are Turbo Vision green (black text), primary light green,
+  danger red with white text, disabled dark gray on light gray.
 - **Floppy's own color keeps its meaning**: phosphor green becomes
   light green (`--accent`), used for primary buttons, section and row
   icons, and the progress fill.
