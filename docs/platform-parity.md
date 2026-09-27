@@ -1,9 +1,10 @@
 # Platform parity
 
-Every feature that relies on a macOS-specific mechanism gets a row here
-when it's written: what it does, the macOS mechanism, and the
-Windows/Linux equivalent. Don't implement the other platforms early. Just
-keep the gap tracked.
+Every feature that relies on a platform-specific mechanism gets a row
+here when it's written: what it does, and the mechanism on each platform.
+macOS and Linux are supported: build both sides where you can, and track
+any Linux gap here. Windows comes later, so don't implement it early.
+Just keep the gap tracked.
 
 | Feature | macOS | Windows | Linux |
 |---|---|---|---|

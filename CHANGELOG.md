@@ -9,6 +9,8 @@ against the day the change was made.
 ## Unreleased
 
 - **Linux support, first pass** (2026-09-27):
+  - Policy: macOS and Linux are supported, Windows comes later
+    (`CLAUDE.md` rule 7, `docs/platform-parity.md`).
   - Builds on Linux: `flate2`'s pure-Rust backend is now a direct
     dependency. Only a macOS-only Tauri dependency had been switching it
     on, so zip imports failed to compile elsewhere.

@@ -54,8 +54,10 @@ gitignored `CLAUDE.local.md`, never in committed files.
    app-data folder (the whole library) on it.
 6. **All user data lives under Tauri's app-data dir** (`library/`), never
    a hardcoded path.
-7. **macOS first, then Windows/Linux.** Distribution: itch.io (free or
-   pay-what-you-want) plus GitHub releases. Never the Mac App Store,
+7. **macOS and Linux supported, Windows later.** A feature built for one
+   of macOS or Linux gets the other side too, or a parity row saying
+   what's missing. Distribution: itch.io (free or pay-what-you-want) plus
+   GitHub releases (the DMG, and the Linux `.deb`/AppImage). Never the Mac App Store,
    whose terms are incompatible with the GPL.
 
 ## How the library works
@@ -314,8 +316,9 @@ gitignored `CLAUDE.local.md`, never in committed files.
   the old one, so the installed app is always the latest release build.
   Outside the sandbox only: `~/Applications` isn't writable in it.
 - **Track platform parity** in `docs/platform-parity.md` whenever a
-  feature uses a macOS-specific mechanism. Don't implement the
-  Windows/Linux side early.
+  feature uses a platform-specific mechanism. Build the macOS and Linux
+  sides together where you can, and don't implement the Windows side
+  early.
 - Dev server port is **1430**, kept in sync between `vite.config.ts` and
   `tauri.conf.json`'s `devUrl`.
 - UI follows the shared ansiapps design system: same tokens, with
