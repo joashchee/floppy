@@ -8,6 +8,12 @@ against the day the change was made.
 
 ## Unreleased
 
+- **AROS source notice in every release** (2026-09-27): the release
+  script's source step (`scripts/fetch-sources.sh`) also writes
+  `AROS-SOURCE.txt`, naming the AROS build inside the bundled FS-UAE (read
+  from its `fs-uae.dat`), its licence (AROS Public License) and where its
+  source is, to attach to the release with the emulator sources. It fails
+  if FS-UAE stops carrying an AROS ROM it can identify.
 - **Start the Amiga now with the free AROS Kickstart** (2026-09-27): with
   no Kickstart ROM, the Amiga setup offers **Use AROS for Now**, the
   open-source replacement already inside FS-UAE, with its caveats (some

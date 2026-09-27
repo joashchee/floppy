@@ -55,8 +55,10 @@ the end-to-end test runs a real program in it headlessly.
     boots to AROS's "Waiting for bootable media" screen. FS-UAE's
     `licenses/` folder has no AROS licence text, and its source tarball
     has only the ROM binaries: the AROS source is the AROS project's own
-    (github.com/aros-development-team/AROS). Mention that in release
-    notes alongside the emulator sources.
+    (github.com/aros-development-team/AROS). `scripts/fetch-sources.sh`
+    (run by the release script) writes `AROS-SOURCE.txt` with the exact
+    build, read from the shipped `fs-uae.dat`, the licence and the source
+    location, to attach to each release with the emulator sources.
 - **Alternative considered:** Amiberry (GPL-3.0, also fine as a separate
   executable, universal macOS DMG, very active). FS-UAE was picked for
   its long record as a scriptable, config-file-driven emulator with

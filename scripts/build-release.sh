@@ -10,8 +10,9 @@
 # Arguments are passed on to `tauri build`, e.g. `--bundles app`.
 # Afterwards the built app is searched for $HOME, and the script fails if
 # it's still there. It then downloads the source of the bundled GPL
-# emulators (scripts/fetch-sources.sh), which every release must ship
-# alongside the DMG. Finally, on macOS, the app is installed into
+# emulators, plus a notice for the AROS ROM inside FS-UAE
+# (scripts/fetch-sources.sh), which every release must ship alongside the
+# DMG or Linux packages. Finally, on macOS, the app is installed into
 # ~/Applications, replacing any older copy. Always build releases with this
 # script.
 set -eu

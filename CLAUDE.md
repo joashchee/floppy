@@ -349,9 +349,11 @@ gitignored `CLAUDE.local.md`, never in committed files.
   `--remap-path-prefix` and fails if `$HOME` is still in the built app.
   Arguments pass through to `tauri build` (`--bundles app` skips the DMG,
   which needs `hdiutil`). It then downloads the bundled GPL emulators'
-  source into `src-tauri/target/release/bundle/source/`. Attach those to
-  the GitHub release with the DMG: shipping their binaries means offering
-  their source.
+  source into `src-tauri/target/release/bundle/source/`, and writes
+  `AROS-SOURCE.txt` there too: which AROS build FS-UAE's `fs-uae.dat`
+  carries (read from the ROM itself), its licence and where its source
+  is. Attach all of it to the GitHub release with the DMG or Linux
+  packages: shipping their binaries means offering their source.
   Last, it copies the new `Floppy.app` into `~/Applications/`, replacing
   the old one, so the installed app is always the latest release build.
   Outside the sandbox only: `~/Applications` isn't writable in it.
