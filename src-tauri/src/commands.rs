@@ -79,7 +79,7 @@ fn guest_status(app: &AppHandle, library: &Library, os: GuestOs) -> Result<Guest
         _ => None,
     };
     let blocker = if found.is_none() {
-        Some(emu.missing_message().to_string())
+        Some(emu.missing_message())
     } else {
         match os {
             GuestOs::Dos => None,
@@ -429,6 +429,46 @@ pub async fn import_setup_files(app: AppHandle, paths: Vec<String>) -> Result<Cd
         .map_err(|e| e.to_string())?
 }
 
+/// Keeps what the user reported about getting a setup file for the next
+/// Export Findings (`findings::add_setup_report`).
+#[tauri::command]
+pub fn add_setup_report(
+    state: State<AppState>,
+    slot: String,
+    kind: String,
+    source: Option<String>,
+    note: String,
+) -> Result<(), String> {
+    findings::add_setup_report(&state.library, &slot, &kind, source.as_deref(), &note)
+}
+
+/// Where to get each setup file (`cd::setup_sources`), for the setup screen.
+#[tauri::command]
+pub fn setup_sources() -> Vec<cd::SetupSource> {
+    cd::setup_sources().to_vec()
+}
+
+/// Fills missing setup files from the user's Downloads folder, after they
+/// fetched one in the browser (`cd::import_from_downloads`).
+#[tauri::command]
+pub async fn import_from_downloads(app: AppHandle) -> Result<CdImport, String> {
+    let state = app.state::<AppState>();
+    if running_map(&state).values().any(|o| o.single_instance()) {
+        return Err("Quit Basilisk II and FS-UAE before adding system files.".into());
+    }
+    // Linux desktops name it in user-dirs.dirs, which minimal setups lack.
+    let dir = app
+        .path()
+        .download_dir()
+        .ok()
+        .or_else(|| app.path().home_dir().ok().map(|h| h.join("Downloads")).filter(|d| d.is_dir()))
+        .ok_or("Floppy couldn't find your Downloads folder.")?;
+    let handle = app.clone();
+    tauri::async_runtime::spawn_blocking(move || cd::import_from_downloads(&handle.state::<AppState>().library, &dir))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
 #[tauri::command]
 pub fn running_apps(state: State<AppState>) -> Vec<String> {
     running_map(&state).into_keys().collect()
@@ -609,7 +649,7 @@ fn start(
     }
     let emu = Emulator::for_os(entry.os);
     let chosen = emulator::chosen(&state.library, emu);
-    let (bin, _) = emu.locate(app.path().resource_dir().ok().as_deref(), chosen.as_deref()).ok_or(emu.missing_message())?;
+    let (bin, _) = emu.locate(app.path().resource_dir().ok().as_deref(), chosen.as_deref()).ok_or_else(|| emu.missing_message())?;
     let conf_path = write_launch_config(&state.library, &entry, program.as_deref(), args.as_deref())?;
     let ran = program.clone();
     let os_root = state.library.os_root(entry.os);

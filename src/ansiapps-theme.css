@@ -146,7 +146,7 @@
 :root[data-theme="ansiapps"] .field textarea,
 :root[data-theme="ansiapps"] .system-row select,
 :root[data-theme="ansiapps"] .verify-row input {
-  background: var(--dos-black);
+  background-color: var(--dos-black);
   color: var(--dos-lightgray);
   border: none;
   caret-color: var(--dos-white);
@@ -200,6 +200,9 @@
 :root[data-theme="ansiapps"] .system-setup h3 .section-icon,
 :root[data-theme="ansiapps"] .list-heading .section-icon { color: var(--dos-yellow); }
 :root[data-theme="ansiapps"] .verify-row { border-top-color: var(--dos-lightgray); }
+:root[data-theme="ansiapps"] .setup-sources { border-top-color: var(--dos-lightgray); }
+:root[data-theme="ansiapps"] .source-kind { border-radius: 0; border-color: var(--dos-lightgray); color: var(--dos-lightgray); }
+:root[data-theme="ansiapps"] .source-kind.free { border-color: var(--dos-lightgreen); color: var(--dos-lightgreen); }
 
 /* Menus and dialogs: light-gray Turbo Vision windows with black text.
    Re-pointing the tokens inside them recolors everything they contain. */

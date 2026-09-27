@@ -129,6 +129,7 @@ export interface FindingsSummary {
   fileTypes: number;
   systemFiles: number;
   appErrors: number;
+  setupReports: number;
   /** Unix seconds of the last export, if any. */
   lastExported: number | null;
 }
@@ -270,3 +271,16 @@ export function guestPath(app: LibraryApp, program?: string | null): string {
       return `Floppy:${app.dir}${program ? `/${program}` : ""}`;
   }
 }
+
+/** cd.rs `SetupSource`: where to get a setup file ("Where Floppy points you" in docs/legal-setupfiles.md). */
+export interface SetupSource {
+  /** A slot label: "Mac ROM", "Mac startup disk", "Kickstart ROM", "Workbench disk". */
+  slot: string;
+  kind: "free" | "paid" | "own";
+  name: string;
+  url: string;
+  note: string;
+}
+
+/** findings.rs `SETUP_REPORT_KINDS`. */
+export type SetupReportKind = "source-broken" | "didnt-work" | "better-source";

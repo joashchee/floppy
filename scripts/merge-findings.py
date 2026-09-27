@@ -28,6 +28,11 @@ What goes where:
                          published list has. The missing-files list asks
                          for them. Rows that known_files.rs now lists are
                          dropped.
+    Reported setup notes what users reported about getting setup files:
+                         a source that stopped working, a file that
+                         didn't work, or a better source. For people to
+                         check before changing "Where Floppy points you";
+                         Floppy doesn't use it.
 
 Floppy reads the other four tables straight from the documents when it's
 built, so merging is all it takes. Each findings file is merged once
@@ -57,7 +62,9 @@ HEADERS = {
     "filetypes": "| Guest | App | Extension | Reports | Last reported |",
     "reported": "| Slot | What | Size | SHA-1 | Reports | Last reported |",
     "problems": "| Guest | App | Version | Program | Errors | Reported |",
+    "setup-notes": "| Slot | Kind | Source | Note | File | Reports | Last reported |",
 }
+SETUP_KINDS = {"source-broken": "Source broken", "didnt-work": "Didn't work", "better-source": "Better source"}
 
 
 def cell(s):
@@ -175,9 +182,16 @@ def main():
             slot, what, size, sha1, reports, last = c
             reported[sha1.lower()] = {"slot": slot, "what": what, "size": int(size.replace(",", "") or 0),
                                       "sha1": sha1.lower(), "reports": int(reports or 0), "last": last}
+    setup_notes = {}
+    for c in block(sdoc, "setup-notes")[1]:
+        if len(c) == 7:
+            slot, kind, source, note, file, reports, last = c
+            setup_notes[(slot, kind, source, note, file)] = {
+                "slot": slot, "kind": kind, "source": source, "note": note, "file": file,
+                "reports": int(reports or 0), "last": last}
     table_exts = handler_exts(hdoc)
 
-    merged, skipped, conflicts, new_problems = 0, 0, [], []
+    merged, skipped, conflicts, new_problems, new_setup_notes = 0, 0, [], [], []
 
     def add_version(guest, app, version, program, size, sha, worked, failed, last):
         known = versions.get(sha)
@@ -261,6 +275,18 @@ def main():
             row["last"] = max(row["last"], exported)
             new_problems.append(row)
 
+        for r in data.get("setupReports", []):
+            kind = SETUP_KINDS.get(r.get("kind"), cell(r.get("kind") or ""))
+            source, note, file = cell(r.get("source") or ""), cell(r.get("note") or ""), cell(r.get("file") or "")
+            if not (source or note):
+                continue
+            key = (cell(r["slot"]), kind, source, note, file)
+            row = setup_notes.setdefault(key, {"slot": key[0], "kind": kind, "source": source, "note": note,
+                                               "file": file, "reports": 0, "last": ""})
+            row["reports"] += 1
+            row["last"] = max(row["last"], day(r["reported"]) if r.get("reported") else exported)
+            new_setup_notes.append(row)
+
         merged_ids.append(data["id"])
         merged += 1
 
@@ -293,11 +319,15 @@ def main():
     sdoc = replace_block(sdoc, "reported", [
         f"| {r['slot']} | {cell(r['what'])} | {r['size']} | `{r['sha1']}` | {r['reports']} | {r['last']} |"
         for r in sorted(reported.values(), key=lambda r: (r["slot"], r["what"], r["sha1"]))])
+    sdoc = replace_block(sdoc, "setup-notes", [
+        f"| {r['slot']} | {r['kind']} | {r['source']} | {r['note']} | {r['file']} | {r['reports']} | {r['last']} |"
+        for r in sorted(setup_notes.values(), key=lambda r: (r["slot"], r["kind"], r["last"]))])
 
     files = f"{merged} findings {'file' if merged == 1 else 'files'}"
     hdoc = add_log_row(hdoc, f"Merged {files} | {len(tested)} tested combinations, {len(versions)} known versions, "
                              f"{len(filetypes)} reported file types, {len(problems)} reported problems")
-    sdoc = add_log_row(sdoc, f"Merged {files} | {len(reported)} setup files reported by users")
+    sdoc = add_log_row(sdoc, f"Merged {files} | {len(reported)} setup files reported by users, "
+                             f"{len(setup_notes)} setup notes")
     open(handlers_path, "w", encoding="utf-8").write(hdoc)
     open(setup_path, "w", encoding="utf-8").write(sdoc)
 
@@ -306,6 +336,10 @@ def main():
           f"{len(reported)} reported setup files.")
     for r in new_problems:
         print(f"Problem reported with {r['app']} {r['version']}".rstrip() + f": {r['errors']}")
+    for r in new_setup_notes:
+        print(f"Setup note, {r['slot']}, {r['kind']}: {r['note'] or r['source']}"
+              + (f" ({r['source']})" if r['note'] and r['source'] else "")
+              + " -- check it, then update Where Floppy points you in docs/legal-setupfiles.md.")
     for r in dropped:
         print(f"Dropped reported {r['what']} ({r['sha1'][:12]}…): known_files.rs lists it now.")
     for c in conflicts:

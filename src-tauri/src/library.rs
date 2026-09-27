@@ -282,6 +282,11 @@ impl Library {
         self.root.join("findings.json")
     }
 
+    /// What the user reported about getting setup files (findings.rs).
+    pub fn setup_reports_path(&self) -> PathBuf {
+        self.root.join("setup-reports.json")
+    }
+
     /// Emulators the user located themselves (emulator.rs).
     pub fn emulators_path(&self) -> PathBuf {
         self.root.join("emulators.json")

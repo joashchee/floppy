@@ -50,6 +50,8 @@ gitignored `CLAUDE.local.md`, never in committed files.
    are copied from the user's own files into `library/system/<os>/`.
 4. **No network access, no telemetry, no accounts.** Floppy works fully
    offline. (`scripts/fetch-*.sh` are build-time steps, not app code.)
+   Opening a page in the user's browser when they click **Open Page** is
+   fine: the browser does the fetching, not Floppy.
 5. **Bundle identifier is fixed: `com.ansiapps.floppy`.** macOS keys the
    app-data folder (the whole library) on it.
 6. **All user data lives under Tauri's app-data dir** (`library/`), never
@@ -83,6 +85,19 @@ gitignored `CLAUDE.local.md`, never in committed files.
   (`import_dropped`): files, folders, zips and disc images in any mix.
   The setup strip and the overlay's "add setup files" target show only
   on the Mac or Amiga tab, while that guest's system files are missing.
+- **Getting setup files, with as little friction as possible:** each
+  missing slot lists where to get it, from `docs/legal-setupfiles.md`'s
+  "Where Floppy points you" table (`cd::setup_sources`, read at build
+  time, a test checks every row and that every slot has one). **Open
+  Page** opens it in the browser; from then on, each time Floppy comes
+  back to the front, it looks in the Downloads folder
+  (`cd::import_from_downloads`: the folder and one level down, no
+  unfinished downloads, zips up to 64 MB, nothing mounted) and adds what
+  it recognizes. **Look in Downloads** does the same on demand. On
+  Linux without `user-dirs.dirs`, Downloads is `~/Downloads`.
+- A missing emulator gets its own strip with **Locate <emulator>…**
+  (any guest, not only the Mac). Its message says to reinstall Floppy in
+  a release build, and to run the fetch script in a development one.
 - `discs.rs`: files discs made from the list. A Burn A CD disc carries
   the ISO Application ID `DISKETTE BURN A CD` and a `diskette-burn.json`
   manifest (disc `id`, the answered list's SHA-1, and per-line counts).
@@ -201,7 +216,11 @@ gitignored `CLAUDE.local.md`, never in committed files.
   doesn't list (size and SHA-1), and **Errors** notes (the details
   panel's field; `$HOME` becomes `~`): always for known apps, and for
   others, with the app's name, only when the user ticks Share
-  (`share_errors`). Never documents, their
+  (`share_errors`), and **setup reports**: **Report a Setup Problem…**
+  under the system files keeps a note that a source stopped working, a
+  file didn't work (with what Floppy recognized it as: type, size and,
+  for ROMs and floppies, SHA-1) or a better source, in
+  `library/setup-reports.json` until the next export. Never documents, their
   names, files, or file and folder names.
 - Each export holds only what's new: `library/findings.json` keeps the
   keys of what went, and test results are marked `exported`
@@ -211,8 +230,10 @@ gitignored `CLAUDE.local.md`, never in committed files.
   `floppy-handler-tests` JSON reports) into the living documents, once
   per findings ID: "Tested in Floppy", "Known versions", "Reported
   file types" and "Reported problems" (people only, not read by Floppy)
-  in `docs/app-handlers.md`, "Reported by users" in
-  `docs/legal-setupfiles.md`. `handlers.rs` and `cd.rs` read those
+  in `docs/app-handlers.md`, "Reported by users" and "Reported setup
+  notes" (people only) in `docs/legal-setupfiles.md`. For a setup note,
+  check the source yourself, then fix "Where Floppy points you" and
+  delete the note's row. `handlers.rs` and `cd.rs` read those
   tables at build time (`include_str!`), so the next release recognizes
   the new versions, offers apps for the new file types, and asks for the
   new setup files. A unit test fails on a malformed row.

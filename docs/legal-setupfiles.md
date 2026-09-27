@@ -2,10 +2,14 @@
 
 A living list of the free, legal places to get the files Floppy's setup
 asks for. Floppy never downloads or bundles any of them (rules 3 and 4
-in CLAUDE.md). This list is for users, and for deciding what the setup
-screens can point to.
+in CLAUDE.md). This list is for users, and it's what the setup screens
+point to: Floppy reads the "Where Floppy points you" table below when
+it's built, and shows each missing file's rows with an **Open** button
+that opens the page in the user's browser. Floppy itself still makes no
+network connection. When the user comes back from the browser, Floppy
+looks through their Downloads folder for the file, by its contents.
 
-**Last checked: 2026-09-26.** Re-check the links and terms whenever you
+**Last checked: 2026-09-27.** Re-check the links and terms whenever you
 touch this file, and update the date. Add a row to the check log at the
 bottom each time.
 
@@ -19,7 +23,36 @@ bottom each time.
 | Mac startup disk (7.1, 7.6, 8.0, 8.1) | Classic Mac | **No**, these were paid releases | Your own install discs |
 | Kickstart ROM | Amiga | **No** (cheapest licensed copy is paid) | [Amiga Forever](https://www.amigaforever.com/), or a dump of an Amiga you own |
 | Workbench | Amiga | **No** | Amiga Forever, or your own disks |
-| Basilisk II (the emulator) | Classic Mac | **Yes** (GPL-2.0-or-later) | [E-Maculation builds](https://www.emaculation.com/forum/viewtopic.php?f=6&t=7361); Floppy's own build, bundled (`.github/workflows/basilisk.yml`) |
+| Basilisk II (the emulator) | Classic Mac | **Yes** (GPL-2.0-or-later) | Bundled: Floppy's own build for macOS and Linux (`.github/workflows/basilisk.yml`); [E-Maculation builds](https://www.emaculation.com/forum/viewtopic.php?f=6&t=7361) |
+
+## Where Floppy points you
+
+Floppy's setup screen shows these rows for each file that's still
+missing, in this order, and `cd.rs` reads them straight from this
+table when Floppy is built (a unit test fails on a malformed row). Keep
+to the columns:
+
+- **Slot:** `Mac ROM`, `Mac startup disk`, `Kickstart ROM` or `Workbench disk`.
+- **Kind:** `free` (costs nothing), `paid` (a licensed copy to buy) or
+  `own` (how to copy it from hardware or disks you own).
+- **Link:** `https://` only. Floppy opens it in the browser.
+- **Note:** one or two sentences the user sees. Say plainly when a
+  source is a mirror rather than the rights holder.
+
+Change a row when merged findings report a source broken or a better
+one (see "Reported setup notes" below), after checking it yourself.
+
+<!-- sources:start -->
+| Slot | Kind | Source | Link | Note |
+|---|---|---|---|---|
+| Mac ROM | own | Copy the ROM from a Mac you own (E-Maculation guide) | https://www.emaculation.com/doku.php/capturing_rom | Apple never released a Mac ROM for free. CopyROM saves one from a working 68k Mac: a IIci, IIsi, LC, Quadra, Centris or similar gives a 512 KB or 1 MB ROM that works here. |
+| Mac startup disk | free | System 7.5.3, ready installed (Internet Archive) | https://archive.org/details/AppleMacintoshSystem753 | Apple gave System 7.5.3 away free to Mac owners. This is a third-party mirror of that release, not Apple's own download (Apple no longer offers one). Download System7_5_3.img: Floppy uses it as it is. |
+| Mac startup disk | free | System 7.0.1, ready installed (Internet Archive) | https://archive.org/details/AppleMacintoshSystem701 | Also a free Apple release, mirrored the same way. Older than 7.5.3 and runs fewer apps, so pick 7.5.3 unless an app needs 7.0. |
+| Kickstart ROM | paid | Amiga Forever Essentials for Android (about US$2) | https://www.amigaforever.com/android/ | The cheapest licensed copy: official Kickstart 1.2 to 3.1 ROM files. Copy the ROM files from the phone to this computer, then drop them on Floppy. |
+| Kickstart ROM | paid | Amiga Forever (Windows) | https://www.amigaforever.com/ | Licensed ROMs for every Amiga model. They're encrypted: bring the rom.key file along with them and Floppy unlocks them. |
+| Kickstart ROM | own | Copy the ROM from an Amiga you own (FS-UAE guide) | https://fs-uae.net/docs/kickstart-roms/ | Tools such as TransROM or GrabKick save the Kickstart of your own Amiga to a file. |
+| Workbench disk | paid | Amiga Forever (Windows) | https://www.amigaforever.com/ | Includes Workbench floppies (1.3 in Value, every version in Plus). Only needed for apps that aren't bootable disks. |
+<!-- sources:end -->
 
 ## Classic Mac
 
@@ -29,7 +62,10 @@ Mac ROMs are Apple's copyrighted code, and Apple has never released
 one. The only legal copy is a dump of a Mac you own (a 32-bit clean
 512 KB or 1 MB ROM: IIci, IIsi, IIfx, LC, Quadra, Centris…). Floppy
 refuses Plus, SE, Classic and Mac II ROMs because Basilisk II does
-(`docs/emulators.md`).
+(`docs/emulators.md`). E-Maculation's
+[Capturing a Mac ROM Image](https://www.emaculation.com/doku.php/capturing_rom)
+explains how, with CopyROM. A ROM over 1 MB comes from a PowerPC Mac
+(or a Quadra 660AV/840AV) and doesn't work in Basilisk II.
 
 ### Startup disk: System 7.0.1 or 7.5.3
 
@@ -62,8 +98,9 @@ licensed seller of ROM files
 ([FS-UAE: Kickstart ROMs](https://fs-uae.net/docs/kickstart-roms/)):
 
 - **Amiga Forever Essentials** (Android, about US$2): Kickstart 1.2,
-  1.3, 2.04, 3.0 and 3.1 as 512 KB ROM files. It's the cheapest licensed
-  copy, but availability on Google Play has been inconsistent.
+  1.3, 2.04, 3.0 and 3.1 as 512 KB ROM files
+  ([product page](https://www.amigaforever.com/android/)). It's the
+  cheapest licensed copy. Still listed on Google Play as of 2026-09-27.
 - **Amiga Forever** Value, Plus and Premium (Windows, paid). The Plus
   edition covers every model. Its ROMs are encrypted and need the
   included `rom.key`, which Floppy handles.
@@ -145,10 +182,26 @@ drops the row, since `known_files.rs` has it.
 |---|---|---|---|---|---|
 <!-- reported:end -->
 
+## Reported setup notes
+
+What Floppy users reported about getting their setup files, from merged
+findings: a source that stopped working, a file that didn't work once
+set up, or a better source. In Floppy they're under each missing file's
+sources (**Report a Problem or Better Source…**), and they leave only in
+an **Export Findings…** zip. For people to read: Floppy doesn't use this
+table. Check a report yourself before changing "Where Floppy points
+you", then delete its row.
+
+<!-- setup-notes:start -->
+| Slot | Kind | Source | Note | File | Reports | Last reported |
+|---|---|---|---|---|---|---|
+<!-- setup-notes:end -->
+
 ## Emulators
 
-All three emulators are bundled with Floppy on macOS. Basilisk II is
-Floppy's own build, and other builds are free under GPL-2.0-or-later too:
+All three emulators are bundled with Floppy on macOS and Linux. Basilisk
+II is Floppy's own build, and other builds are free under
+GPL-2.0-or-later too:
 
 - [E-Maculation: BasiliskII builds for Mac OS X](https://www.emaculation.com/forum/viewtopic.php?f=6&t=7361):
   universal SDL2 builds from kanjitalk755/macemu. The forum is behind a
@@ -161,6 +214,7 @@ Floppy's own build, and other builds are free under GPL-2.0-or-later too:
 
 | Date | What was checked | Result |
 |---|---|---|
+| 2026-09-27 | Web searches for the System 7.5.3 Internet Archive item, Amiga Forever Essentials, and Mac ROM capture guides (the sandbox blocked direct fetches of archive.org, amigaforever.com and fs-uae.net) | System 7.5.3's installed-disk item is still listed. Amiga Forever Essentials is still on Google Play, with its own page at amigaforever.com/android. Added E-Maculation's ROM capture guide. Links not opened directly: re-check them from a browser. |
 | 2026-09-27 | Floppy's Basilisk II build (macemu `892eeb7`, from `.github/workflows/basilisk.yml`) | Now bundled. Its source tarball matches GitHub's archive of the commit file for file, and the GMP 6.3.0 and MPFR 4.2.2 tarballs match GNU's SHA-256s. |
 | 2026-09-26 | Known-good hashes: MAME Apple drivers, FS-UAE `rommgr.cpp` and launcher Workbench lists, TOSEC DAT pack 2025-03-13 (Amiga Firmware and Workbench DATs), Internet Archive metadata for System 7.0.1/7.5.3 and Mac OS 7.6 | 20 Mac ROMs, 4 Mac startup disks, 74 Kickstarts, 81 Workbench disks. TOSEC has no Mac OS DAT. The Internet Archive's Mac ROM collections are zipped, so their per-file hashes can't be read without downloading ROMs, which Floppy won't do. |
 | 2026-09-26 | Apple free System releases, Internet Archive items (file lists via `archive.org/metadata/<id>`), Amiga Forever editions, FS-UAE Kickstart docs, AROS nightlies, E-Maculation builds | As above. The Wayback Machine was offline, so Apple's archived download pages and licence text weren't checked. |

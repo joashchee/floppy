@@ -20,6 +20,11 @@
 //!   app, version and program fingerprint. Into "Reported problems", for
 //!   a person to read. A known app's always go. Another app's go only
 //!   when the user ticks "Share", and then under its name in the library.
+//! - **Setup reports**: what the user reported about getting a setup file:
+//!   a source that stopped working, a file that didn't work once set up
+//!   (with what Floppy recognized it as), or a better source. Into
+//!   `docs/legal-setupfiles.md`'s "Reported setup notes", for a person to
+//!   check before changing where the setup screen points.
 //!
 //! Each export holds only what earlier ones didn't: `library/findings.json`
 //! keeps what was shared, and each test result is marked exported
@@ -61,6 +66,8 @@ pub struct Findings {
     pub system_files: Vec<SystemFileFinding>,
     #[serde(default)]
     pub app_errors: Vec<AppErrorsFinding>,
+    #[serde(default)]
+    pub setup_reports: Vec<SetupReport>,
     /// How many test results `handler_tests` was totalled from, to mark
     /// them exported. Not shared.
     #[serde(skip)]
@@ -121,6 +128,87 @@ pub struct AppErrorsFinding {
     pub errors: String,
 }
 
+/// What a setup report is about.
+pub const SETUP_REPORT_KINDS: [&str; 3] = ["source-broken", "didnt-work", "better-source"];
+
+/// Something the user reported about getting a setup file.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SetupReport {
+    /// cd.rs slot label.
+    pub slot: String,
+    /// One of `SETUP_REPORT_KINDS`.
+    pub kind: String,
+    /// The source it's about, or the better one: a link or a name.
+    pub source: Option<String>,
+    pub note: String,
+    /// For `didnt-work`: what Floppy recognized the file in the slot as,
+    /// with its size and, for a ROM or floppy, its SHA-1.
+    pub file: Option<String>,
+    /// Unix seconds.
+    pub reported: u64,
+}
+
+impl SetupReport {
+    fn key(&self) -> String {
+        format!("setup {} {} {} {} {}", self.slot, self.kind, self.source.as_deref().unwrap_or(""), self.note, self.reported)
+    }
+}
+
+const MAX_REPORT_NOTE: usize = 1000;
+const MAX_REPORT_SOURCE: usize = 300;
+
+/// Keeps a setup report for the next export. For "didn't work", notes
+/// what the file in that slot is, so a maintainer can tell which copy.
+pub fn add_setup_report(library: &Library, slot: &str, kind: &str, source: Option<&str>, note: &str) -> Result<(), String> {
+    let slot = Slot::from_label(slot).ok_or(format!("Unknown setup file {slot:?}."))?;
+    if !SETUP_REPORT_KINDS.contains(&kind) {
+        return Err(format!("Unknown kind of report {kind:?}."));
+    }
+    let note = scrub(note.trim());
+    let source = source.map(str::trim).filter(|s| !s.is_empty()).map(scrub);
+    if note.is_empty() && source.is_none() {
+        return Err("Say what happened, or where the better copy is.".into());
+    }
+    if note.chars().count() > MAX_REPORT_NOTE || source.as_ref().is_some_and(|s| s.chars().count() > MAX_REPORT_SOURCE) {
+        return Err("That's too long to send: keep it to a short paragraph.".into());
+    }
+    let file = if kind == "didnt-work" { slot_file(library, slot)? } else { None };
+    let reported = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+    let mut all = load_setup_reports(library);
+    all.push(SetupReport { slot: slot.label().to_string(), kind: kind.to_string(), source, note, file, reported });
+    let path = library.setup_reports_path();
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    let json = serde_json::to_vec_pretty(&all).map_err(|e| e.to_string())?;
+    std::fs::write(&path, json).map_err(|e| format!("Couldn't keep the report: {e}"))
+}
+
+fn load_setup_reports(library: &Library) -> Vec<SetupReport> {
+    std::fs::read(library.setup_reports_path()).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
+}
+
+/// What the file in `slot` is, for a "didn't work" report: never its
+/// name or where it is.
+fn slot_file(library: &Library, slot: Slot) -> Result<Option<String>, String> {
+    let Some(path) = library.system_file(slot.os(), slot.kind())? else { return Ok(None) };
+    let Ok(meta) = std::fs::metadata(&path) else { return Ok(None) };
+    if !meta.is_file() {
+        return Ok(Some("a folder".into()));
+    }
+    if slot == Slot::MacBoot {
+        let volume = crate::mac::volume_name(&path).filter(|v| !v.is_empty()).map(|v| format!(" \"{v}\"")).unwrap_or_default();
+        return Ok(Some(format!("startup disk{volume}, {} bytes", meta.len())));
+    }
+    if meta.len() > MAX_SYSTEM_FILE {
+        return Ok(Some(format!("{} bytes", meta.len())));
+    }
+    let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
+    let what = describe(slot, &path, &bytes).unwrap_or_else(|| slot.label().to_string());
+    Ok(Some(format!("{what}, {} bytes, SHA-1 {}", bytes.len(), sha1::hex(&bytes))))
+}
+
 /// How much is new since the last export, for the gear menu.
 #[derive(Serialize, Debug, Default, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -130,13 +218,14 @@ pub struct Summary {
     pub file_types: usize,
     pub system_files: usize,
     pub app_errors: usize,
+    pub setup_reports: usize,
     /// Unix seconds of the last export, if any.
     pub last_exported: Option<u64>,
 }
 
 impl Summary {
     fn total(&self) -> usize {
-        self.handler_tests + self.identities + self.file_types + self.system_files + self.app_errors
+        self.handler_tests + self.identities + self.file_types + self.system_files + self.app_errors + self.setup_reports
     }
 }
 
@@ -148,6 +237,7 @@ impl Findings {
             file_types: self.file_types.len(),
             system_files: self.system_files.len(),
             app_errors: self.app_errors.len(),
+            setup_reports: self.setup_reports.len(),
             last_exported: None,
         }
     }
@@ -212,6 +302,7 @@ pub fn mark_exported(library: &Library, findings: &Findings) -> Result<(), Strin
     shared.keys.extend(findings.file_types.iter().map(FileTypeFinding::key));
     shared.keys.extend(findings.system_files.iter().map(SystemFileFinding::key));
     shared.keys.extend(findings.app_errors.iter().map(AppErrorsFinding::key));
+    shared.keys.extend(findings.setup_reports.iter().map(SetupReport::key));
     let path = library.findings_path();
     let tmp = path.with_extension("json.tmp");
     let json = serde_json::to_vec_pretty(&shared).map_err(|e| e.to_string())?;
@@ -308,6 +399,8 @@ pub fn collect(library: &Library) -> Result<Findings, String> {
     let (handler_tests, verifications_seen) = verify::unexported(library);
     let mut system_files = system_files(library)?;
     system_files.retain(|f| !shared.keys.contains(&f.key()));
+    let mut setup_reports = load_setup_reports(library);
+    setup_reports.retain(|r| !shared.keys.contains(&r.key()));
     Ok(Findings {
         format: FORMAT.into(),
         version: 1,
@@ -319,6 +412,7 @@ pub fn collect(library: &Library) -> Result<Findings, String> {
         file_types,
         system_files,
         app_errors,
+        setup_reports,
         verifications_seen,
     })
 }
@@ -374,8 +468,10 @@ What this Floppy learned that can help every Floppy: which old apps
 opened which file types, which app and version each program is (by its
 size and SHA-256), file types you said an app opens, and setup files
 (ROMs, Workbench floppies) it didn't already know, by size and SHA-1,
-and what you wrote in a known app's Errors field (or another app's,
-with its name, when you ticked Share).
+what you wrote in a known app's Errors field (or another app's,
+with its name, when you ticked Share), and what you reported about
+getting setup files: a source that stopped working, a file that didn't
+work (with what Floppy recognized it as), or a better source.
 
 It holds no documents, no document names, no programs or ROMs, and no
 file or folder names from your Mac. floppy-findings.json is all of it,
@@ -526,6 +622,37 @@ mod tests {
         assert!(e.sha256.is_some());
         mark_exported(&lib, &f).unwrap();
         assert!(collect(&lib).unwrap().is_empty());
+    }
+
+    #[test]
+    fn setup_reports_go_once_and_say_what_the_file_is() {
+        let t = TempDir::new();
+        let lib = Library::new(t.path().join("lib"));
+        let home = std::env::var("HOME").unwrap();
+        add_setup_report(&lib, "Mac startup disk", "source-broken", Some("https://example.org/753"), "Gone (404)").unwrap();
+        add_setup_report(&lib, "Kickstart ROM", "better-source", Some("https://example.org/roms"), "").unwrap();
+        let mut rom = vec![0u8; 524_288];
+        rom[..4].copy_from_slice(&[0x42, 0x1E, 0xF4, 0x8B]);
+        rom[8..10].copy_from_slice(&[0x06, 0x7C]);
+        let rom_path = t.path().join("secret-name.rom");
+        fs::write(&rom_path, &rom).unwrap();
+        lib.set_system_file(GuestOs::MacClassic, SystemFile::Rom, &rom_path, None).unwrap();
+        add_setup_report(&lib, "Mac ROM", "didnt-work", None, &format!("Black screen, see {home}/log")).unwrap();
+        // Nothing to say, an unknown slot or kind: refused.
+        assert!(add_setup_report(&lib, "Mac ROM", "didnt-work", Some(" "), " ").is_err());
+        assert!(add_setup_report(&lib, "Toaster", "didnt-work", None, "x").is_err());
+        assert!(add_setup_report(&lib, "Mac ROM", "meh", None, "x").is_err());
+
+        let f = collect(&lib).unwrap();
+        assert_eq!(f.summary().setup_reports, 3);
+        let didnt = f.setup_reports.iter().find(|r| r.kind == "didnt-work").unwrap();
+        assert_eq!(didnt.note, "Black screen, see ~/log");
+        let file = didnt.file.as_deref().unwrap();
+        assert!(file.starts_with("Mac ROM, checksum 421EF48B, 524288 bytes, SHA-1 "), "{file}");
+        let json = serde_json::to_string(&f).unwrap();
+        assert!(!json.contains("secret-name") && !json.contains(&home));
+        mark_exported(&lib, &f).unwrap();
+        assert_eq!(collect(&lib).unwrap().summary().setup_reports, 0);
     }
 
     #[test]

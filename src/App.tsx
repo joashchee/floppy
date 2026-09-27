@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import { revealItemInDir } from "@tauri-apps/plugin-opener";
+import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { Dialog } from "./components/Dialog";
 import { applyTheme, loadTheme, type Theme } from "./lib/theme";
 import { isLinux, SHOW_IN_FILES } from "./lib/platform";
@@ -46,6 +46,8 @@ import {
   type MediaProgress,
   type OldMedia,
   type SetupTracking,
+  type SetupReportKind,
+  type SetupSource,
   type StartupImport,
 } from "./lib/types";
 import "./App.css";
@@ -112,6 +114,15 @@ function emulatorLabel(s: GuestStatus | undefined): string {
   return s.emulator;
 }
 
+/** How each kind of setup source reads on the setup screen. */
+const SOURCE_KIND_LABEL: Record<SetupSource["kind"], string> = { free: "Free", paid: "Paid", own: "From yours" };
+
+const REPORT_KIND_LABEL: Record<SetupReportKind, string> = {
+  "source-broken": "A source stopped working",
+  "didnt-work": "My file didn't work",
+  "better-source": "I found a better source",
+};
+
 /** The Locate Basilisk II… tooltip: which copy starts the Mac now. */
 function basiliskTitle(s: GuestStatus | undefined): string {
   switch (s?.found ? s.source : null) {
@@ -133,7 +144,7 @@ function basiliskTitle(s: GuestStatus | undefined): string {
 }
 
 function findingsTotal(f: FindingsSummary): number {
-  return f.handlerTests + f.identities + f.fileTypes + f.systemFiles + f.appErrors;
+  return f.handlerTests + f.identities + f.fileTypes + f.systemFiles + f.appErrors + f.setupReports;
 }
 
 /** "3 test results, 1 app version": what a findings export holds. */
@@ -146,6 +157,7 @@ function describeFindings(f: FindingsSummary): string {
       part(f.fileTypes, "file type you added", "file types you added"),
       part(f.systemFiles, "unlisted setup file", "unlisted setup files"),
       part(f.appErrors, "app's errors", "apps' errors"),
+      part(f.setupReports, "setup report", "setup reports"),
     ]
       .filter(Boolean)
       .join(", ") || "nothing yet"
@@ -234,6 +246,9 @@ function App() {
   const [running, setRunning] = useState<Set<string>>(new Set());
   const [statuses, setStatuses] = useState<GuestStatus[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
+  // For listeners set up once: whether something is already in progress.
+  const busyRef = useRef(busy);
+  busyRef.current = busy;
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
@@ -259,6 +274,16 @@ function App() {
   // "Not Now" on the Ask Diskette strip, until Floppy is reopened.
   const [askDismissed, setAskDismissed] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
+  // Where to get each setup file (docs/legal-setupfiles.md, read at build time).
+  const [sources, setSources] = useState<SetupSource[]>([]);
+  // Set once the user opens a source: Floppy then checks Downloads whenever
+  // the window comes back to the front, until setup is done.
+  const [watchDownloads, setWatchDownloads] = useState(false);
+  // The Report a Setup Problem dialog: which slot, or null when closed.
+  const [reportSlot, setReportSlot] = useState<string | null>(null);
+  const [reportKind, setReportKind] = useState<SetupReportKind>("source-broken");
+  const [reportSource, setReportSource] = useState("");
+  const [reportNote, setReportNote] = useState("");
   const [theme, setTheme] = useState<Theme>(loadTheme);
   const gearRef = useRef<HTMLDivElement>(null);
   const [nameDraft, setNameDraft] = useState("");
@@ -296,6 +321,30 @@ function App() {
       clearInterval(timer);
     };
   }, []);
+
+  useEffect(() => {
+    invoke<SetupSource[]>("setup_sources").then(setSources, () => {});
+  }, []);
+
+  // Any guest still missing setup files: while one is, a finished download
+  // is worth looking for.
+  const anySetupMissing = statuses.some((s) => s.os !== "dos" && (!s.system.rom || !s.system.boot));
+
+  // After the user opened a source in the browser, look in Downloads each
+  // time Floppy comes back to the front, quietly unless something's found.
+  useEffect(() => {
+    if (!watchDownloads || !anySetupMissing) return;
+    const onFront = () => {
+      if (document.visibilityState === "visible" && !busyRef.current) void lookInDownloads(true);
+    };
+    window.addEventListener("focus", onFront);
+    document.addEventListener("visibilitychange", onFront);
+    return () => {
+      window.removeEventListener("focus", onFront);
+      document.removeEventListener("visibilitychange", onFront);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [watchDownloads, anySetupMissing]);
 
   // What a request would ask for, kept current as setup and the library change.
   useEffect(() => {
@@ -713,18 +762,85 @@ function App() {
     }
   }
 
-  /** Points Floppy at a Basilisk II that isn't in /Applications or ~/Applications (or on PATH). */
-  async function locateBasilisk() {
+  /** Points Floppy at an emulator that isn't where it looks (bundled, /Applications, ~/Applications or PATH). */
+  async function locateEmulator(os: GuestOs) {
+    const name = statuses.find((s) => s.os === os)?.emulator ?? "the emulator";
     // Linux programs have no extension to filter on.
     const filters = isLinux ? [] : [{ name: "Application", extensions: ["app"] }];
-    const path = await open({ title: "Locate Basilisk II", filters });
+    const path = await open({ title: `Locate ${name}`, filters });
     if (typeof path !== "string") return;
     setError(null);
     setMessage(null);
     try {
-      await invoke<GuestStatus>("locate_emulator", { os: "mac-classic", path });
+      await invoke<GuestStatus>("locate_emulator", { os, path });
       await refreshStatuses();
-      setMessage(`Floppy will start the Mac with ${baseName(path)}.`);
+      setMessage(`Floppy will start ${GUEST_LABEL[os]} apps with ${baseName(path)}.`);
+    } catch (e) {
+      fail(e);
+    }
+  }
+
+  /** Opens where to get a setup file in the browser, then watches Downloads for it. */
+  async function openSource(src: SetupSource) {
+    setError(null);
+    try {
+      await openUrl(src.url);
+      setWatchDownloads(true);
+      setMessage(
+        `Opened ${src.name} in your browser. When the download has finished, come back here: Floppy looks in your Downloads folder and adds it by itself.`,
+      );
+    } catch (e) {
+      fail(e);
+    }
+  }
+
+  /** Fills missing setup files from the Downloads folder (cd.rs `import_from_downloads`). */
+  async function lookInDownloads(quiet: boolean) {
+    if (!quiet) {
+      setError(null);
+      setMessage(null);
+      setBusy("Looking in Downloads");
+    }
+    try {
+      const r = await invoke<CdImport>("import_from_downloads");
+      if (r.added.length) {
+        await refreshStatuses();
+        setMessage(describeImport(r));
+      } else if (!quiet) {
+        setMessage(
+          "Nothing in your Downloads folder fills a missing setup file yet. If a download is still going, Floppy checks again when you come back to this window.",
+        );
+        setWatchDownloads(true);
+      }
+    } catch (e) {
+      if (!quiet) fail(e);
+    } finally {
+      if (!quiet) setBusy(null);
+    }
+  }
+
+  /** Opens Report a Setup Problem for `slot`, guessing the likely kind. */
+  function startReport(slot: string, filled: boolean) {
+    setReportSlot(slot);
+    setReportKind(filled ? "didnt-work" : "source-broken");
+    setReportSource("");
+    setReportNote("");
+  }
+
+  /** Keeps the report for the next Export Findings (findings.rs `add_setup_report`). */
+  async function sendReport() {
+    if (!reportSlot) return;
+    try {
+      await invoke("add_setup_report", {
+        slot: reportSlot,
+        kind: reportKind,
+        source: reportSource.trim() || null,
+        note: reportNote.trim(),
+      });
+      setReportSlot(null);
+      setMessage(
+        "Thanks. The report goes out with your next Export Findings… (gear menu), so Floppy's list of sources can be fixed for everyone. Nothing is sent until you export and share it.",
+      );
     } catch (e) {
       fail(e);
     }
@@ -1045,7 +1161,7 @@ function App() {
                 className="menu-item"
                 disabled={!!busy}
                 title={basiliskTitle(basiliskStatus)}
-                onClick={() => fromGear(() => void locateBasilisk())}
+                onClick={() => fromGear(() => void locateEmulator("mac-classic"))}
               >
                 <FolderIcon />
                 <span>Locate Basilisk II…</span>
@@ -1229,6 +1345,21 @@ function App() {
         )}
       </div>
 
+      {status && !status.found && (
+        <div className="setup-drop">
+          <span className="setup-drop-icon">
+            <ChipIcon />
+          </span>
+          <p className="setup-drop-text">
+            <strong>{GUEST_LABEL[guest]} apps can't start yet.</strong> {status.blocker} If you have a copy somewhere
+            else, point Floppy at it.
+          </p>
+          <button type="button" className="small primary" onClick={() => void locateEmulator(guest)} disabled={!!busy}>
+            Locate {status.emulator}…
+          </button>
+        </div>
+      )}
+
       {setupNeeded && (
         <div className="setup-drop">
           <span className="setup-drop-icon">
@@ -1236,8 +1367,12 @@ function App() {
           </span>
           <p className="setup-drop-text">
             <strong>Setup files needed:</strong> {missingSetup.join(", ")}. Drop them onto this window as files, folders,
-            zips or disc images. Floppy recognizes each one by its contents, whatever it's called.
+            zips or disc images, or download them (see where below) and Floppy picks them up from your Downloads
+            folder. It recognizes each one by its contents, whatever it's called.
           </p>
+          <button type="button" className="small" onClick={() => void lookInDownloads(false)} disabled={!!busy || systemInUse}>
+            Look in Downloads
+          </button>
           <button type="button" className="small" onClick={() => void pickSetupFiles()} disabled={!!busy || systemInUse}>
             Choose Files…
           </button>
@@ -1320,6 +1455,9 @@ function App() {
               tracking={tracking}
               onForgetIgnored={() => void forgetIgnored()}
               onAskAgain={(slot) => void askAgain(slot)}
+              sources={sources}
+              onOpenSource={(src) => void openSource(src)}
+              onReport={startReport}
             />
           )}
 
@@ -1599,6 +1737,85 @@ function App() {
             )}
           </>
         )}
+      </Dialog>
+
+      <Dialog
+        open={!!reportSlot}
+        onClose={() => setReportSlot(null)}
+        title="Report a setup problem"
+        actions={
+          <>
+            <button type="button" onClick={() => setReportSlot(null)}>
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="primary"
+              disabled={!reportNote.trim() && !reportSource.trim()}
+              onClick={() => void sendReport()}
+            >
+              Keep for Export
+            </button>
+          </>
+        }
+      >
+        <p>
+          Floppy keeps this until you choose Export Findings… in the gear menu, and never sends it by itself. It holds what
+          you write here and, for a file that didn't work, what Floppy recognized the file as (its type, size and
+          fingerprint), never its name or where it is.
+        </p>
+        <label className="field">
+          <span className="field-label">About</span>
+          <select value={reportSlot ?? ""} onChange={(e) => setReportSlot(e.target.value)}>
+            {(guest === "amiga" ? ["Kickstart ROM", "Workbench disk"] : ["Mac ROM", "Mac startup disk"]).map((slot) => (
+              <option key={slot} value={slot}>
+                {slot}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="field">
+          <span className="field-label">What happened</span>
+          <select value={reportKind} onChange={(e) => setReportKind(e.target.value as SetupReportKind)}>
+            {(Object.keys(REPORT_KIND_LABEL) as SetupReportKind[]).map((k) => (
+              <option key={k} value={k}>
+                {REPORT_KIND_LABEL[k]}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="field">
+          <span className="field-label">{reportKind === "better-source" ? "Where it is (a link)" : "Which source (optional)"}</span>
+          <input
+            type="text"
+            list="report-sources"
+            placeholder="https://…"
+            value={reportSource}
+            onChange={(e) => setReportSource(e.target.value)}
+          />
+          <datalist id="report-sources">
+            {sources
+              .filter((src) => src.slot === reportSlot)
+              .map((src) => (
+                <option key={src.url} value={src.url} />
+              ))}
+          </datalist>
+        </label>
+        <label className="field">
+          <span className="field-label">Details</span>
+          <textarea
+            rows={3}
+            placeholder={
+              reportKind === "didnt-work"
+                ? "e.g. the Mac shows a flashing question mark"
+                : reportKind === "better-source"
+                  ? "e.g. free, and includes every version"
+                  : "e.g. the page says the item was removed"
+            }
+            value={reportNote}
+            onChange={(e) => setReportNote(e.target.value)}
+          />
+        </label>
       </Dialog>
 
       <Dialog open={aboutOpen} onClose={() => setAboutOpen(false)} title={`About Floppy v${__APP_VERSION__}`}>
@@ -1891,6 +2108,9 @@ function SystemSetup({
   tracking,
   onForgetIgnored,
   onAskAgain,
+  sources,
+  onOpenSource,
+  onReport,
 }: {
   status: GuestStatus;
   disabled: boolean;
@@ -1901,6 +2121,9 @@ function SystemSetup({
   tracking: SetupTracking;
   onForgetIgnored: () => void;
   onAskAgain: (slot: string) => void;
+  sources: SetupSource[];
+  onOpenSource: (src: SetupSource) => void;
+  onReport: (slot: string, filled: boolean) => void;
 }) {
   const amiga = status.os === "amiga";
   const { rom, boot, model } = status.system;
@@ -1962,6 +2185,16 @@ function SystemSetup({
           </select>
         </div>
       )}
+      {!rom && <SetupSources slot={romSlot} sources={sources} disabled={disabled} onOpen={onOpenSource} />}
+      {!boot && (
+        <SetupSources
+          slot={bootSlot}
+          optional={amiga}
+          sources={sources}
+          disabled={disabled}
+          onOpen={onOpenSource}
+        />
+      )}
       <p className="system-note">
         {amiga
           ? "Floppy doesn't include Amiga system software. Use a Kickstart ROM and Workbench you own (from your own Amiga, or Amiga Forever). Workbench is needed for apps that aren't bootable disks."
@@ -1992,6 +2225,51 @@ function SystemSetup({
           </span>
         </div>
       )}
+      <div className="system-row">
+        <span className="system-note">Something not working, or found a better source?</span>
+        <button type="button" className="small" onClick={() => onReport(!rom ? romSlot : !boot ? bootSlot : romSlot, !!rom && !!boot)}>
+          Report a Setup Problem…
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** Where to get one missing setup file: the rows of "Where Floppy points you" (docs/legal-setupfiles.md). */
+function SetupSources({
+  slot,
+  optional,
+  sources,
+  disabled,
+  onOpen,
+}: {
+  slot: string;
+  optional?: boolean;
+  sources: SetupSource[];
+  disabled: boolean;
+  onOpen: (src: SetupSource) => void;
+}) {
+  const rows = sources.filter((s) => s.slot === slot);
+  if (!rows.length) return null;
+  return (
+    <div className="setup-sources">
+      <h4>
+        Where to get a {slot}
+        {optional ? " (optional)" : ""}
+      </h4>
+      <ul>
+        {rows.map((src) => (
+          <li key={src.url + src.name} className="setup-source">
+            <span className="setup-source-name">
+              <span className={`source-kind ${src.kind}`}>{SOURCE_KIND_LABEL[src.kind]}</span> <strong>{src.name}</strong>
+            </span>
+            <button type="button" className="small" disabled={disabled} onClick={() => onOpen(src)} title={src.url}>
+              Open Page
+            </button>
+            <span className="system-note setup-source-note">{src.note}</span>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

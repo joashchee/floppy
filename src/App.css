@@ -397,6 +397,25 @@ button.icontext-btn .btn-icon { display: inline-flex; width: 14px; height: 14px;
 .system-row .system-label { font-size: 11px; color: var(--muted); width: 92px; flex-shrink: 0; }
 .system-row .system-value { flex: 1; min-width: 120px; font-family: var(--font-mono); font-size: 11px; overflow-wrap: anywhere; }
 .system-row .system-value.missing { color: var(--muted); font-style: italic; }
+.setup-sources { display: flex; flex-direction: column; gap: 6px; border-top: 1px solid var(--line); padding-top: 10px; }
+.setup-sources h4 { margin: 0; font-size: 11px; font-weight: 600; color: var(--muted); }
+.setup-sources ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.setup-source { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 4px 8px; }
+.setup-source-name { font-size: 12px; min-width: 0; line-height: 1.6; }
+.setup-source-note { grid-column: 1 / -1; line-height: 1.45; }
+.source-kind {
+  display: inline-block;
+  margin-right: 4px;
+  text-align: center;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  padding: 2px 6px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  color: var(--muted);
+}
+.source-kind.free { color: var(--accent); border-color: var(--accent-dim); }
+.dialog-box .field + .field { margin-top: 10px; }
 .system-row select {
   background: var(--panel-2);
   border: 1px solid var(--line);
@@ -405,6 +424,20 @@ button.icontext-btn .btn-icon { display: inline-flex; width: 14px; height: 14px;
   padding: 6px 8px;
   font-family: var(--font-mono);
   font-size: 12px;
+}
+/* Pickers are drawn here, not by the platform: WebKitGTK's native ones
+   (Linux) ignore the theme's colors. The caret is two small triangles in
+   the text color, so it follows both themes. */
+.field select,
+.system-row select {
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: 28px;
+  background-image: linear-gradient(45deg, transparent 50%, currentColor 50%),
+    linear-gradient(135deg, currentColor 50%, transparent 50%);
+  background-position: calc(100% - 15px) 55%, calc(100% - 10px) 55%;
+  background-size: 5px 5px;
+  background-repeat: no-repeat;
 }
 .system-note { font-size: 12px; color: var(--muted); line-height: 1.5; margin: 0; }
 .system-note.warn { color: var(--warn); }

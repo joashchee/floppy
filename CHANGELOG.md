@@ -8,6 +8,27 @@ against the day the change was made.
 
 ## Unreleased
 
+- **Less friction getting setup files** (2026-09-27):
+  - Each missing ROM or startup disk lists where to get it: free, paid,
+    or how to copy it from hardware you own, with plain notes (System
+    7.5.3 is a free Apple release, but the Internet Archive copy is a
+    mirror). The list is `docs/legal-setupfiles.md`'s new "Where Floppy
+    points you" table, read when Floppy is built. **Open Page** opens it
+    in the browser.
+  - After that, Floppy checks the Downloads folder whenever its window
+    comes back to the front and adds what it recognizes by content, so
+    a downloaded System 7.5.3 image is set up without any dragging.
+    **Look in Downloads** checks on demand.
+  - **Report a Setup Problem…** keeps a note (source broken, file didn't
+    work, better source) for the next **Export Findings…**, and
+    `merge-findings.py` adds it to the new "Reported setup notes" table.
+  - A missing emulator gets its own strip with **Locate…**, for DOSBox
+    Staging and FS-UAE as well as Basilisk II, and the message no longer
+    tells release users to run a build script.
+  - Dropdowns are drawn by Floppy, so they follow the theme on Linux,
+    where WebKitGTK's native ones came out pale and hard to read.
+  - `docs/legal-setupfiles.md` re-checked: Amiga Forever Essentials'
+    own page and E-Maculation's Mac ROM capture guide added.
 - **Basilisk II for Linux** (2026-09-27): the Basilisk II workflow also
   builds a Linux x86-64 binary (the Unix build with SDL2 linked
   statically, so it needs only libc and libstdc++). A `platforms` input

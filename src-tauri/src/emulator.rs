@@ -81,26 +81,20 @@ impl Emulator {
         }
     }
 
-    /// What the user sees when the emulator is missing.
-    pub fn missing_message(self) -> &'static str {
-        match self {
-            Emulator::DosboxStaging if cfg!(target_os = "linux") => {
-                "DOSBox Staging wasn't found. Run scripts/fetch-dosbox.sh, or install dosbox-staging."
-            }
-            Emulator::DosboxStaging => {
-                "DOSBox Staging wasn't found. Run scripts/fetch-dosbox.sh, or install it in /Applications."
-            }
-            Emulator::FsUae if cfg!(target_os = "linux") => {
-                "FS-UAE wasn't found. Run scripts/fetch-fs-uae.sh, or install fs-uae."
-            }
-            Emulator::FsUae => "FS-UAE wasn't found. Run scripts/fetch-fs-uae.sh, or install it in /Applications.",
-            Emulator::BasiliskII if cfg!(target_os = "linux") => {
-                "Basilisk II wasn't found. Run scripts/fetch-basilisk.sh, install BasiliskII so it's on your PATH, or use Locate Basilisk II… in the gear menu."
-            }
-            Emulator::BasiliskII => {
-                "Basilisk II wasn't found. Run scripts/fetch-basilisk.sh, install BasiliskII.app in /Applications (or ~/Applications), or use Locate Basilisk II… in the gear menu."
-            }
-        }
+    /// What the user sees when the emulator is missing. A release build
+    /// bundles all three, so there the fix is reinstalling Floppy; a
+    /// development build needs the fetch script.
+    pub fn missing_message(self) -> String {
+        let (script, install) = match self {
+            Emulator::DosboxStaging => ("fetch-dosbox.sh", if cfg!(target_os = "linux") { "install dosbox-staging" } else { "install it in /Applications" }),
+            Emulator::FsUae => ("fetch-fs-uae.sh", if cfg!(target_os = "linux") { "install fs-uae" } else { "install it in /Applications" }),
+            Emulator::BasiliskII => (
+                "fetch-basilisk.sh",
+                if cfg!(target_os = "linux") { "install BasiliskII so it's on your PATH" } else { "install BasiliskII.app in /Applications" },
+            ),
+        };
+        let bundled = if cfg!(debug_assertions) { format!("Run scripts/{script}") } else { "Reinstall Floppy (it includes one)".into() };
+        format!("{} wasn't found. {bundled}, {install}, or use Locate {}….", self.name(), self.name())
     }
 
     /// Where the emulator is, checked in this order: the environment
