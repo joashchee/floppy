@@ -34,6 +34,45 @@ and check new UI in both themes.
 
 ## Design rules
 
+### Text only (standing convention, all ansiapps apps)
+
+The ANSIapps theme draws **everything with text from the one monospaced
+font**, exactly as a DOS text-mode program would: the screen is a grid
+of 8×16-pixel cells, each holding one CP437 glyph in one of the 16
+colors. `docs/ansiapps-textmode.md` is the expert reference (glyphs,
+palette, Turbo Vision recipes, web rendering); these are its rules:
+
+- **Grid:** the font at exactly 16px, rows exactly 16px (`line-height:
+  16px`), every box sized and placed in whole cells (`ch`, `lh`), so
+  every glyph starts on a whole pixel and stacked `│ ║ █` touch.
+- **Frames:** CP437 box-drawing characters only (the 40 that exist:
+  single, double, and single/double mixes; no rounded, heavy or dashed
+  lines). Double for the active window or dialog, single for inactive
+  ones and boxes inside them, `├─┤` for separators, the title set into
+  the top border with a space each side.
+- **Shadows:** cells, not blur: 2 columns right and 1 row down, dark
+  gray on black with the characters under them still showing.
+- **Buttons:** Turbo Vision style: the face on one row, its shadow `▄`
+  beside it and `▀▀▀` below; pressed moves the face and drops the shadow.
+- **Controls:** `[ ]`/`[X]`, `( )`/`(•)`, input lines as colored strips,
+  dropdowns with `▐↓▌`, scroll bars `▲▒■▼`, progress `█▓▒░`.
+- **Icons:** CP437 glyphs (`☺ ♪ ☼ ■ ≡ ► ▲ ↕ ⌂`…), not SVG.
+- **Art and headings:** ANSI-art technique (shade ramps, clean edges,
+  one light source), but every drawn word also exists as real text.
+- **Accessibility:** the drawing is an `aria-hidden` layer over real
+  HTML controls and headings; colors pass WCAG AA (the reference lists
+  which classic pairs fail and their replacements).
+
+### Migrating today's theme
+
+Floppy's theme predates the rule and still uses CSS for some of it:
+`line-height: 1.25` (20px rows) in `src/ansiapps-theme.css`, CSS
+double borders on panels and dialogs, `box-shadow` shadows, inline SVG
+icons, and a solid-fill progress bar. Move each to its text form as
+it's touched, starting with the line height and the frames.
+
+### Current rules
+
 - **Palette**: only the 16 CGA/VGA text-mode colors (`--dos-*`). No
   other colors, no gradients except a solid-block progress fill, no
   transparency except modal dimming.
@@ -56,7 +95,8 @@ and check new UI in both themes.
 - **Floppy's own color keeps its meaning**: phosphor green becomes
   light green (`--accent`), used for primary buttons, section and row
   icons, and the progress fill.
-- Icons stay inline SVG in `currentColor` and pick up the palette.
+- Icons are still inline SVG in `currentColor` (to be replaced by
+  CP437 glyphs, see "Text only").
 
 ## Font licensing
 

@@ -8,6 +8,16 @@ against the day the change was made.
 
 ## Unreleased
 
+- **ANSIapps theme: text only, as a standing convention** (2026-09-27):
+  in the ANSIapps theme everything is to be drawn with characters from
+  the one monospaced font, as DOS text mode did (CLAUDE.md, Dev
+  conventions; `docs/ansiapps-theme.md`, "Text only").
+  `docs/ansiapps-textmode.md` is the expert reference from deep research:
+  CP437 glyphs and what the shipped VGA font actually covers (measured),
+  the exact 16-color palette, Turbo Vision's component recipes (read
+  from its source), ANSI/ASCII art craft, and faithful, accessible
+  rendering on the web. It lists what today's theme still does in CSS
+  (20px rows, CSS borders and shadows, SVG icons) to migrate.
 - **Standing rule: friction as close to zero as the law allows**
   (2026-09-27): CLAUDE.md rule 9 has every new or touched feature
   checked for what still stands between the user and a working result,

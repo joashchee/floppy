@@ -441,7 +441,18 @@ gitignored `CLAUDE.local.md`, never in committed files.
   text-mode look toggled from the gear menu (`docs/ansiapps-theme.md`,
   `src/ansiapps-theme.css`, `src/lib/theme.ts`). New UI stays on the
   color tokens so the ANSIapps theme follows it, and gets checked in
-  both themes. The theme's font (`public/fonts/ansiapps/`) is CC BY-SA
+  both themes.
+- **Polishing the ANSIapps theme is a standing convention (all ansiapps
+  apps).** In it, **everything is drawn with text from the one
+  monospaced font**, the way DOS text mode did: frames with CP437
+  box-drawing characters, shadows as dark cells, icons as CP437 glyphs,
+  progress and scroll bars from `░▒▓█`, checkboxes as `[X]`, all on the
+  8×16 cell grid (16px font, 16px rows, sizes in whole cells). No CSS
+  borders, box-shadows, rounded corners, SVG icons or images in that
+  theme. The how-to, with glyph tables, the exact 16-color palette and
+  Turbo Vision's component recipes, is `docs/ansiapps-textmode.md`;
+  follow it and extend it. Every new UI element gets its text-mode form
+  when it's built, and touched UI gets polished toward it. The theme's font (`public/fonts/ansiapps/`) is CC BY-SA
   4.0: ship it unmodified as its own file with its license and the
   About credit. Never subset, convert or inline it.
 
