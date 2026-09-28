@@ -37,8 +37,9 @@ export interface LibraryApp {
 export interface AppIdentity {
   handler: string | null;
   version: string | null;
-  /** "hash": a program matched a known version; "user": the user said. */
-  by: "hash" | "user";
+  /** "hash": a program matched a known version; "user": the user said;
+   *  "learned": it matched a version learned from someone else's findings. */
+  by: "hash" | "user" | "learned";
 }
 
 /** handlers.rs `HandlerInfo`: a known app that opens old files. */
@@ -377,8 +378,10 @@ export interface LearnSummary {
   dropChoices: number;
   setupSources: number;
   materials: number;
-  /** A knowledge pack's Floppy AI version. */
+  /** A signed knowledge pack's Floppy AI version. */
   aiVersion: number | null;
+  /** It called itself a knowledge pack without the maintainers' signature. */
+  unsignedPack: boolean;
   forMaintainers: number;
   skipped: string[];
 }

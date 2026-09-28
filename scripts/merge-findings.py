@@ -73,11 +73,43 @@ HEADERS = {
     "drops": "| Kind | Extension | Contents | Goes to | Answers | Last answered |",
 }
 DEST = {"app": "App", "document": "Document", "setup": "Setup file"}
+SLOTS = {"Mac ROM", "Mac startup disk", "Kickstart ROM", "Workbench disk"}
+PROGRAM_EXTS = {"EXE", "COM", "BAT", "SYS", "DLL", "OVL", "DRV", "PIF"}
+
+
+def program_ok(name):
+    """A program's plain file name: no path, no quotes or markup."""
+    return bool(re.fullmatch(r"[^\x00-\x1f/\\:<>|`'\"]{1,64}", name)) and not name.startswith(".")
+
+
+def count_ok(n):
+    """A test count as Floppy writes them: a whole number, not absurd."""
+    return isinstance(n, int) and not isinstance(n, bool) and 0 <= n <= 10_000
+
+
 SETUP_KINDS = {"source-broken": "Source broken", "didnt-work": "Didn't work", "better-source": "Better source"}
 
 
+# Bidi overrides and isolates, zero-width characters, soft hyphens: text
+# that reads as something it isn't.
+SNEAKY = re.compile("[\u00ad\u200b-\u200f\u202a-\u202e\u2060-\u2069\ufeff\x00-\x08\x0b-\x1f\x7f]")
+MAX_CELL = 300
+
+
 def cell(s):
-    return str(s).replace("|", "/").replace("\n", " ").strip()
+    """Someone else's text, safe in a living document's table: no pipes,
+    newlines, backticks, HTML or comment markers (which would break the
+    tables Floppy reads), no sneaky characters, and short."""
+    s = SNEAKY.sub("", str(s))
+    s = s.replace("<!--", "").replace("-->", "").replace("<", "\u2039").replace(">", "\u203a")
+    s = s.replace("|", "/").replace("`", "'").replace("\r", " ").replace("\n", " ").strip()
+    return s[:MAX_CELL]
+
+
+def safe_id(s):
+    """A findings ID as it goes in the merged-reports registry comment."""
+    s = re.sub(r"[^A-Za-z0-9_.-]", "", str(s))[:80]
+    return s or None
 
 
 def block(doc, name):
@@ -246,6 +278,11 @@ def main():
 
     for path in args:
         data = load(path)
+        data["id"] = safe_id(data.get("id"))
+        if not data["id"]:
+            print(f"Skipped {path}: its ID isn't one Floppy writes.")
+            skipped += 1
+            continue
         if data["id"] in merged_ids:
             print(f"Skipped {path}: already merged.")
             skipped += 1
@@ -253,12 +290,17 @@ def main():
         exported = day(data.get("exported", dt.datetime.now().timestamp()))
 
         for t in data.get("handlerTests", []):
-            guest = GUEST.get(t["os"], t["os"])
+            if t.get("os") not in GUEST or not (count_ok(t.get("worked")) and count_ok(t.get("failed"))):
+                continue
+            guest = GUEST[t["os"]]
             version = cell(t.get("version") or "")
-            key = (guest, t["app"].lower(), version, t["program"].upper(), t["fileType"].upper())
-            last = day(t["lastTested"])
-            row = tested.setdefault(key, {"guest": guest, "app": t["app"], "version": version, "program": t["program"],
-                                          "type": t["fileType"], "worked": 0, "failed": 0, "last": "", "notes": []})
+            app, program, ftype = cell(t.get("app") or ""), cell(t.get("program") or ""), cell(t.get("fileType") or "")
+            if not (app and program and ftype) or not program_ok(program):
+                continue
+            key = (guest, app.lower(), version, program.upper(), ftype.upper())
+            last = day(t["lastTested"]) if isinstance(t.get("lastTested"), int) else exported
+            row = tested.setdefault(key, {"guest": guest, "app": app, "version": version, "program": program,
+                                          "type": ftype, "worked": 0, "failed": 0, "last": "", "notes": []})
             row["worked"] += t["worked"]
             row["failed"] += t["failed"]
             row["last"] = max(row["last"], last)
@@ -268,35 +310,45 @@ def main():
                     row["notes"].append(n)
             row["notes"] = row["notes"][-MAX_NOTES:]
             sha = (t.get("sha256") or "").lower()
-            if t.get("confirmed") and version and t.get("size") and re.fullmatch(r"[0-9a-f]{64}", sha):
-                add_version(guest, t["app"], version, t["program"], t["size"], sha, t["worked"], t["failed"], last)
+            size = t.get("size")
+            if t.get("confirmed") and version and isinstance(size, int) and size > 0 and re.fullmatch(r"[0-9a-f]{64}", sha):
+                add_version(guest, app, version, program, size, sha, t["worked"], t["failed"], last)
 
         for i in data.get("identities", []):
             sha = (i.get("sha256") or "").lower()
             version = cell(i.get("version") or "")
-            if version and re.fullmatch(r"[0-9a-f]{64}", sha):
-                add_version(GUEST.get(i["os"], i["os"]), i["app"], version, i["program"], i["size"], sha, 0, 0, exported)
+            size = i.get("size")
+            if i.get("os") in GUEST and program_ok(cell(i.get("program") or "")) and version and isinstance(size, int) and size > 0 and re.fullmatch(r"[0-9a-f]{64}", sha):
+                add_version(GUEST[i["os"]], cell(i["app"]), version, cell(i["program"]), size, sha, 0, 0, exported)
 
-        for f in {(x["os"], x["app"], x["ext"].upper()) for x in data.get("fileTypes", [])}:
+        for f in {(x.get("os"), cell(x.get("app") or ""), str(x.get("ext") or "").lstrip(".").upper())
+                  for x in data.get("fileTypes", [])}:
             os_, app, ext = f
+            # A plain extension, never a program's (as learned.rs refuses).
+            if os_ not in GUEST or not app or not re.fullmatch(r"[A-Z0-9]{1,8}", ext) or ext in PROGRAM_EXTS:
+                continue
             if ext in table_exts.get(app.lower(), set()):
                 continue
-            guest = GUEST.get(os_, os_)
+            guest = GUEST[os_]
             row = filetypes.setdefault((guest, app.lower(), ext), {"guest": guest, "app": app, "ext": ext, "reports": 0, "last": ""})
             row["reports"] += 1
             row["last"] = max(row["last"], exported)
 
         for s in {x["sha1"].lower(): x for x in data.get("systemFiles", [])}.values():
-            sha1 = s["sha1"].lower()
+            sha1 = str(s.get("sha1") or "").lower()
             if sha1 in published or not re.fullmatch(r"[0-9a-f]{40}", sha1):
                 continue
-            row = reported.setdefault(sha1, {"slot": s["slot"], "what": cell(s["what"]), "size": s["size"],
+            if s.get("slot") not in SLOTS or not isinstance(s.get("size"), int) or s["size"] <= 0:
+                continue
+            row = reported.setdefault(sha1, {"slot": s["slot"], "what": cell(s.get("what") or ""), "size": s["size"],
                                              "sha1": sha1, "reports": 0, "last": ""})
             row["reports"] += 1
             row["last"] = max(row["last"], exported)
 
         for e in data.get("appErrors", []):
-            guest = GUEST.get(e["os"], e["os"])
+            if e.get("os") not in GUEST:
+                continue
+            guest = GUEST[e["os"]]
             version = cell(e.get("version") or "")
             program = cell(e.get("program") or "")
             sha = (e.get("sha256") or "").lower()
@@ -318,7 +370,9 @@ def main():
             source, note, file = cell(r.get("source") or ""), cell(r.get("note") or ""), cell(r.get("file") or "")
             if not (source or note):
                 continue
-            key = (cell(r["slot"]), kind, source, note, file)
+            if r.get("slot") not in SLOTS or r.get("kind") not in SETUP_KINDS:
+                continue
+            key = (r["slot"], kind, source, note, file)
             row = setup_notes.setdefault(key, {"slot": key[0], "kind": kind, "source": source, "note": note,
                                                "file": file, "reports": 0, "last": ""})
             row["reports"] += 1

@@ -93,7 +93,7 @@ pub fn is_app_source(os: GuestOs, path: &Path) -> bool {
         GuestOs::MacClassic => {
             if mac::MACBINARY_EXTS.contains(&ext.as_str()) {
                 // A MacBinary file says what it is: only an app is an app.
-                return std::fs::read(path).ok().and_then(|b| mac::parse_macbinary(&b)).is_none_or(|m| &m.finder_info[..4] == b"APPL");
+                return mac::read_macbinary(path).is_none_or(|m| &m.finder_info[..4] == b"APPL");
             }
             ext == "zip" || mac::is_disk_image(&name) || matches!(ext.as_str(), "sit" | "sitx" | "hqx" | "cpt" | "sea") || mac::file_type(path) == Some(*b"APPL")
         }
@@ -163,7 +163,11 @@ fn why(h: &handlers::Handler, ext: &str) -> String {
 /// Within each, the favorite version of a handler comes before its other
 /// versions, then apps that opened this type correctly. An app that has
 /// failed with it more often than it worked goes last whatever its rank.
-pub fn dos_openers(file: &str, remembered: Option<&str>, apps: &[LibraryApp], tests: &[Tally]) -> Vec<Opener> {
+///
+/// `tests` are the user's own answers; `community`, test results learned
+/// from other people's findings (learned.rs), only break ties that the
+/// user's own leave: they can never move an app to the end.
+pub fn dos_openers(file: &str, remembered: Option<&str>, apps: &[LibraryApp], tests: &[Tally], community: &[Tally]) -> Vec<Opener> {
     let ext = ext_of(file);
     if ext.is_empty() {
         return Vec::new();
@@ -177,7 +181,7 @@ pub fn dos_openers(file: &str, remembered: Option<&str>, apps: &[LibraryApp], te
             .and_then(|h| dos.iter().find(|a| a.favorite && a.handler() == Some(h)))
             .map_or(id, |f| f.id.as_str())
     });
-    let mut out: Vec<(u8, Opener)> = Vec::new();
+    let mut out: Vec<(u8, i64, Opener)> = Vec::new();
     for app in dos {
         let said = app.opens.iter().any(|e| e.eq_ignore_ascii_case(&ext));
         let chosen = if said {
@@ -188,6 +192,8 @@ pub fn dos_openers(file: &str, remembered: Option<&str>, apps: &[LibraryApp], te
         let Some((rank, program, why)) = chosen else { continue };
         let sha256 = app.program_ids.get(&program).map(|id| id.sha256.as_str());
         let (worked, failed) = verify::record_for(tests, GuestOs::Dos, &base_of(&program), sha256, &format!(".{ext}"));
+        let (cw, cf) = verify::record_for(community, GuestOs::Dos, &base_of(&program), sha256, &format!(".{ext}"));
+        let others = i64::from(cw) - i64::from(cf);
         let rank = if failed > worked {
             3
         } else if first == Some(app.id.as_str()) {
@@ -196,15 +202,16 @@ pub fn dos_openers(file: &str, remembered: Option<&str>, apps: &[LibraryApp], te
             rank
         };
         let version = app.identity.as_ref().and_then(|i| i.version.clone());
-        out.push((rank, Opener { app_id: app.id.clone(), app_name: app.name.clone(), program, version, favorite: app.favorite, why, worked, failed }));
+        out.push((rank, others, Opener { app_id: app.id.clone(), app_name: app.name.clone(), program, version, favorite: app.favorite, why, worked, failed }));
     }
     out.sort_by(|a, b| {
         a.0.cmp(&b.0)
-            .then_with(|| b.1.favorite.cmp(&a.1.favorite))
-            .then_with(|| b.1.worked.cmp(&a.1.worked))
-            .then_with(|| a.1.app_name.to_lowercase().cmp(&b.1.app_name.to_lowercase()))
+            .then_with(|| b.2.favorite.cmp(&a.2.favorite))
+            .then_with(|| b.2.worked.cmp(&a.2.worked))
+            .then_with(|| b.1.cmp(&a.1))
+            .then_with(|| a.2.app_name.to_lowercase().cmp(&b.2.app_name.to_lowercase()))
     });
-    out.into_iter().map(|(_, o)| o).collect()
+    out.into_iter().map(|(_, _, o)| o).collect()
 }
 
 /// A document's path inside DOS: `C:\DOCS\LETTER.WP5`.
@@ -289,7 +296,7 @@ mod tests {
             app("ed", "My Editor", &["BIN/ED.COM"], &["TXT", "doc"]),
             app("123", "1-2-3", &["123.EXE"], &[]),
         ];
-        let names = |file, remembered| dos_openers(file, remembered, &apps, &[]).into_iter().map(|o| o.app_id).collect::<Vec<_>>();
+        let names = |file, remembered| dos_openers(file, remembered, &apps, &[], &[]).into_iter().map(|o| o.app_id).collect::<Vec<_>>();
         // DOC: the user's own say-so first, then the table's, by name.
         assert_eq!(names("LETTER.DOC", None), ["ed", "word", "wp"]);
         // The app it last opened with comes first.
@@ -297,10 +304,10 @@ mod tests {
         assert_eq!(names("BUDGET.WK1", None), ["123"]);
         assert!(names("PHOTO.JPG", None).is_empty());
         assert!(names("README", None).is_empty());
-        let wp = &dos_openers("A.WP5", None, &apps, &[])[0];
+        let wp = &dos_openers("A.WP5", None, &apps, &[], &[])[0];
         assert_eq!(wp.program, "WP.EXE");
         assert!(wp.why.starts_with("WordPerfect opens .WP5 files. Floppy is going by the name WP.EXE"), "{}", wp.why);
-        assert_eq!(dos_openers("A.TXT", None, &apps, &[])[0].program, "BIN/ED.COM");
+        assert_eq!(dos_openers("A.TXT", None, &apps, &[], &[])[0].program, "BIN/ED.COM");
 
         // Test results: an app that worked with .DOC moves up; one that
         // failed more than it worked goes last, even if remembered.
@@ -320,9 +327,18 @@ mod tests {
             notes: vec![],
         };
         let tests = [tally("WP.EXE", 2, 0), tally("ED.COM", 0, 1)];
-        let ranked = dos_openers("LETTER.DOC", Some("ed"), &apps, &tests);
+        let ranked = dos_openers("LETTER.DOC", Some("ed"), &apps, &tests, &[]);
         assert_eq!(ranked.iter().map(|o| o.app_id.as_str()).collect::<Vec<_>>(), ["wp", "word", "ed"]);
         assert_eq!((ranked[0].worked, ranked[0].failed), (2, 0));
+
+        // Other people's results can't bury the user's app: a flood of
+        // "failed" for WordPerfect changes nothing the user's own decide.
+        let flood = [Tally { worked: 0, failed: 10_000, ..tally("WP.EXE", 0, 0) }];
+        let ranked = dos_openers("LETTER.DOC", Some("ed"), &apps, &tests, &flood);
+        assert_eq!(ranked.iter().map(|o| o.app_id.as_str()).collect::<Vec<_>>(), ["wp", "word", "ed"]);
+        // With no results of the user's own, they only break ties.
+        let ranked = dos_openers("LETTER.DOC", None, &apps, &[], &[Tally { worked: 5, ..tally("WP.EXE", 0, 0) }]);
+        assert_eq!(ranked.iter().map(|o| o.app_id.as_str()).collect::<Vec<_>>(), ["ed", "wp", "word"], "wp ahead of word, by others' results");
     }
 
     fn known(mut a: LibraryApp, handler: Option<&str>, version: &str, favorite: bool) -> LibraryApp {
@@ -338,13 +354,13 @@ mod tests {
             known(app("wp51", "WordPerfect 5.1", &["WP.EXE"], &[]), Some("WordPerfect"), "5.1", true),
             known(app("wp60", "WordPerfect 6.0", &["WPWIN/WP.EXE"], &[]), Some("WordPerfect"), "6.0", false),
         ];
-        let ids = |remembered| dos_openers("A.WP5", remembered, &apps, &[]).into_iter().map(|o| o.app_id).collect::<Vec<_>>();
+        let ids = |remembered| dos_openers("A.WP5", remembered, &apps, &[], &[]).into_iter().map(|o| o.app_id).collect::<Vec<_>>();
         assert_eq!(ids(None), ["wp51", "wp50", "wp60"]);
         // A document last opened in 5.0 opens in the favorite now.
         assert_eq!(ids(Some("wp50")), ["wp51", "wp50", "wp60"]);
-        let o = &dos_openers("A.WP5", None, &apps, &[])[0];
+        let o = &dos_openers("A.WP5", None, &apps, &[], &[])[0];
         assert_eq!((o.version.as_deref(), o.favorite, o.why.as_str()), (Some("5.1"), true, "WordPerfect opens .WP5 files."));
-        assert_eq!(dos_openers("A.WP5", None, &apps, &[])[2].program, "WPWIN/WP.EXE");
+        assert_eq!(dos_openers("A.WP5", None, &apps, &[], &[])[2].program, "WPWIN/WP.EXE");
     }
 
     #[test]
@@ -353,7 +369,7 @@ mod tests {
             known(app("word", "WORD (a game)", &["WORD.EXE"], &[]), None, "", false),
             known(app("msword", "Word 5.5", &["WORD.EXE"], &[]), Some("Microsoft Word (DOS)"), "5.5", false),
         ];
-        let ids: Vec<String> = dos_openers("LETTER.DOC", None, &apps, &[]).into_iter().map(|o| o.app_id).collect();
+        let ids: Vec<String> = dos_openers("LETTER.DOC", None, &apps, &[], &[]).into_iter().map(|o| o.app_id).collect();
         assert_eq!(ids, ["msword"]);
     }
 

@@ -331,6 +331,24 @@ pub fn parse_macbinary(bytes: &[u8]) -> Option<MacBinary> {
     Some(MacBinary { name, finder_info: info, data, resource_fork })
 }
 
+/// MacBinary files bigger than this aren't judged: judging one means
+/// reading it whole, and an old Mac file this big is really a disk image.
+pub const MACBINARY_JUDGE_MAX: u64 = 64 << 20;
+
+/// A file's MacBinary contents, if it's MacBinary and at most
+/// `MACBINARY_JUDGE_MAX`: the header is checked before the rest is read.
+pub fn read_macbinary(path: &Path) -> Option<MacBinary> {
+    let len = fs::metadata(path).ok()?.len();
+    if !(128..=MACBINARY_JUDGE_MAX).contains(&len) {
+        return None;
+    }
+    let head = crate::library::read_head(path, 128).ok()?;
+    if head.len() < 128 || head[0] != 0 || head[74] != 0 || head[82] != 0 || !(1..=63).contains(&head[1]) {
+        return None;
+    }
+    parse_macbinary(&fs::read(path).ok()?)
+}
+
 /// Writes a MacBinary file's contents as a real file (data fork,
 /// resource fork, Finder info) in `dest_dir`. Returns its name.
 pub fn decode_macbinary(src: &Path, dest_dir: &Path, fallback_name: &str) -> Result<String, String> {
@@ -677,7 +695,20 @@ mod tests {
     }
 
     #[test]
-    fn prefs_boot_the_disk_and_share_the_library() {
+    fn a_huge_file_is_never_read_whole_to_judge_it() {
+        let t = crate::testutil::TempDir::new();
+        let big = t.path().join("huge.bin");
+        let f = fs::File::create(&big).unwrap();
+        // Sparse: costs nothing on disk, but reading it whole would.
+        f.set_len(MACBINARY_JUDGE_MAX + 1).unwrap();
+        assert!(read_macbinary(&big).is_none());
+        let small = t.path().join("small.bin");
+        fs::write(&small, [0u8; 200]).unwrap();
+        assert!(read_macbinary(&small).is_none(), "not MacBinary: no name length");
+    }
+
+    #[test]
+        fn prefs_boot_the_disk_and_share_the_library() {
         let p = basilisk_prefs(&Launch {
             rom: Path::new("/lib/system/mac/Quadra.ROM"),
             boot_disk: Path::new("/lib/system/mac/System 7.6.dsk"),

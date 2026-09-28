@@ -2,8 +2,8 @@
 """Builds the knowledge pack for the current Floppy AI version, so Floppy
 users can update what their Floppy knows without a new release.
 
-    scripts/make-ai-pack.py [--out DIR] [--site SITE]
-                            [--material PATH=LICENCE=SOURCE ...]
+    scripts/make-ai-pack.py [--sign KEYFILE] [--out DIR] [--site SITE]
+                            [--allow-unsigned] [--material PATH=LICENCE=SOURCE ...]
 
 The version is the top row of docs/floppy-ai.md's versions table. The
 pack is a findings zip (findings.rs): floppy-findings.json with a
@@ -12,13 +12,20 @@ Floppy reads when it's built (app-handlers.md, legal-setupfiles.md,
 file-handling.md, floppy-ai.md). Floppy learns from them with the same
 code that reads them at build time (learned.rs).
 
+--sign KEY    sign the pack with the maintainers' key (a file made by
+              `cargo run --example ai-pack-key -- new KEY`, kept outside
+              every repo), whose public key is in docs/floppy-ai.md's "Pack
+              keys". Only a signed pack raises Floppy's AI version or
+              changes where it points for setup files; an unsigned one is
+              learned from as ordinary findings.
 --out DIR     where to write "Floppy AI <N>.zip" (default dist/floppy-ai).
 --site SITE   also publish it into an ansiapps-site checkout:
               public/downloads/floppy-ai/floppy-ai-<N>.zip, and
               src/data/floppy-ai.json (version, date, what, link, size,
               SHA-256), which Floppy's card on the site shows. A version
               already published is never replaced with different bytes:
-              bump the version in docs/floppy-ai.md instead.
+              bump the version in docs/floppy-ai.md instead. It must be
+              signed, unless --allow-unsigned (before a key exists).
 --material    an extra file for materials/: a plain .md or .txt (at most
               1 MiB), with the licence it's shared under and where it
               came from. Only licences that allow redistribution are
@@ -105,18 +112,42 @@ def material(path, licence, source):
         die(f"{name}: not UTF-8 text.")
     if b"\0" in data:
         die(f"{name}: not plain text.")
-    return {"name": name, "license": licence, "source": source, "note": ""}, data
+    return {"name": name, "license": licence, "source": source, "note": "",
+            "sha256": hashlib.sha256(data).hexdigest()}, data
+
+
+def sign(key, data):
+    """The Ed25519 signature of data, by the cargo example that holds the
+    signing code (the key's secret never leaves the maintainer's machine)."""
+    import subprocess
+    import tempfile
+    with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+        f.write(data)
+        tmp = f.name
+    try:
+        r = subprocess.run(["cargo", "run", "--quiet", "--manifest-path", os.path.join(ROOT, "src-tauri", "Cargo.toml"),
+                            "--example", "ai-pack-key", "--", "sign", key, tmp], capture_output=True, text=True)
+    finally:
+        os.unlink(tmp)
+    sig = r.stdout.strip()
+    if r.returncode != 0 or not re.fullmatch(r"[0-9a-f]{128}", sig):
+        die(f"signing failed: {r.stderr.strip() or sig}")
+    return sig
 
 
 def build():
     args = sys.argv[1:]
-    out_dir, site, extra = os.path.join(ROOT, "dist", "floppy-ai"), None, []
+    out_dir, site, extra, key, allow_unsigned = os.path.join(ROOT, "dist", "floppy-ai"), None, [], None, False
     while args:
         a = args.pop(0)
         if a == "--out" and args:
             out_dir = args.pop(0)
         elif a == "--site" and args:
             site = args.pop(0)
+        elif a == "--sign" and args:
+            key = args.pop(0)
+        elif a == "--allow-unsigned":
+            allow_unsigned = True
         elif a == "--material" and args:
             parts = args.pop(0).split("=", 2)
             if len(parts) != 3:
@@ -149,6 +180,13 @@ def build():
         "materials": [m for m, _ in materials],
     }
 
+    if site and not key and not allow_unsigned:
+        die("a pack for ansiapps.com must be signed: --sign KEYFILE (or --allow-unsigned before a key exists).")
+    if key and not os.path.isfile(key):
+        die(f"no key at {key}.")
+    json_bytes = (json.dumps(findings, indent=2) + "\n").encode()
+    signature = sign(key, json_bytes) if key else None
+
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
         def add(name, data):
@@ -156,7 +194,9 @@ def build():
             info.compress_type = zipfile.ZIP_DEFLATED
             info.external_attr = 0o644 << 16
             z.writestr(info, data)
-        add("floppy-findings.json", json.dumps(findings, indent=2) + "\n")
+        add("floppy-findings.json", json_bytes)
+        if signature:
+            add("floppy-findings.sig", signature + "\n")
         add("README.txt", README.format(version=version, date=date, what=what.rstrip("."), repo=REPO))
         for m, data in materials:
             add("materials/" + m["name"], data)
@@ -167,6 +207,8 @@ def build():
     out = os.path.join(out_dir, f"Floppy AI {version}.zip")
     open(out, "wb").write(data)
     print(f"Floppy AI {version} ({date}): {out}, {len(data)} bytes, SHA-256 {sha}")
+    if not signature:
+        print("Unsigned: Floppy learns from it as ordinary findings. It won't raise the AI version or change setup links.")
 
     if site:
         public = os.path.join(site, "public", "downloads", "floppy-ai")

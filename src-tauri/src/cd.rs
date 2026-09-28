@@ -457,7 +457,15 @@ pub fn setup_slot(path: &Path) -> Option<Slot> {
 /// The setup files in a folder, by content, looking at no more than
 /// `limit` files (a big folder is an app, not a setup bundle).
 pub fn setup_slots_in(root: &Path, limit: usize) -> Vec<Slot> {
-    let files = files_under(root);
+    // Counted as it walks, so a huge folder stops early.
+    let files: Vec<(PathBuf, u64)> = WalkDir::new(root)
+        .min_depth(1)
+        .into_iter()
+        .filter_map(Result::ok)
+        .filter(|e| e.file_type().is_file() && !e.file_name().to_string_lossy().starts_with('.'))
+        .take(limit + 1)
+        .filter_map(|e| Some((e.path().to_path_buf(), e.metadata().ok()?.len())))
+        .collect();
     if files.len() > limit {
         return Vec::new();
     }

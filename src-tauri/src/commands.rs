@@ -929,10 +929,9 @@ pub fn document_openers(state: State<AppState>, id: String) -> Result<Vec<Opener
     let doc = state.library.document(&id)?;
     Ok(match doc.os {
         GuestOs::Dos => {
-            // Other Floppys' test results (learned.rs) rank too.
-            let mut tests = verify::tallies(&state.library);
-            tests.extend(learned::current().tests.iter().cloned());
-            documents::dos_openers(&doc.file, doc.opens_with.as_deref(), &state.library.list()?, &tests)
+            // Other Floppys' test results (learned.rs) only break ties.
+            let tests = verify::tallies(&state.library);
+            documents::dos_openers(&doc.file, doc.opens_with.as_deref(), &state.library.list()?, &tests, &learned::current().tests)
         }
         _ => Vec::new(),
     })

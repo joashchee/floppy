@@ -276,13 +276,20 @@ pub(crate) fn parse_known_versions(doc: &str) -> Result<Vec<KnownVersion>, Strin
     Ok(out)
 }
 
-/// What an app is, when one of its programs matches a known version.
-pub fn identify(os: GuestOs, ids: &BTreeMap<String, ProgramId>, known: &[KnownVersion]) -> Option<Identity> {
+/// What an app is, when one of its programs matches a known version:
+/// Floppy's own first (`Hash`), then ones learned from findings
+/// (`Learned`), which never contradict Floppy's own.
+pub fn identify(os: GuestOs, ids: &BTreeMap<String, ProgramId>) -> Option<Identity> {
+    identify_in(os, ids, builtin_known_versions(), IdentifiedBy::Hash)
+        .or_else(|| identify_in(os, ids, &crate::learned::current().versions, IdentifiedBy::Learned))
+}
+
+fn identify_in(os: GuestOs, ids: &BTreeMap<String, ProgramId>, known: &[KnownVersion], by: IdentifiedBy) -> Option<Identity> {
     ids.values().find_map(|id| {
         known.iter().find(|k| k.os == os && k.size == id.size && k.sha256.eq_ignore_ascii_case(&id.sha256)).map(|k| Identity {
             handler: Some(k.app.clone()),
             version: Some(k.version.clone()),
-            by: IdentifiedBy::Hash,
+            by,
         })
     })
 }
@@ -545,10 +552,10 @@ mod tests {
         assert_eq!(known.len(), 1);
         assert_eq!((known[0].size, known[0].sha256.as_str(), known[0].worked), (1234, "ab".repeat(32).as_str(), 3));
         let ids = |size, sha: &str| BTreeMap::from([("WP.EXE".to_string(), ProgramId { size, sha256: sha.into() })]);
-        let id = identify(GuestOs::Dos, &ids(1234, &"ab".repeat(32)), &known).unwrap();
+        let id = identify_in(GuestOs::Dos, &ids(1234, &"ab".repeat(32)), &known, IdentifiedBy::Hash).unwrap();
         assert_eq!((id.handler.as_deref(), id.version.as_deref(), id.by), (Some("WordPerfect"), Some("5.1"), IdentifiedBy::Hash));
         // Same name, different bytes: not identified.
-        assert!(identify(GuestOs::Dos, &ids(1234, &"cd".repeat(32)), &known).is_none());
+        assert!(identify_in(GuestOs::Dos, &ids(1234, &"cd".repeat(32)), &known, IdentifiedBy::Hash).is_none());
         // A bad row fails loudly.
         assert!(parse_known_versions(&SAMPLE.replace("| 3 |", "| x |")).is_err());
         assert!(parse_known_versions(&SAMPLE.replace("ABAB", "ZZ")).is_err());

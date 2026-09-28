@@ -180,6 +180,10 @@ pub enum IdentifiedBy {
     Hash,
     /// The user said, after a session or in the app's details.
     User,
+    /// A program matched a version learned from someone else's findings
+    /// (learned.rs): other people's word, so it's shown as such and never
+    /// exported as the user's own.
+    Learned,
 }
 
 /// An old file in the library, to open in an app that made it
@@ -466,7 +470,7 @@ impl Library {
         }
 
         let program_ids = if os == GuestOs::Dos { program_ids(&content, &programs) } else { BTreeMap::new() };
-        let identity = handlers::identify(os, &program_ids, &handlers::known_versions());
+        let identity = handlers::identify(os, &program_ids);
 
         let os_root = self.os_root(os);
         fs::create_dir_all(&os_root).map_err(|e| e.to_string())?;
@@ -524,7 +528,7 @@ impl Library {
             }
             app.program_ids = program_ids(&self.os_root(app.os).join(&app.dir), &app.programs);
             if app.identity.is_none() {
-                app.identify_as(handlers::identify(app.os, &app.program_ids, &handlers::known_versions()));
+                app.identify_as(handlers::identify(app.os, &app.program_ids));
             }
             changed |= !app.program_ids.is_empty();
         }

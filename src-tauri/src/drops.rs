@@ -228,7 +228,7 @@ fn file_content(path: &Path) -> String {
         return format!("iff:{}", code(&head[8..12]));
     }
     if head.len() >= 128 {
-        if let Some(mb) = std::fs::read(path).ok().and_then(|b| mac::parse_macbinary(&b)) {
+        if let Some(mb) = mac::read_macbinary(path) {
             return format!("macbinary:{}", code(&mb.finder_info[..4]));
         }
     }
@@ -477,7 +477,7 @@ fn consensus(rules: &[DropRule], sig: &Signature, offered: &[Choice]) -> Option<
     let mut counts: Vec<(Choice, u32)> = Vec::new();
     for r in rules.iter().filter(|r| r.signature == *sig && offered.contains(&r.choice)) {
         match counts.iter_mut().find(|(c, _)| *c == r.choice) {
-            Some((_, n)) => *n += r.answers,
+            Some((_, n)) => *n = n.saturating_add(r.answers),
             None => counts.push((r.choice, r.answers)),
         }
     }

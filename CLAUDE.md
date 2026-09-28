@@ -343,9 +343,25 @@ gitignored `CLAUDE.local.md`, never in committed files.
   the version instead. `--material PATH=LICENCE=SOURCE` adds a plain
   `.md`/`.txt` under a licence that allows sharing on ansiapps.com
   (never guest software, ROMs or disk images: rule 3).
-- A pack newer than the build raises the Floppy's AI version when
-  learned (`learned.rs`), and its setup sources replace the build's for
-  links to sites the build already points to.
+- **Only signed packs are official.** `make-ai-pack.py --sign KEYFILE`
+  signs the pack's JSON with the maintainers' Ed25519 key (made and used
+  by `examples/ai-pack-key.rs`; the secret stays on the maintainer's
+  machine, never in a repo: `*.key` is gitignored). Floppy checks it
+  against "Pack keys" in `docs/floppy-ai.md` (`ai::verify`). A signed pack
+  newer than the build raises the Floppy's AI version, and its setup
+  sources replace the build's for links to sites the build already
+  points to. Unsigned, it's ordinary findings. `--site` refuses an
+  unsigned pack unless `--allow-unsigned` (only until a key exists).
+- **Harden against abuse whenever the AI processes change (standing
+  rule).** Findings, packs and drops come from other people, so treat
+  them as hostile. Any change to `drops.rs`, `learned.rs`, `findings.rs`,
+  `ai.rs`, what they reach in `handlers.rs`, `cd.rs`, `documents.rs` and
+  `mac.rs`, or `merge-findings.py`/`make-ai-pack.py` gets a review against
+  `docs/floppy-ai.md`'s **Safeguards** table (forged or swapped packs,
+  smuggled files, poisoning that overrules Floppy or the user, floods,
+  sneaky text, oversized reads, document injection, double counting),
+  new safeguards for any new way in, a test that tries the abuse, and a
+  new row in that table.
 
 ## Findings (`findings.rs`, `learned.rs`)
 

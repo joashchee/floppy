@@ -52,6 +52,17 @@ use crate::verify::Tally;
 
 /// Findings bigger than this aren't findings.
 const MAX_BYTES: u64 = 16 << 20;
+/// At most this many entries of each kind are taken from one findings
+/// file, and kept of each kind in all, so no file can stall or bloat
+/// Floppy (docs/floppy-ai.md, "Safeguards").
+const MAX_PER_FILE: usize = 5_000;
+const MAX_KEPT: usize = 50_000;
+/// Findings files learned from, at most (Forget What Was Learned… makes room).
+const MAX_SOURCES: usize = 1_000;
+/// Extensions of programs and system files: never learned as documents.
+const PROGRAM_EXTS: &[&str] = &["EXE", "COM", "BAT", "SYS", "DLL", "OVL", "DRV", "PIF"];
+/// The pack's signature, beside the JSON in the zip.
+const SIG_NAME: &str = "floppy-findings.sig";
 
 /// A findings file learned from.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -120,8 +131,11 @@ pub struct LearnSummary {
     pub setup_sources: usize,
     /// Materials kept.
     pub materials: usize,
-    /// A knowledge pack's AI version.
+    /// A signed knowledge pack's AI version.
     pub ai_version: Option<u32>,
+    /// It called itself a knowledge pack without a maintainers' signature:
+    /// learned from as ordinary findings.
+    pub unsigned_pack: bool,
     /// Errors notes and setup reports, for maintainers only.
     pub for_maintainers: usize,
     /// What was left out, and why.
@@ -193,31 +207,48 @@ pub fn forget(library: &Library) -> Result<(), String> {
     Ok(())
 }
 
+/// Findings as read: the parsed JSON, its exact bytes (what a pack's
+/// signature signs), and the signature, if the zip has one.
+pub struct Loaded {
+    pub findings: Findings,
+    pub json: Vec<u8>,
+    pub signature: Option<String>,
+}
+
 /// Findings read from a zip or a JSON file, or why not.
 pub fn read_findings(path: &Path) -> Result<Findings, String> {
-    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    read_all(path).map(|r| r.findings)
+}
+
+fn read_all(path: &Path) -> Result<Loaded, String> {
+    let name = shown(&path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default());
+    let not = || format!("{name} isn't Floppy findings.");
     let meta = std::fs::metadata(path).map_err(|e| format!("Couldn't open {name}: {e}"))?;
     if !meta.is_file() || meta.len() > MAX_BYTES {
-        return Err(format!("{name} isn't Floppy findings."));
+        return Err(not());
     }
     let mut f = std::fs::File::open(path).map_err(|e| e.to_string())?;
     let mut magic = [0u8; 4];
-    let bytes = if f.read_exact(&mut magic).is_ok() && magic == *b"PK\x03\x04" {
-        let mut z = zip::ZipArchive::new(std::fs::File::open(path).map_err(|e| e.to_string())?).map_err(|_| format!("{name} isn't Floppy findings."))?;
-        let inner = z.file_names().find(|n| n.rsplit('/').next() == Some(findings::JSON_NAME)).map(String::from);
-        let inner = inner.ok_or(format!("{name} isn't Floppy findings."))?;
-        let entry = z.by_name(&inner).map_err(|e| e.to_string())?;
-        let mut out = Vec::new();
-        entry.take(MAX_BYTES).read_to_end(&mut out).map_err(|e| e.to_string())?;
-        out
+    let (json, signature) = if f.read_exact(&mut magic).is_ok() && magic == *b"PK\x03\x04" {
+        let mut z = zip::ZipArchive::new(std::fs::File::open(path).map_err(|e| e.to_string())?).map_err(|_| not())?;
+        let read = |z: &mut zip::ZipArchive<std::fs::File>, leaf: &str, max: u64| -> Option<Vec<u8>> {
+            let inner = z.file_names().find(|n| n.rsplit('/').next() == Some(leaf))?.to_string();
+            let mut out = Vec::new();
+            z.by_name(&inner).ok()?.take(max).read_to_end(&mut out).ok()?;
+            Some(out)
+        };
+        let json = read(&mut z, findings::JSON_NAME, MAX_BYTES).ok_or_else(not)?;
+        let sig = read(&mut z, SIG_NAME, 1024).and_then(|b| String::from_utf8(b).ok()).map(|s| s.trim().to_string());
+        (json, sig)
     } else {
-        std::fs::read(path).map_err(|e| e.to_string())?
+        (std::fs::read(path).map_err(|e| e.to_string())?, None)
     };
-    let findings: Findings = serde_json::from_slice(&bytes).map_err(|_| format!("{name} isn't Floppy findings."))?;
-    if findings.format != findings::FORMAT || findings.version < 1 || findings.id.is_empty() {
-        return Err(format!("{name} isn't Floppy findings."));
+    let findings: Findings = serde_json::from_slice(&json).map_err(|_| not())?;
+    let id_ok = (1..=80).contains(&findings.id.len()) && findings.id.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'));
+    if findings.format != findings::FORMAT || findings.version < 1 || !id_ok {
+        return Err(not());
     }
-    Ok(findings)
+    Ok(Loaded { findings, json, signature })
 }
 
 /// Whether `path` is Floppy findings, to learn from rather than import.
@@ -230,15 +261,38 @@ fn is_hex(s: &str, len: usize) -> bool {
     s.len() == len && s.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
-/// A short, printable name from someone else's file.
+/// Characters that make text look like something it isn't: bidi
+/// overrides and isolates, zero-width characters, soft hyphens.
+fn is_sneaky(c: char) -> bool {
+    c.is_control() || matches!(c, '\u{00AD}' | '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2060}'..='\u{2069}' | '\u{FEFF}')
+}
+
+/// A short, printable name from someone else's file, or `None`.
 fn tidy(s: &str, max: usize) -> Option<String> {
     let s = s.trim();
-    (!s.is_empty() && s.chars().count() <= max && !s.chars().any(|c| c.is_control() || c == '|' || c == '`')).then(|| s.to_string())
+    (!s.is_empty() && s.chars().count() <= max && !s.chars().any(|c| is_sneaky(c) || c == '|' || c == '`')).then(|| s.to_string())
+}
+
+/// A program's plain file name from someone else's file: no path, no
+/// quotes or markup.
+fn program_name(s: &str) -> Option<String> {
+    tidy(s, 64).filter(|p| !p.starts_with('.') && !p.chars().any(|c| matches!(c, '/' | '\\' | ':' | '<' | '>' | '"' | '\'')))
+}
+
+/// Someone else's text for a message: sneaky characters dropped, at most
+/// 64 characters.
+fn shown(s: &str) -> String {
+    let clean: String = s.chars().filter(|c| !is_sneaky(*c)).collect();
+    if clean.chars().count() > 64 {
+        format!("{}…", clean.chars().take(63).collect::<String>())
+    } else {
+        clean
+    }
 }
 
 /// Learns from the findings at `path`.
 pub fn learn(library: &Library, path: &Path) -> Result<LearnSummary, String> {
-    let findings = read_findings(path)?;
+    let Loaded { findings, json, signature } = read_all(path)?;
     let mut learned = read(library);
     let mut out = LearnSummary::default();
     if findings::is_own(library, &findings.id) {
@@ -249,12 +303,18 @@ pub fn learn(library: &Library, path: &Path) -> Result<LearnSummary, String> {
         out.already = true;
         return Ok(out);
     }
-    let pack = findings.pack.as_ref().map(|p| p.ai_version);
+    if learned.sources.len() >= MAX_SOURCES {
+        return Err(format!("Floppy has learned from {MAX_SOURCES} findings files already. Forget What Was Learned… (gear menu) makes room."));
+    }
+    // Only a pack the maintainers signed is official (ai.rs).
+    let official = findings.pack.is_some() && signature.as_deref().is_some_and(|sig| crate::ai::verify(&crate::ai::trusted_keys(), &json, sig));
+    out.unsigned_pack = findings.pack.is_some() && !official;
+    let pack = if official { findings.pack.as_ref().map(|p| p.ai_version) } else { None };
     apply(&mut learned, &findings, &mut out);
     if !findings.materials.is_empty() {
         apply_materials(library, path, &findings, pack, &mut learned, &mut out)?;
     }
-    if let Some(p) = &findings.pack {
+    if let Some(p) = findings.pack.as_ref().filter(|_| official) {
         out.ai_version = Some(p.ai_version);
         if learned.ai_version.is_none_or(|v| p.ai_version > v) {
             learned.ai_version = Some(p.ai_version);
@@ -279,6 +339,17 @@ pub fn learn(library: &Library, path: &Path) -> Result<LearnSummary, String> {
     Ok(out)
 }
 
+/// The findings with each list cut to `MAX_PER_FILE`.
+fn capped(f: &Findings) -> Findings {
+    let mut c = f.clone();
+    c.identities.truncate(MAX_PER_FILE);
+    c.handler_tests.truncate(MAX_PER_FILE);
+    c.file_types.truncate(MAX_PER_FILE);
+    c.system_files.truncate(MAX_PER_FILE);
+    c.drop_choices.truncate(MAX_PER_FILE);
+    c
+}
+
 /// Adds a version, unless Floppy (or earlier findings) knows its
 /// fingerprint as another app or version. `add_counts` for findings'
 /// test counts; a pack's tables are totals already.
@@ -287,23 +358,32 @@ fn add_version(learned: &mut Learned, out: &mut LearnSummary, v: KnownVersion, a
     let known = handlers::builtin_known_versions().iter().find(same).or_else(|| learned.versions.iter().find(same)).cloned();
     match known {
         Some(k) if (k.app.as_str(), k.version.as_str()) != (v.app.as_str(), v.version.as_str()) => {
-            out.skipped.push(format!("{} {}…: Floppy knows it as {} {}, the findings say {} {}", v.program, &v.sha256[..12], k.app, k.version, v.app, v.version));
+            out.skipped.push(format!("{} {}…: Floppy knows it as {} {}, the findings say {} {}", shown(&v.program), &v.sha256[..12], k.app, k.version, v.app, shown(&v.version)));
         }
         Some(_) => {
             if let Some(k) = learned.versions.iter_mut().find(|k| k.os == v.os && k.sha256.eq_ignore_ascii_case(&v.sha256)) {
                 if add_counts {
-                    k.worked += v.worked;
-                    k.failed += v.failed;
+                    k.worked = k.worked.saturating_add(v.worked);
+                    k.failed = k.failed.saturating_add(v.failed);
                 } else {
                     k.worked = k.worked.max(v.worked);
                     k.failed = k.failed.max(v.failed);
                 }
             }
         }
+        None if learned.versions.len() >= MAX_KEPT => full(out, "app versions"),
         None => {
             learned.versions.push(v);
             out.versions += 1;
         }
+    }
+}
+
+/// Notes, once, that a kind of learned knowledge is at `MAX_KEPT`.
+fn full(out: &mut LearnSummary, kind: &str) {
+    let note = format!("{kind}: Floppy keeps at most {MAX_KEPT} learned; Forget What Was Learned… makes room");
+    if !out.skipped.contains(&note) {
+        out.skipped.push(note);
     }
 }
 
@@ -315,7 +395,7 @@ fn version_of(os: GuestOs, app: &str, version: Option<&str>, program: &str, size
         os,
         app: h.name.to_string(),
         version: tidy(version?, 32)?,
-        program: tidy(program, 64)?,
+        program: program_name(program)?,
         size: Some(size).filter(|s| *s > 0)?,
         sha256: Some(sha256.to_ascii_lowercase()).filter(|s| is_hex(s, 64))?,
         worked: 0,
@@ -328,15 +408,22 @@ fn version_of(os: GuestOs, app: &str, version: Option<&str>, program: &str, size
 fn add_file_type(learned: &mut Learned, out: &mut LearnSummary, os: GuestOs, app: &str, ext: &str, reports: u32, from_pack: bool) {
     let ext = ext.trim_start_matches('.').to_ascii_uppercase();
     let Some(h) = handlers::find(os, app).filter(|_| (1..=8).contains(&ext.len()) && ext.bytes().all(|b| b.is_ascii_alphanumeric())) else {
-        out.skipped.push(format!("a file type that isn't well formed ({app} .{ext})"));
+        out.skipped.push(format!("a file type that isn't well formed ({} .{})", shown(app), shown(&ext)));
         return;
     };
+    if PROGRAM_EXTS.contains(&ext.as_str()) {
+        out.skipped.push(format!("{} .{ext}: a program's extension, never a document's", h.name));
+        return;
+    }
     if let Some(r) = learned.file_types.iter_mut().find(|r| r.os == os && r.app == h.name && r.ext == ext) {
-        r.reports = if from_pack { r.reports.max(reports) } else { r.reports + reports };
+        r.reports = if from_pack { r.reports.max(reports) } else { r.reports.saturating_add(reports) };
         return;
     }
     if handlers::opens_ext(h, &ext) {
         return;
+    }
+    if learned.file_types.len() >= MAX_KEPT {
+        return full(out, "file types");
     }
     learned.file_types.push(ReportedFileType { os, app: h.name.to_string(), ext, reports });
     out.file_types += 1;
@@ -351,12 +438,27 @@ fn add_system_file(learned: &mut Learned, out: &mut LearnSummary, slot: Slot, wh
     if crate::cd::is_known(slot, sha1) || learned.system_files.iter().any(|x| x.sha1.eq_ignore_ascii_case(sha1)) {
         return;
     }
+    if learned.system_files.len() >= MAX_KEPT {
+        return full(out, "setup files");
+    }
     let what = tidy(what, 80).unwrap_or_else(|| slot.label().to_string());
     learned.system_files.push(SystemFileFinding { slot: slot.label().to_string(), what, size, sha1: sha1.to_ascii_lowercase() });
     out.system_files += 1;
 }
 
 fn apply(learned: &mut Learned, f: &Findings, out: &mut LearnSummary) {
+    for (kind, n) in [
+        ("app versions", f.identities.len()),
+        ("test results", f.handler_tests.len()),
+        ("file types", f.file_types.len()),
+        ("setup files", f.system_files.len()),
+        ("drop choices", f.drop_choices.len()),
+    ] {
+        if n > MAX_PER_FILE {
+            out.skipped.push(format!("{kind}: only the first {MAX_PER_FILE} of {n}"));
+        }
+    }
+    let f = &capped(f);
     for i in &f.identities {
         match version_of(i.os, &i.app, i.version.as_deref(), &i.program, i.size, &i.sha256) {
             Some(v) => add_version(learned, out, v, true),
@@ -368,15 +470,24 @@ fn apply(learned: &mut Learned, f: &Findings, out: &mut LearnSummary) {
             // Tests of apps Floppy doesn't know rank nothing here.
             continue;
         };
-        let (Some(program), Some(file_type)) = (tidy(&t.program, 64), tidy(&t.file_type, 16)) else {
-            out.skipped.push(format!("a test result that isn't well formed ({})", t.app));
+        let (Some(program), Some(file_type)) = (program_name(&t.program), tidy(&t.file_type, 16)) else {
+            out.skipped.push(format!("a test result that isn't well formed ({})", shown(&t.app)));
             continue;
         };
         if t.worked > 10_000 || t.failed > 10_000 {
-            out.skipped.push(format!("a test result with implausible counts ({})", t.app));
+            out.skipped.push(format!("a test result with implausible counts ({})", shown(&t.app)));
             continue;
         }
-        let tally = Tally { app: h.name.to_string(), program, file_type, notes: Vec::new(), ..t.clone() };
+        // Only checked fields, and never someone else's notes.
+        let tally = Tally {
+            app: h.name.to_string(),
+            program,
+            file_type,
+            notes: Vec::new(),
+            version: t.version.as_deref().and_then(|v| tidy(v, 32)),
+            sha256: t.sha256.as_deref().filter(|x| is_hex(x, 64)).map(str::to_ascii_lowercase),
+            ..t.clone()
+        };
         if let (Some(size), Some(sha)) = (t.size, t.sha256.as_deref()) {
             if let Some(v) = version_of(t.os, h.name, t.version.as_deref(), &tally.program, size, sha) {
                 add_version(learned, out, KnownVersion { worked: t.worked, failed: t.failed, ..v }, true);
@@ -386,15 +497,17 @@ fn apply(learned: &mut Learned, f: &Findings, out: &mut LearnSummary) {
             x.os == tally.os && x.app == tally.app && x.version == tally.version && x.program.eq_ignore_ascii_case(&tally.program)
                 && x.sha256 == tally.sha256 && x.file_type.eq_ignore_ascii_case(&tally.file_type)
         };
+        let kept = learned.tests.len();
         match learned.tests.iter_mut().find(same) {
             Some(x) => {
-                x.worked += tally.worked;
-                x.failed += tally.failed;
+                x.worked = x.worked.saturating_add(tally.worked);
+                x.failed = x.failed.saturating_add(tally.failed);
                 if tally.last_tested > x.last_tested {
                     x.last_tested = tally.last_tested;
                     x.last_outcome = tally.last_outcome;
                 }
             }
+            None if kept >= MAX_KEPT => full(out, "test results"),
             None => learned.tests.push(tally),
         }
         out.tests += 1;
@@ -413,8 +526,10 @@ fn apply(learned: &mut Learned, f: &Findings, out: &mut LearnSummary) {
             out.skipped.push("a drop choice that isn't well formed".into());
             continue;
         }
+        let kept = learned.drop_rules.len();
         match learned.drop_rules.iter_mut().find(|r| r.signature == d.signature && r.choice == d.choice) {
-            Some(r) => r.answers += 1,
+            Some(r) => r.answers = r.answers.saturating_add(1),
+            None if kept >= MAX_KEPT => full(out, "drop choices"),
             None => learned.drop_rules.push(DropRule { signature: d.signature.clone(), choice: d.choice, answers: 1 }),
         }
         out.drop_choices += 1;
@@ -426,6 +541,8 @@ fn apply(learned: &mut Learned, f: &Findings, out: &mut LearnSummary) {
 /// most `MATERIALS_MAX`.
 const MATERIAL_MAX: u64 = 1 << 20;
 const MATERIALS_MAX: u64 = 4 << 20;
+/// Materials taken from one findings file, at most.
+const MATERIALS_COUNT: usize = 32;
 
 /// A material's file name: short, plain, `.md` or `.txt`.
 fn material_name_ok(name: &str) -> bool {
@@ -452,32 +569,52 @@ fn apply_materials(library: &Library, path: &Path, f: &Findings, pack: Option<u3
     };
     let dir = materials_dir(library, &f.id);
     let mut total = 0u64;
-    for m in &f.materials {
+    if f.materials.len() > MATERIALS_COUNT {
+        out.skipped.push(format!("materials: only the first {MATERIALS_COUNT} of {}", f.materials.len()));
+    }
+    let mut names: Vec<&str> = Vec::new();
+    for m in f.materials.iter().take(MATERIALS_COUNT) {
+        let name = shown(&m.name);
         let (Some(license), Some(source)) = (tidy(&m.license, 64), tidy(&m.source, 200)) else {
-            out.skipped.push(format!("material {}: it needs a licence and a source", m.name));
+            out.skipped.push(format!("material {name}: it needs a licence and a source"));
             continue;
         };
-        if !material_name_ok(&m.name) {
-            out.skipped.push(format!("material {}: only plain .md and .txt files are kept", m.name));
+        if !material_name_ok(&m.name) || names.iter().any(|n| n.eq_ignore_ascii_case(&m.name)) {
+            out.skipped.push(format!("material {name}: only plain .md and .txt files, each once, are kept"));
+            continue;
+        }
+        // A signed pack's materials must match the hashes it signed.
+        let want = m.sha256.as_deref().map(str::to_ascii_lowercase);
+        if want.as_deref().is_some_and(|h| !is_hex(h, 64)) || (pack.is_some() && want.is_none()) {
+            out.skipped.push(format!("material {name}: its SHA-256 is missing or malformed"));
             continue;
         }
         let Ok(entry) = z.by_name(&format!("materials/{}", m.name)) else {
-            out.skipped.push(format!("material {}: listed, but not in the zip", m.name));
+            out.skipped.push(format!("material {name}: listed, but not in the zip"));
             continue;
         };
         if entry.size() > MATERIAL_MAX || total + entry.size() > MATERIALS_MAX {
-            out.skipped.push(format!("material {}: too big", m.name));
+            out.skipped.push(format!("material {name}: too big"));
             continue;
         }
         let mut bytes = Vec::new();
         entry.take(MATERIAL_MAX).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
         total += bytes.len() as u64;
+        if let Some(want) = &want {
+            use sha2::{Digest, Sha256};
+            let got: String = Sha256::digest(&bytes).iter().map(|b| format!("{b:02x}")).collect();
+            if &got != want {
+                out.skipped.push(format!("material {name}: it isn't the file that was listed (SHA-256 differs)"));
+                continue;
+            }
+        }
         let Some(text) = String::from_utf8(bytes).ok().filter(|t| !t.contains('\0')) else {
-            out.skipped.push(format!("material {}: not plain text", m.name));
+            out.skipped.push(format!("material {name}: not plain text"));
             continue;
         };
+        names.push(&m.name);
         std::fs::create_dir_all(&dir).map_err(|e| format!("Couldn't keep the materials: {e}"))?;
-        std::fs::write(dir.join(&m.name), &text).map_err(|e| format!("Couldn't keep {}: {e}", m.name))?;
+        std::fs::write(dir.join(&m.name), &text).map_err(|e| format!("Couldn't keep {name}: {e}"))?;
         learned.materials.retain(|k| !(k.from == f.id && k.name == m.name));
         learned.materials.push(KeptMaterial { from: f.id.clone(), name: m.name.clone(), license, source });
         out.materials += 1;
@@ -611,20 +748,46 @@ mod tests {
         f
     }
 
-    #[test]
-    fn a_knowledge_pack_teaches_from_its_documents() {
-        let _turn = TURN.lock().unwrap_or_else(|p| p.into_inner());
+    /// A pack zip: the findings JSON, a signature by `key` when given, and
+    /// materials, each listed with its SHA-256 unless `hashes` is false.
+    fn pack_zip(path: &Path, f: Findings, materials: &[(&str, &str)], key: Option<&ed25519_dalek::SigningKey>, hashes: bool) {
+        pack_zip_with(path, f, materials, key, hashes, &[]);
+    }
+
+    /// `swapped`: files written under `materials/` in place of what the
+    /// JSON lists, as if changed after signing.
+    fn pack_zip_with(path: &Path, mut f: Findings, materials: &[(&str, &str)], key: Option<&ed25519_dalek::SigningKey>, hashes: bool, swapped: &[(&str, &str)]) {
+        use sha2::{Digest, Sha256};
         use std::io::Write;
-        let t = TempDir::new();
-        let lib = Library::new(t.path().join("lib"));
-        let next = crate::ai::builtin().version + 1;
-        let mut f = findings(&t, "floppy-ai-test-pack");
-        f.pack = Some(findings::PackInfo { ai_version: next, date: "2026-10-01".into(), what: "test".into() });
+        for (name, text) in materials {
+            let sha256 = hashes.then(|| Sha256::digest(text.as_bytes()).iter().map(|b| format!("{b:02x}")).collect());
+            f.materials.push(findings::Material { name: name.to_string(), license: "GPL-2.0-or-later".into(), source: "test".into(), note: String::new(), sha256 });
+        }
+        let json = serde_json::to_vec(&f).unwrap();
+        let mut z = zip::ZipWriter::new(fs::File::create(path).unwrap());
+        let opts = zip::write::SimpleFileOptions::default();
+        z.start_file(findings::JSON_NAME, opts).unwrap();
+        z.write_all(&json).unwrap();
+        if let Some(key) = key {
+            use ed25519_dalek::Signer;
+            z.start_file(SIG_NAME, opts).unwrap();
+            z.write_all(key.sign(&json).to_bytes().iter().map(|b| format!("{b:02x}")).collect::<String>().as_bytes()).unwrap();
+        }
+        for (name, text) in materials {
+            let text = swapped.iter().find(|(n, _)| n == name).map_or(*text, |(_, t)| *t);
+            z.start_file(format!("materials/{name}"), opts).unwrap();
+            z.write_all(text.as_bytes()).unwrap();
+        }
+        z.finish().unwrap();
+    }
+
+    fn pack_docs() -> (String, String) {
         let known_host = crate::cd::setup_sources()[0].url.clone();
         let handlers_doc = format!(
             "<!-- versions:start -->\n| Guest | App | Version | Program | Size | SHA-256 | Worked | Failed | Last tested |\n|---|---|---|---|---|---|---|---|---|\n\
              | DOS | WordPerfect | 5.1 pack | `WP.EXE` | 777 | `{}` | 4 | 0 | 2026-10-01 |\n<!-- versions:end -->\n\
-             <!-- filetypes:start -->\n| Guest | App | Extension | Reports | Last reported |\n|---|---|---|---|---|\n| DOS | WordPerfect | .Q6P | 3 | 2026-10-01 |\n<!-- filetypes:end -->\n",
+             <!-- filetypes:start -->\n| Guest | App | Extension | Reports | Last reported |\n|---|---|---|---|---|\n| DOS | WordPerfect | .Q6P | 3 | 2026-10-01 |\n\
+             | DOS | WordPerfect | .EXE | 9 | 2026-10-01 |\n<!-- filetypes:end -->\n",
             "ef".repeat(32)
         );
         let setup_doc = format!(
@@ -633,27 +796,31 @@ mod tests {
              | Mac ROM | own | A better guide | {known_host} | Moved here. |\n\
              | Mac ROM | free | Somewhere new | https://new.example.org/rom | Unknown site. |\n<!-- sources:end -->\n"
         );
-        let mut materials: Vec<(&str, String)> = vec![("app-handlers.md", handlers_doc), ("legal-setupfiles.md", setup_doc), ("notes.txt", "Thanks!".into())];
-        for (name, _) in &materials {
-            f.materials.push(findings::Material { name: name.to_string(), license: "GPL-2.0-or-later".into(), source: "test".into(), note: String::new() });
-        }
-        f.materials.push(findings::Material { name: "tool.exe".into(), license: "MIT".into(), source: "test".into(), note: String::new() });
-        materials.push(("tool.exe", "MZ".into()));
+        (handlers_doc, setup_doc)
+    }
+
+    fn pack(t: &TempDir, id: &str) -> Findings {
+        let mut f = findings(t, id);
+        f.pack = Some(findings::PackInfo { ai_version: crate::ai::builtin().version + 1, date: "2026-10-01".into(), what: "test".into() });
+        f
+    }
+
+    #[test]
+    fn a_signed_knowledge_pack_teaches_from_its_documents() {
+        let _turn = TURN.lock().unwrap_or_else(|p| p.into_inner());
+        let t = TempDir::new();
+        let lib = Library::new(t.path().join("lib"));
+        let next = crate::ai::builtin().version + 1;
+        let (handlers_doc, setup_doc) = pack_docs();
         let path = t.path().join("Floppy AI.zip");
-        let mut z = zip::ZipWriter::new(fs::File::create(&path).unwrap());
-        let opts = zip::write::SimpleFileOptions::default();
-        z.start_file(findings::JSON_NAME, opts).unwrap();
-        z.write_all(&serde_json::to_vec(&f).unwrap()).unwrap();
-        for (name, text) in &materials {
-            z.start_file(format!("materials/{name}"), opts).unwrap();
-            z.write_all(text.as_bytes()).unwrap();
-        }
-        z.finish().unwrap();
+        let materials = [("app-handlers.md", handlers_doc.as_str()), ("legal-setupfiles.md", setup_doc.as_str()), ("notes.txt", "Thanks!"), ("tool.exe", "MZ")];
+        pack_zip(&path, pack(&t, "floppy-ai-test-pack"), &materials, Some(&crate::ai::test_key()), true);
 
         let s = learn(&lib, &path).unwrap();
-        assert_eq!((s.ai_version, s.materials, s.versions, s.file_types, s.setup_sources), (Some(next), 3, 1, 1, 1), "{s:?}");
+        assert_eq!((s.ai_version, s.unsigned_pack, s.materials, s.versions, s.file_types, s.setup_sources), (Some(next), false, 3, 1, 1, 1), "{s:?}");
         assert!(s.skipped.iter().any(|x| x.contains("tool.exe")), "{:?}", s.skipped);
         assert!(s.skipped.iter().any(|x| x.contains("new.example.org")), "{:?}", s.skipped);
+        assert!(s.skipped.iter().any(|x| x.contains(".EXE: a program's extension")), "{:?}", s.skipped);
         assert!(lib.learned_dir().join("floppy-ai-test-pack/notes.txt").is_file());
         assert!(!lib.learned_dir().join("floppy-ai-test-pack/tool.exe").exists());
         let info = crate::ai::info();
@@ -666,6 +833,68 @@ mod tests {
         assert!(!lib.learned_dir().exists());
     }
 
+    #[test]
+    fn a_pack_without_a_trusted_signature_is_only_findings() {
+        let _turn = TURN.lock().unwrap_or_else(|p| p.into_inner());
+        let t = TempDir::new();
+        let lib = Library::new(t.path().join("lib"));
+        let (handlers_doc, setup_doc) = pack_docs();
+        let materials = [("app-handlers.md", handlers_doc.as_str()), ("legal-setupfiles.md", setup_doc.as_str())];
+        // Unsigned, and signed with a key Floppy doesn't trust: the tables
+        // still teach, but no AI version and no setup links.
+        let stranger = ed25519_dalek::SigningKey::from_bytes(&[9u8; 32]);
+        for (id, key) in [("fake-pack-unsigned", None), ("fake-pack-stranger", Some(&stranger))] {
+            let path = t.path().join(format!("{id}.zip"));
+            pack_zip(&path, pack(&t, id), &materials, key, true);
+            let s = learn(&lib, &path).unwrap();
+            assert!(s.unsigned_pack, "{id}");
+            assert_eq!((s.ai_version, s.setup_sources), (None, 0), "{id}: {s:?}");
+            assert!(!crate::ai::info().from_pack, "{id}");
+            assert!(setup_sources().iter().all(|x| x.name != "A better guide"), "{id}");
+        }
+        // A signed pack whose materials don't carry their hashes, or were
+        // swapped after signing, loses those materials.
+        let path = t.path().join("nohash.zip");
+        pack_zip(&path, pack(&t, "pack-nohash"), &[("notes.txt", "hi")], Some(&crate::ai::test_key()), false);
+        let s = learn(&lib, &path).unwrap();
+        assert_eq!(s.materials, 0);
+        assert!(s.skipped.iter().any(|x| x.contains("SHA-256 is missing")), "{:?}", s.skipped);
+        let path = t.path().join("swapped.zip");
+        pack_zip_with(&path, pack(&t, "pack-swapped"), &[("notes.txt", "hi")], Some(&crate::ai::test_key()), true, &[("notes.txt", "evil")]);
+        let s = learn(&lib, &path).unwrap();
+        assert_eq!(s.materials, 0, "{s:?}");
+        assert!(s.skipped.iter().any(|x| x.contains("SHA-256 differs")), "{:?}", s.skipped);
+        forget(&lib).unwrap();
+    }
+
+    #[test]
+    fn hostile_text_and_floods_are_refused() {
+        let _turn = TURN.lock().unwrap_or_else(|p| p.into_inner());
+        let t = TempDir::new();
+        let lib = Library::new(t.path().join("lib"));
+        let mut f = findings(&t, "f-hostile");
+        // A bidi override to make "EXE.5.1" read as "1.5.EXE", and a flood.
+        f.identities.push(IdentityFinding { os: GuestOs::Dos, app: "WordPerfect".into(), version: Some("\u{202E}1.5".into()), program: "WP.EXE".into(), size: 5, sha256: "aa".repeat(32) });
+        for i in 0..(MAX_PER_FILE + 10) {
+            f.file_types.push(FileTypeFinding { os: GuestOs::Dos, app: "WordPerfect".into(), ext: format!("Z{:X}", i % 4096) });
+        }
+        let path = t.path().join("hostile.json");
+        fs::write(&path, serde_json::to_vec(&f).unwrap()).unwrap();
+        let s = learn(&lib, &path).unwrap();
+        assert_eq!(s.versions, 0, "the spoofed version is refused");
+        assert!(s.skipped.iter().any(|x| x.contains("only the first 5000")), "{:?}", &s.skipped[..3.min(s.skipped.len())]);
+        assert!(s.file_types <= 4096);
+        // Messages never carry the sneaky characters.
+        assert!(s.skipped.iter().all(|x| !x.contains('\u{202E}')));
+        // An ID that could name a path or break a document is not findings.
+        let mut g = findings(&t, "ok");
+        g.id = "../../evil".into();
+        let bad = t.path().join("bad.json");
+        fs::write(&bad, serde_json::to_vec(&g).unwrap()).unwrap();
+        assert!(learn(&lib, &bad).is_err());
+        forget(&lib).unwrap();
+    }
+
     /// The pack `scripts/make-ai-pack.py` makes is one Floppy learns from.
     /// Ignored like the e2e test: it runs python3.
     #[test]
@@ -674,17 +903,27 @@ mod tests {
         let _turn = TURN.lock().unwrap_or_else(|p| p.into_inner());
         let t = TempDir::new();
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().to_path_buf();
-        let status = std::process::Command::new("python3")
-            .arg(root.join("scripts/make-ai-pack.py"))
-            .arg("--out")
-            .arg(t.path())
-            .status()
-            .expect("python3");
-        assert!(status.success());
         let v = crate::ai::builtin().version;
+        let make = |out: &Path, key: Option<&Path>| {
+            let mut cmd = std::process::Command::new("python3");
+            cmd.arg(root.join("scripts/make-ai-pack.py")).arg("--out").arg(out);
+            if let Some(key) = key {
+                cmd.arg("--sign").arg(key);
+            }
+            assert!(cmd.status().expect("python3").success());
+            out.join(format!("Floppy AI {v}.zip"))
+        };
+        // Unsigned: learned from, but not official.
         let lib = Library::new(t.path().join("lib"));
-        let s = learn(&lib, &t.path().join(format!("Floppy AI {v}.zip"))).unwrap();
-        assert_eq!((s.ai_version, s.materials), (Some(v), 4), "{s:?}");
+        let s = learn(&lib, &make(&t.path().join("unsigned"), None)).unwrap();
+        assert_eq!((s.ai_version, s.unsigned_pack, s.materials), (None, true, 4), "{s:?}");
+        assert!(s.skipped.is_empty(), "{:?}", s.skipped);
+        forget(&lib).unwrap();
+        // Signed with the test key (the seed of `ai::test_key`): official.
+        let key = t.path().join("test.key");
+        fs::write(&key, "2a".repeat(32)).unwrap();
+        let s = learn(&lib, &make(&t.path().join("signed"), Some(&key))).unwrap();
+        assert_eq!((s.ai_version, s.unsigned_pack, s.materials), (Some(v), false, 4), "{s:?}");
         assert!(s.skipped.is_empty(), "{:?}", s.skipped);
         forget(&lib).unwrap();
     }

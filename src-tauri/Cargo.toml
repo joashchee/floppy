@@ -34,6 +34,10 @@ plist = "1"
 # SHA-256 of files a files disc brought that Floppy couldn't use, for the
 # missing-files list's skip lines (cd.rs).
 sha2 = "0.10"
+# Checking that a Floppy AI knowledge pack is signed by Floppy's
+# maintainers (learned.rs, ai.rs). Verification only in the app; signing is
+# examples/ai-pack-key.rs. BSD-3-Clause, and its dependencies MIT/Apache-2.0.
+ed25519-dalek = { version = "2", default-features = false, features = ["std"] }
 
 # Resource forks and Finder info (getxattr/setxattr) for classic Mac imports.
 [target.'cfg(target_os = "macos")'.dependencies]

@@ -760,7 +760,11 @@ function App() {
         const people = l.forMaintainers
           ? ` ${l.forMaintainers} note${l.forMaintainers === 1 ? "" : "s"} for Floppy's maintainers (errors, setup reports) stay in the file.`
           : "";
-        const pack = l.aiVersion ? ` Floppy AI is now version ${l.aiVersion}.` : "";
+        const pack = l.aiVersion
+          ? ` Floppy AI is now version ${l.aiVersion}.`
+          : l.unsignedPack
+            ? " It calls itself a Floppy AI pack but isn't signed by Floppy's maintainers, so it was learned from like anyone's findings: the AI version and where Floppy points you for setup files stay as they were."
+            : "";
         const sources = l.setupSources ? ` ${l.setupSources} setup source${l.setupSources === 1 ? "" : "s"} updated.` : "";
         const kept = l.materials ? ` ${l.materials} material${l.materials === 1 ? "" : "s"} kept to read (About Floppy).` : "";
         setMessage(`Learned from ${baseName(path)}: ${describeLearned(l)}.${pack}${sources}${kept}${people}`);
@@ -2476,6 +2480,8 @@ function IdentityFields({
       : null
     : id.by === "hash"
       ? "Recognized: one of its programs matches a known version exactly."
+      : id.by === "learned"
+        ? "Going by findings someone shared: one of its programs matches a version they identified. Floppy hasn't checked it itself, so correct it here if it's wrong."
       : !handler
         ? "Not one of the known apps, so it opens only the file types in Also opens."
         : null;

@@ -60,7 +60,7 @@ pub const FORMAT: &str = "floppy-findings";
 /// The file inside the zip.
 pub const JSON_NAME: &str = "floppy-findings.json";
 
-#[derive(Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Findings {
     pub format: String,
@@ -178,6 +178,10 @@ pub struct Material {
     pub source: String,
     #[serde(default)]
     pub note: String,
+    /// Its SHA-256, checked when it's read. A signed pack's materials must
+    /// have one: the signature covers the JSON, the hashes the files.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sha256: Option<String>,
 }
 
 /// Where the user said a dropped item goes (drops.rs).

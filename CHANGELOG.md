@@ -8,6 +8,28 @@ against the day the change was made.
 
 ## Unreleased
 
+- **Floppy AI hardened against abuse** (2026-09-28), with a standing
+  rule to review every change to it (`docs/floppy-ai.md`, "Safeguards"):
+  - knowledge packs count only when signed with the maintainers' Ed25519
+    key (`ed25519-dalek`, BSD-3-Clause; `examples/ai-pack-key.rs`,
+    `make-ai-pack.py --sign`), so a forged pack can't raise the AI
+    version or point setup links at pirated ROMs or malware on a shared
+    host; materials carry SHA-256s the signature covers;
+  - other people's test results only break ties in "Open with", never
+    bury the user's own working app; learned identities say so
+    (`learned`) and are never exported as the user's own;
+  - program extensions are never learned as document types; program
+    names must be plain file names;
+  - floods are capped (5,000 entries of a kind per file, 50,000 kept,
+    1,000 files, 32 materials), counts saturate, IDs are plain, and
+    bidi-override and zero-width characters are refused;
+  - a dropped file is no longer read whole to see whether it's
+    MacBinary (at most 64 MiB), and a folder's setup-file check stops
+    walking early;
+  - `merge-findings.py` strips table markers, HTML, backticks and pipes
+    from every cell, checks every field's shape, and drops unknown guests
+    and slots.
+
 - **Floppy AI versions and knowledge packs** (2026-09-28): what Floppy
   knows about old files, apps and setup now has its own version
   (`docs/floppy-ai.md`, `ai.rs`), shown next to the app version
