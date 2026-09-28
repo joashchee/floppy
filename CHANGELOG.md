@@ -6,7 +6,7 @@ All notable changes to Floppy are recorded here. Format loosely follows
 Update this file whenever a change lands. A short bullet is enough, dated
 against the day the change was made.
 
-## Unreleased
+## 0.4.0 (2026-09-29)
 
 - **Feedback for everything you do, and a loading screen** (2026-09-29),
   the ansiapps apps' shared conventions (Diskette is the reference):
