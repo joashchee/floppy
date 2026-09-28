@@ -208,6 +208,9 @@ button.icontext-btn .btn-icon { display: inline-flex; width: 14px; height: 14px;
 /* The left column: the library's apps, then its documents. */
 .layout-column { display: flex; flex-direction: column; min-width: 0; }
 .docs-panel > .detail-actions { margin-top: 12px; }
+/* Start <guest>: top of the DOS library, under the Mac's and Amiga's setup files */
+.guest-start { align-items: center; margin: 10px 0 12px; }
+.guest-start .system-note { flex: 1 1 200px; }
 .layout-column > .panel { min-width: 0; }
 @media (max-width: 720px) {
   .layout { grid-template-columns: 1fr; }

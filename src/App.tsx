@@ -130,6 +130,13 @@ function quitHint(os: GuestOs, asked: boolean): string {
   return asked ? "Still running? Force Quit stops it at once." : "Save your work in the app before quitting.";
 }
 
+/** commands.rs `guest_id`: the running-app ID of a guest started on its own (`start_guest`). */
+function guestRunId(os: GuestOs): string {
+  return `guest-${os}`;
+}
+
+const GUESTS: GuestOs[] = ["dos", "mac-classic", "amiga"];
+
 function baseName(path: string): string {
   return path.split(/[\\/]/).filter(Boolean).pop() ?? path;
 }
@@ -380,7 +387,7 @@ function App() {
     [guestDocs],
   );
   const selectedDoc = guestDocs.find((d) => d.id === selectedDocId) ?? null;
-  const guestRunning = apps.some((a) => a.os === guest && running.has(a.id));
+  const guestRunning = running.has(guestRunId(guest)) || apps.some((a) => a.os === guest && running.has(a.id));
   // Only the selected guest's: the setup strip and drop target show on its tab alone.
   const missingSetup = useMemo(() => missingSetupFiles(statuses, guest), [statuses, guest]);
   const setupNeeded = missingSetup.length > 0;
@@ -451,7 +458,13 @@ function App() {
     invoke<RequestSummary>("request_summary").then(setRequest, () => {});
   }, [disketteRunning, apps, statuses]);
   // Basilisk II and FS-UAE use the system files, so they can't change mid-run.
-  const systemInUse = apps.some((a) => a.os !== "dos" && running.has(a.id));
+  const systemInUse =
+    running.has(guestRunId("mac-classic")) || running.has(guestRunId("amiga")) || apps.some((a) => a.os !== "dos" && running.has(a.id));
+  // What's running, apps and guests started on their own, for the Quit strip.
+  const runningItems: { id: string; os: GuestOs; name: string }[] = [
+    ...GUESTS.filter((os) => running.has(guestRunId(os))).map((os) => ({ id: guestRunId(os), os, name: GUEST_LABEL[os] })),
+    ...apps.filter((a) => running.has(a.id)),
+  ];
 
   useEffect(() => applyTheme(theme), [theme]);
 
@@ -529,7 +542,24 @@ function App() {
   }
 
   /** Asks an app's emulator to quit, and forces it the second time (commands.rs `quit_app`). */
-  async function quitApp(app: LibraryApp) {
+  /** Starts a guest with no app, once none of its setup files is missing (commands.rs `start_guest`). */
+  async function startGuest(os: GuestOs) {
+    setError(null);
+    try {
+      await invoke("start_guest", { os });
+      setMessage(
+        os === "dos"
+          ? "Starting DOS at a C:\\ prompt. Every app in the library is on drive C:."
+          : os === "mac-classic"
+            ? "Starting the Mac. Your apps and documents are on its Unix volume."
+            : "Starting the Amiga. Your apps and documents are on its Floppy: drive.",
+      );
+    } catch (e) {
+      fail(e);
+    }
+  }
+
+  async function quitApp(app: { id: string; os: GuestOs }) {
     const force = quitAsked.has(app.id);
     setError(null);
     try {
@@ -1826,9 +1856,7 @@ function App() {
         </div>
       ))}
 
-      {apps
-        .filter((a) => running.has(a.id))
-        .map((a) => (
+      {runningItems.map((a) => (
           <div className="setup-drop running-offer" key={`running-${a.id}`}>
             <span className="setup-drop-icon">{GUEST_UI[a.os].icon()}</span>
             <p className="setup-drop-text">
@@ -1863,6 +1891,22 @@ function App() {
             <span className="section-icon">{ui.icon()}</span>
             {GUEST_LABEL[guest]} Library
           </h2>
+          {guest === "dos" && status?.complete && status.found && (
+            <div className="detail-actions guest-start">
+              <button
+                type="button"
+                className="primary icontext-btn"
+                disabled={!!busy || running.has(guestRunId("dos"))}
+                onClick={() => void startGuest("dos")}
+                title="DOSBox at a C:\ prompt, with every app in the library on drive C:"
+              >
+                <span className="btn-icon">
+                  <PromptIcon />
+                </span>
+                {running.has(guestRunId("dos")) ? "DOS Is Running" : "Start DOS"}
+              </button>
+            </div>
+          )}
           <p className="desc">{ui.libraryDesc}</p>
           {guest !== "dos" && status && (
             <SystemSetup
@@ -1879,6 +1923,8 @@ function App() {
               onOpenSource={(src) => void openSource(src)}
               onReport={startReport}
               onAros={(on) => void useAros(on)}
+              onStart={() => void startGuest(guest)}
+              started={running.has(guestRunId(guest))}
             />
           )}
 
@@ -1984,9 +2030,9 @@ function App() {
               onReveal={() => void revealLibraryFile(selectedDoc.os, selectedDoc.file)}
               onExport={() => void exportLibraryFile(selectedDoc.os, selectedDoc.file)}
               onRemove={() => void removeDocument(selectedDoc)}
-              startApp={guestApps.find((a) => a.favorite) ?? guestApps[0] ?? null}
-              startBlocked={launchBlocked || guestRunning}
-              onStart={(a) => void launch(a, true)}
+              canStart={!!status?.complete && !!status.found && !status.blocker}
+              startBlocked={!!busy || guestRunning}
+              onStart={() => void startGuest(selectedDoc.os)}
             />
           ) : !selected ? (
             <p className="empty">
@@ -2608,7 +2654,7 @@ function DocumentDetails({
   onReveal,
   onExport,
   onRemove,
-  startApp,
+  canStart,
   startBlocked,
   onStart,
 }: {
@@ -2620,9 +2666,10 @@ function DocumentDetails({
   onExport: () => void;
   onRemove: () => void;
   /** Mac and Amiga: an app of the guest's to start it with, so the user can open the document there. */
-  startApp: LibraryApp | null;
+  /** Mac and Amiga: the guest can be started on its own (its setup is complete). */
+  canStart: boolean;
   startBlocked: boolean;
-  onStart: (app: LibraryApp) => void;
+  onStart: () => void;
 }) {
   const [openers, setOpeners] = useState<Opener[]>([]);
   const [choice, setChoice] = useState(0);
@@ -2644,9 +2691,9 @@ function DocumentDetails({
       {doc.os !== "dos" ? (
         <p className="system-note">
           Floppy can't open {GUEST_LABEL[doc.os]} documents in their app by itself yet.{" "}
-          {startApp
-            ? `Start ${doc.os === "mac-classic" ? "Mac OS" : "Workbench"}, then open ${docPath(doc)} there.`
-            : `Import a ${GUEST_LABEL[doc.os]} app that opens it, then start it and open ${docPath(doc)} there.`}
+          {canStart
+            ? `Start ${GUEST_LABEL[doc.os]}, then open ${docPath(doc)} there.`
+            : `Finish the ${GUEST_LABEL[doc.os]} setup files first, then start it and open ${docPath(doc)} there.`}
         </p>
       ) : openers.length > 0 ? (
         <label className="field">
@@ -2687,13 +2734,13 @@ function DocumentDetails({
           <button
             type="button"
             className="primary icontext-btn"
-            disabled={busy || !startApp || startBlocked}
-            onClick={() => startApp && onStart(startApp)}
+            disabled={busy || !canStart || startBlocked}
+            onClick={onStart}
           >
             <span className="btn-icon">
               <PlayIcon />
             </span>
-            {doc.os === "mac-classic" ? "Start Mac OS" : "Start Workbench"}
+            Start {GUEST_LABEL[doc.os]}
           </button>
         )}
         <button type="button" className="icontext-btn" onClick={onReveal}>
@@ -2734,6 +2781,8 @@ function SystemSetup({
   onOpenSource,
   onReport,
   onAros,
+  onStart,
+  started,
 }: {
   status: GuestStatus;
   disabled: boolean;
@@ -2748,6 +2797,9 @@ function SystemSetup({
   onOpenSource: (src: SetupSource) => void;
   onReport: (slot: string, filled: boolean) => void;
   onAros: (on: boolean) => void;
+  /** Starts the guest on its own, shown once none of its setup files is missing. */
+  onStart: () => void;
+  started: boolean;
 }) {
   const amiga = status.os === "amiga";
   const { rom, boot, model, aros } = status.system;
@@ -2813,6 +2865,19 @@ function SystemSetup({
               </option>
             ))}
           </select>
+        </div>
+      )}
+      {status.complete && status.found && !status.blocker && (
+        <div className="detail-actions guest-start">
+          <button type="button" className="primary icontext-btn" disabled={disabled} onClick={onStart}>
+            <span className="btn-icon">
+              <PlayIcon />
+            </span>
+            {started ? `${GUEST_LABEL[status.os]} Is Running` : `Start ${GUEST_LABEL[status.os]}`}
+          </button>
+          <span className="system-note">
+            {amiga ? "Boots Workbench, with your apps on the Floppy: drive." : "Boots the startup disk, with your apps on the Unix volume."}
+          </span>
         </div>
       )}
       {!rom && (

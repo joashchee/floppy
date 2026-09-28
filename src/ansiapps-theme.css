@@ -194,6 +194,7 @@
 }
 :root[data-theme="ansiapps"] .layout-column { gap: 0; }
 :root[data-theme="ansiapps"] .docs-panel > .detail-actions { margin-top: 16px; }
+:root[data-theme="ansiapps"] .guest-start { margin: 16px 0 0; gap: 0 1ch; }
 
 /* Horizontal rules inside boxes: a row of ─ */
 :root[data-theme="ansiapps"] .setup-sources,

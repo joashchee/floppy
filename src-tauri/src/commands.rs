@@ -58,6 +58,9 @@ pub struct GuestStatus {
     pub rom_note: Option<String>,
     /// Why apps can't launch yet, or `None` when they can.
     pub blocker: Option<String>,
+    /// None of its setup files is missing (always so for DOS), so it can
+    /// be started on its own (`start_guest`).
+    pub complete: bool,
 }
 
 fn running_map(state: &AppState) -> HashMap<String, GuestOs> {
@@ -101,7 +104,59 @@ fn guest_status(app: &AppHandle, library: &Library, os: GuestOs) -> Result<Guest
             _ => None,
         }
     };
-    Ok(GuestStatus { os, emulator: emu.name(), found: found.is_some(), source: found.map(|(_, s)| s), system, rom_note, blocker })
+    let complete = missing_for(library, os)?.is_empty();
+    Ok(GuestStatus { os, emulator: emu.name(), found: found.is_some(), source: found.map(|(_, s)| s), system, rom_note, blocker, complete })
+}
+
+/// `os`'s setup files still missing (cd.rs).
+fn missing_for(library: &Library, os: GuestOs) -> Result<Vec<cd::Slot>, String> {
+    Ok(cd::missing_slots(library)?.into_iter().filter(|s| s.os() == os).collect())
+}
+
+/// The running-app ID of a guest started on its own.
+pub fn guest_id(os: GuestOs) -> String {
+    let name = match os {
+        GuestOs::Dos => "dos",
+        GuestOs::MacClassic => "mac-classic",
+        GuestOs::Amiga => "amiga",
+    };
+    format!("guest-{name}")
+}
+
+/// A stand-in for "no app": the guest's whole library folder, nothing to
+/// run. DOS stops at the `C:\` prompt, the Mac boots its startup disk,
+/// the Amiga its Workbench.
+fn guest_entry(os: GuestOs) -> LibraryApp {
+    LibraryApp {
+        id: guest_id(os),
+        os,
+        name: crate::library::guest_label(os).to_string(),
+        dir: String::new(),
+        program: None,
+        programs: Vec::new(),
+        source_name: String::new(),
+        added: 0,
+        opens: Vec::new(),
+        program_ids: Default::default(),
+        identity: None,
+        favorite: false,
+        errors: String::new(),
+        named_by_user: false,
+        share_errors: false,
+    }
+}
+
+/// Starts a guest with no app: the "Start <guest>" button, once none of
+/// its setup files is missing.
+#[tauri::command]
+pub fn start_guest(app: AppHandle, state: State<AppState>, os: String) -> Result<(), String> {
+    let os = GuestOs::parse(&os).ok_or("Unknown guest OS.")?;
+    let missing = missing_for(&state.library, os)?;
+    if !missing.is_empty() {
+        let names: Vec<&str> = missing.iter().map(|s| s.label()).collect();
+        return Err(format!("Add the {} first.", names.join(" and ")));
+    }
+    start(app, &state, guest_entry(os), None, None, None)
 }
 
 fn kickstart_note(path: &Path) -> Option<String> {
@@ -1003,6 +1058,27 @@ pub fn export_file(state: State<AppState>, os: String, path: String, dest_dir: S
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_guest_starts_on_its_own_once_its_setup_is_complete() {
+        let t = crate::testutil::TempDir::new();
+        let lib = Library::new(t.path().join("lib"));
+        // DOS needs no setup files; the Mac and Amiga do.
+        assert!(missing_for(&lib, GuestOs::Dos).unwrap().is_empty());
+        assert_eq!(missing_for(&lib, GuestOs::MacClassic).unwrap().len(), 2);
+        assert!(!missing_for(&lib, GuestOs::Amiga).unwrap().is_empty());
+        // DOS with no app: the whole library as C:, a prompt at C:\, and
+        // nothing run (so no exit either).
+        let conf = std::fs::read_to_string(write_launch_config(&lib, &guest_entry(GuestOs::Dos), None, None).unwrap()).unwrap();
+        assert!(conf.contains("mount c ") && conf.contains("cd \\\n"), "{conf}");
+        assert!(!conf.contains("exit"), "{conf}");
+        // Its running ID can't be an app's (those start with the guest's
+        // folder name), so Quit and the strip find it.
+        for os in [GuestOs::Dos, GuestOs::MacClassic, GuestOs::Amiga] {
+            assert!(guest_id(os).starts_with("guest-"));
+            assert_eq!(guest_entry(os).id, guest_id(os));
+        }
+    }
 
     fn word(identity: Option<crate::library::Identity>) -> LibraryApp {
         LibraryApp {
