@@ -45,6 +45,9 @@ fn main() {
             if std::path::Path::new(path).exists() {
                 die(&format!("{path} exists already: not replacing a key."));
             }
+            if let Some(dir) = std::path::Path::new(path).parent().filter(|d| !d.as_os_str().is_empty()) {
+                std::fs::create_dir_all(dir).unwrap_or_else(|e| die(&format!("Couldn't create {}: {e}", dir.display())));
+            }
             let mut seed = [0u8; 32];
             std::fs::File::open("/dev/urandom").and_then(|mut f| f.read_exact(&mut seed)).unwrap_or_else(|e| die(&format!("No randomness: {e}")));
             let key = SigningKey::from_bytes(&seed);
