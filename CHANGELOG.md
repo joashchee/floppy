@@ -8,6 +8,9 @@ against the day the change was made.
 
 ## Unreleased
 
+- The maintainers' first Floppy AI pack key is listed in
+  `docs/floppy-ai.md` (2026-09-28): packs signed with it are official.
+
 - **Floppy AI hardened against abuse** (2026-09-28), with a standing
   rule to review every change to it (`docs/floppy-ai.md`, "Safeguards"):
   - knowledge packs count only when signed with the maintainers' Ed25519

@@ -351,7 +351,10 @@ gitignored `CLAUDE.local.md`, never in committed files.
   newer than the build raises the Floppy's AI version, and its setup
   sources replace the build's for links to sites the build already
   points to. Unsigned, it's ordinary findings. `--site` refuses an
-  unsigned pack unless `--allow-unsigned` (only until a key exists).
+  unsigned pack unless `--allow-unsigned`. The maintainer's key is at
+  `~/.config/ansiapps/floppy-ai-pack.key` on their Mac, so packs are
+  built and signed there (`--sign ~/.config/ansiapps/floppy-ai-pack.key`),
+  never in a cloud session.
 - **Harden against abuse whenever the AI processes change (standing
   rule).** Findings, packs and drops come from other people, so treat
   them as hostile. Any change to `drops.rs`, `learned.rs`, `findings.rs`,

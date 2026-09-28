@@ -81,12 +81,13 @@ abuse against this list, and the list grows with every new safeguard.
 Public keys (Ed25519, hex) whose signatures make a pack official. Make
 one with `cargo run --manifest-path src-tauri/Cargo.toml --example
 ai-pack-key -- new <keyfile>` on the maintainer's own machine; the
-secret stays in `<keyfile>`, outside every repo. Until a key is listed
-here, no pack is official: packs still teach, as ordinary findings.
+secret stays in `<keyfile>`, outside every repo. A pack signed with any
+key listed here is official; delete a key in a release to retire it.
 
 <!-- pack-keys:start -->
 | Key | Added | Note |
 |---|---|---|
+| eae16562bb2a4c6025fd9ca465963973193dd0c83cd47ef9f4e6392174d87447 | 2026-09-28 | The maintainer's first pack key (secret on the maintainer's Mac only) |
 <!-- pack-keys:end -->
 
 ## Versions
