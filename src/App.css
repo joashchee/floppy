@@ -184,9 +184,11 @@ button.icontext-btn .btn-icon { display: inline-flex; width: 14px; height: 14px;
 
 .toolbar { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 18px; }
 
-/* Import progress */
+/* Activity progress (components/ActivityStatus.tsx) */
 .scan-status-row { display: flex; flex-direction: column; gap: 6px; margin-bottom: 18px; }
 .scan-status-label { font-size: 12px; color: var(--muted); font-family: var(--font-mono); }
+/* A progress bar's estimated completion (components/ProgressBar.tsx). */
+.progress-eta { font-size: 11px; color: var(--muted); font-family: var(--font-mono); }
 .progress-bar {
   position: relative;
   height: 6px;
@@ -234,6 +236,8 @@ button.icontext-btn .btn-icon { display: inline-flex; width: 14px; height: 14px;
 }
 .app-row:hover { border-color: var(--accent-dim); }
 .app-row:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* An app being removed: dimmed and not clickable until the row goes away. */
+.app-row.busy { opacity: 0.55; pointer-events: none; }
 .app-row.selected { border-color: var(--accent); background: var(--panel); }
 .app-row .row-icon { display: flex; color: var(--accent); flex-shrink: 0; }
 .app-row .row-icon svg { width: 16px; height: 16px; }

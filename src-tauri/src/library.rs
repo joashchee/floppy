@@ -421,6 +421,12 @@ impl Library {
     }
 
     pub fn import(&self, os: GuestOs, src: &Path) -> Result<LibraryApp, String> {
+        self.import_with_progress(os, src, &mut |_, _| {})
+    }
+
+    /// `import`, calling `progress(done, total)` in bytes as the copy or
+    /// unpack goes, which is nearly all of an import's time.
+    pub fn import_with_progress(&self, os: GuestOs, src: &Path, progress: &mut dyn FnMut(u64, u64)) -> Result<LibraryApp, String> {
         let _g = self.guard();
         let src_name = src
             .file_name()
@@ -431,7 +437,7 @@ impl Library {
 
         let staging = Staging::new(&self.root)?;
         let name = if meta.is_dir() {
-            copy_tree(src, staging.path(), keep_forks).map_err(|e| format!("Couldn't copy {src_name}: {e}"))?;
+            copy_tree_with_progress(src, staging.path(), keep_forks, progress).map_err(|e| format!("Couldn't copy {src_name}: {e}"))?;
             src_name.clone()
         } else {
             let (stem, ext) = match src_name.rsplit_once('.') {
@@ -439,10 +445,14 @@ impl Library {
                 _ => (src_name.clone(), String::new()),
             };
             if ext == "zip" {
-                extract_zip(src, staging.path(), keep_forks).map_err(|e| format!("Couldn't unpack {src_name}: {e}"))?;
+                extract_zip_with_progress(src, staging.path(), keep_forks, progress)
+                    .map_err(|e| format!("Couldn't unpack {src_name}: {e}"))?;
                 stem
             } else {
-                import_file(os, src, &src_name, &ext, staging.path())?.unwrap_or(stem)
+                progress(0, meta.len());
+                let name = import_file(os, src, &src_name, &ext, staging.path())?.unwrap_or(stem);
+                progress(meta.len(), meta.len());
+                name
             }
         };
         if keep_forks {
@@ -1170,9 +1180,31 @@ fn is_host_clutter(name: &str) -> bool {
 /// they're the `.rsrc`/`.finf` folders beside each file, copied like any
 /// other folder.
 fn copy_tree(src: &Path, dest: &Path, keep_forks: bool) -> io::Result<()> {
+    copy_tree_with_progress(src, dest, keep_forks, &mut |_, _| {})
+}
+
+/// The files `copy_tree` copies (not their folders or symlinks).
+fn tree_files(src: &Path, keep_forks: bool) -> impl Iterator<Item = walkdir::Result<walkdir::DirEntry>> {
+    WalkDir::new(src)
+        .min_depth(1)
+        .follow_links(false)
+        .into_iter()
+        .filter_entry(move |e| keep_forks || !is_host_clutter(&e.file_name().to_string_lossy()))
+}
+
+/// `copy_tree`, calling `progress(done, total)` in bytes after each file.
+/// The total comes from a first walk, which reads only metadata.
+fn copy_tree_with_progress(src: &Path, dest: &Path, keep_forks: bool, progress: &mut dyn FnMut(u64, u64)) -> io::Result<()> {
     fs::create_dir_all(dest)?;
-    let walker = WalkDir::new(src).min_depth(1).follow_links(false).into_iter();
-    for entry in walker.filter_entry(|e| keep_forks || !is_host_clutter(&e.file_name().to_string_lossy())) {
+    let total: u64 = tree_files(src, keep_forks)
+        .filter_map(Result::ok)
+        .filter(|e| e.file_type().is_file())
+        .filter_map(|e| e.metadata().ok())
+        .map(|m| m.len())
+        .sum();
+    let mut done = 0u64;
+    progress(done, total);
+    for entry in tree_files(src, keep_forks) {
         let entry = entry.map_err(io::Error::other)?;
         let rel = entry.path().strip_prefix(src).map_err(io::Error::other)?;
         let out = dest.join(rel);
@@ -1180,7 +1212,8 @@ fn copy_tree(src: &Path, dest: &Path, keep_forks: bool) -> io::Result<()> {
         if ft.is_dir() {
             fs::create_dir_all(&out)?;
         } else if ft.is_file() {
-            fs::copy(entry.path(), &out)?;
+            done += fs::copy(entry.path(), &out)?;
+            progress(done.min(total), total);
         }
         // Symlinks are skipped: the guests have no equivalent, and
         // following one could copy far more than the folder imported.
@@ -1192,13 +1225,34 @@ fn copy_tree(src: &Path, dest: &Path, keep_forks: bool) -> io::Result<()> {
 /// and stopping past MAX_ZIP_BYTES. Without `keep_forks`, macOS clutter
 /// (`__MACOSX/`, `._` files, `.DS_Store`) is left out.
 pub(crate) fn extract_zip(src: &Path, dest: &Path, keep_forks: bool) -> io::Result<()> {
+    extract_zip_with_progress(src, dest, keep_forks, &mut |_, _| {})
+}
+
+/// Whether `extract_zip` skips this entry name as macOS clutter.
+fn zip_clutter(rel: &Path, keep_forks: bool) -> bool {
+    !keep_forks && rel.components().any(|c| is_host_clutter(&c.as_os_str().to_string_lossy()))
+}
+
+/// `extract_zip`, calling `progress(done, total)` in unpacked bytes after
+/// each file. The total is what the zip's directory says its files unpack
+/// to, capped at MAX_ZIP_BYTES (past which the unpack stops anyway).
+fn extract_zip_with_progress(src: &Path, dest: &Path, keep_forks: bool, progress: &mut dyn FnMut(u64, u64)) -> io::Result<()> {
     let mut zip = zip::ZipArchive::new(File::open(src)?).map_err(io::Error::other)?;
+    let mut expected = 0u64;
+    for i in 0..zip.len() {
+        let entry = zip.by_index_raw(i).map_err(io::Error::other)?;
+        if !entry.is_dir() && entry.enclosed_name().is_some_and(|rel| !zip_clutter(&rel, keep_forks)) {
+            expected = expected.saturating_add(entry.size());
+        }
+    }
+    let expected = expected.min(MAX_ZIP_BYTES);
+    progress(0, expected);
     let mut total = 0u64;
     for i in 0..zip.len() {
         let mut entry = zip.by_index(i).map_err(io::Error::other)?;
         // enclosed_name rejects absolute paths and `..` (zip-slip).
         let Some(rel) = entry.enclosed_name() else { continue };
-        if !keep_forks && rel.components().any(|c| is_host_clutter(&c.as_os_str().to_string_lossy())) {
+        if zip_clutter(&rel, keep_forks) {
             continue;
         }
         let out = dest.join(rel);
@@ -1214,6 +1268,7 @@ pub(crate) fn extract_zip(src: &Path, dest: &Path, keep_forks: bool) -> io::Resu
             fs::create_dir_all(parent)?;
         }
         io::copy(&mut entry, &mut File::create(&out)?)?;
+        progress(total.min(expected), expected);
     }
     Ok(())
 }
@@ -1347,6 +1402,36 @@ mod tests {
         // Staging is cleaned up.
         assert_eq!(fs::read_dir(lib.root().join(".staging")).unwrap().count(), 0);
         assert_eq!(lib.list().unwrap().len(), 1);
+    }
+
+    /// The window's import bar counts bytes: it must start at 0, only go
+    /// up, and end at a total that leaves out skipped macOS clutter.
+    #[test]
+    fn import_progress_counts_the_bytes_copied() {
+        let t = TempDir::new();
+        let lib = Library::new(t.path().join("lib"));
+        let check = |src: &Path, total: u64| {
+            let mut seen: Vec<(u64, u64)> = Vec::new();
+            lib.import_with_progress(GuestOs::Dos, src, &mut |d, n| seen.push((d, n))).unwrap();
+            assert_eq!(seen.first(), Some(&(0, total)), "{src:?}");
+            assert_eq!(seen.last(), Some(&(total, total)), "{src:?}");
+            assert!(seen.windows(2).all(|w| w[0].0 <= w[1].0 && w[0].1 == w[1].1), "{seen:?}");
+        };
+
+        let zip = t.path().join("wp51.zip");
+        write_zip(&zip, &[("WP51/WP.EXE", b"MZ1234"), ("WP51/HELP.TXT", b"help"), ("__MACOSX/WP51/._WP.EXE", b"clutter")]);
+        check(&zip, 10);
+
+        let folder = t.path().join("Game");
+        fs::create_dir_all(folder.join("DATA")).unwrap();
+        fs::write(folder.join("GAME.EXE"), b"MZ12").unwrap();
+        fs::write(folder.join("DATA/LEVEL1.DAT"), b"123456").unwrap();
+        fs::write(folder.join(".DS_Store"), b"clutter").unwrap();
+        check(&folder, 10);
+
+        let exe = t.path().join("TOOL.COM");
+        fs::write(&exe, b"\xB4\x4C\xCD\x21").unwrap();
+        check(&exe, 4);
     }
 
     #[test]

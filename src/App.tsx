@@ -7,7 +7,9 @@ import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { Dialog } from "./components/Dialog";
 import { applyTheme, loadTheme, type Theme } from "./lib/theme";
 import { isLinux, SHOW_IN_FILES } from "./lib/platform";
-import { ProgressBar } from "./components/ProgressBar";
+import { ActivityStatus } from "./components/ActivityStatus";
+import { StartupScreen } from "./components/StartupScreen";
+import { type ActivityUpdate, useActivities } from "./lib/activity";
 import {
   AmigaAppIcon,
   AppMarkIcon,
@@ -300,6 +302,30 @@ function describeRequest(r: RequestSummary): string {
 /** How often to check whether Diskette is running. */
 const DISKETTE_POLL_MS = 5000;
 
+/**
+ * The activity key (lib/activity.ts) of work that changes the library or
+ * the setup files: imports, discs, backups. One runs at a time, and the
+ * controls that would start another wait while it does.
+ */
+const WORK = "work";
+
+/** Launch-time calls StartupScreen waits for, in the order it names them. */
+const STARTUP_STEPS = ["library", "setup", "handlers", "sources", "opened"] as const;
+type StartupStep = (typeof STARTUP_STEPS)[number];
+const STARTUP_LABELS: Record<StartupStep, string> = {
+  library: "Loading the library…",
+  setup: "Checking emulators and setup files…",
+  handlers: "Loading the apps Floppy knows…",
+  sources: "Loading where to get setup files…",
+  opened: "Adding what Floppy was opened with…",
+};
+
+/** commands.rs `ImportProgress`: how far an app import's copy has got, in bytes. */
+interface ImportProgress {
+  done: number;
+  total: number;
+}
+
 function App() {
   const [apps, setApps] = useState<LibraryApp[]>([]);
   const [guest, setGuest] = useState<GuestOs>("dos");
@@ -308,16 +334,20 @@ function App() {
   // Apps Floppy has asked to quit: their Quit button forces it next.
   const [quitAsked, setQuitAsked] = useState<Set<string>>(new Set());
   const [statuses, setStatuses] = useState<GuestStatus[]>([]);
-  const [busy, setBusy] = useState<string | null>(null);
-  // For listeners set up once: whether something is already in progress.
-  const busyRef = useRef(busy);
-  busyRef.current = busy;
+  // Feedback for everything the user sets off (lib/activity.ts).
+  const { activities, runActivity, isBusy } = useActivities();
+  const working = isBusy(WORK);
+  // For listeners set up once: whether library work is already under way.
+  const workingRef = useRef(working);
+  workingRef.current = working;
+  // Launch-time calls still outstanding. A failed one counts as finished:
+  // its error shows in the app.
+  const [startupPending, setStartupPending] = useState<StartupStep[]>([...STARTUP_STEPS]);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
   const [dropZone, setDropZone] = useState<DropZone | null>(null);
   const [oldMedia, setOldMedia] = useState<OldMedia[]>([]);
-  const [mediaProgress, setMediaProgress] = useState<MediaProgress | null>(null);
   const [tracking, setTracking] = useState<SetupTracking>({ ignored: 0, notOnDrives: [] });
   const [documents, setDocuments] = useState<LibraryDoc[]>([]);
   const [selectedDocId, setSelectedDocId] = useState<string | null>(null);
@@ -409,10 +439,6 @@ function App() {
     };
   }, []);
 
-  useEffect(() => {
-    invoke<SetupSource[]>("setup_sources").then(setSources, () => {});
-  }, []);
-
   // Any guest still missing setup files: while one is, a finished download
   // is worth looking for.
   const anySetupMissing = statuses.some((s) => s.os !== "dos" && (!s.system.rom || !s.system.boot));
@@ -441,7 +467,7 @@ function App() {
   useEffect(() => {
     if (!watchDownloads || !anySetupMissing) return;
     const onFront = () => {
-      if (document.visibilityState === "visible" && !busyRef.current) void lookInDownloads(true);
+      if (document.visibilityState === "visible" && !workingRef.current) void lookInDownloads(true);
     };
     window.addEventListener("focus", onFront);
     document.addEventListener("visibilitychange", onFront);
@@ -515,24 +541,20 @@ function App() {
 
   /** Empties the ignore list (discs.rs), so the next files disc may bring those copies again. */
   async function forgetIgnored() {
-    try {
+    await act("Forgetting the ignored copies…", async () => {
       await invoke("forget_ignored_files");
       await refreshStatuses();
       setMessage("Forgot the ignored copies. The next Missing-Files List no longer asks for them to be left out.");
-    } catch (e) {
-      fail(e);
-    }
+    });
   }
 
   /** Puts a system file the drives couldn't supply back on the missing-files list. */
   async function askAgain(slot: string) {
-    try {
+    await act(`Asking for a ${slot} again…`, async () => {
       await invoke("ask_again", { slot });
       await refreshStatuses();
       setMessage(`The next Missing-Files List asks for a ${slot} again.`);
-    } catch (e) {
-      fail(e);
-    }
+    });
   }
 
   async function refreshRunning() {
@@ -544,35 +566,74 @@ function App() {
   /** Asks an app's emulator to quit, and forces it the second time (commands.rs `quit_app`). */
   /** Starts a guest with no app, once none of its setup files is missing (commands.rs `start_guest`). */
   async function startGuest(os: GuestOs) {
-    setError(null);
-    try {
-      await invoke("start_guest", { os });
-      setMessage(
-        os === "dos"
-          ? "Starting DOS at a C:\\ prompt. Every app in the library is on drive C:."
-          : os === "mac-classic"
-            ? "Starting the Mac. Your apps and documents are on its Unix volume."
-            : "Starting the Amiga. Your apps and documents are on its Floppy: drive.",
-      );
-    } catch (e) {
-      fail(e);
-    }
+    await act(
+      `Starting ${GUEST_LABEL[os]}…`,
+      async () => {
+        await invoke("start_guest", { os });
+        setMessage(
+          os === "dos"
+            ? "Starting DOS at a C:\\ prompt. Every app in the library is on drive C:."
+            : os === "mac-classic"
+              ? "Starting the Mac. Your apps and documents are on its Unix volume."
+              : "Starting the Amiga. Your apps and documents are on its Floppy: drive.",
+        );
+      },
+      `launch:${guestRunId(os)}`,
+    );
   }
 
-  async function quitApp(app: { id: string; os: GuestOs }) {
+  async function quitApp(app: { id: string; os: GuestOs; name: string }) {
     const force = quitAsked.has(app.id);
-    setError(null);
-    try {
-      await invoke("quit_app", { id: app.id, force });
-      if (!force) setQuitAsked((asked) => new Set(asked).add(app.id));
-    } catch (e) {
-      fail(e);
-    }
+    const emulator = EMULATOR_LABEL[app.os];
+    await act(
+      force ? `Forcing ${emulator} to quit…` : `Asking ${emulator} to quit…`,
+      async () => {
+        await invoke("quit_app", { id: app.id, force });
+        if (!force) setQuitAsked((asked) => new Set(asked).add(app.id));
+        setMessage(force ? `Forced ${emulator} to quit ${app.name}.` : `Asked ${emulator} to quit ${app.name}.`);
+      },
+      `quit:${app.id}`,
+    );
   }
 
   function fail(e: unknown) {
     setMessage(null);
     setError(String(e));
+  }
+
+  /**
+   * Runs something the user set off as an activity (lib/activity.ts): its
+   * label and bar show until it settles, and a failure becomes the error.
+   * `key` marks the control it came from as busy (`isBusy`). The task
+   * reports success itself, with setMessage. Resolves to whether it did.
+   */
+  async function act(label: string, task: (update: ActivityUpdate) => Promise<void>, key?: string): Promise<boolean> {
+    setError(null);
+    try {
+      await runActivity(label, task, key);
+      return true;
+    } catch (e) {
+      fail(e);
+      return false;
+    }
+  }
+
+  /**
+   * Follows `import-progress` (commands.rs) while `task` imports an app,
+   * filling the bar from `start` to `start + span`: one item's share of a
+   * batch.
+   */
+  async function withImportProgress<T>(update: ActivityUpdate, start: number, span: number, task: () => Promise<T>): Promise<T> {
+    update({ value: start });
+    const unlisten = await listen<ImportProgress>("import-progress", (e) => {
+      const { done, total } = e.payload;
+      update({ value: start + span * (total ? done / total : 1) });
+    });
+    try {
+      return await task();
+    } finally {
+      unlisten();
+    }
   }
 
   function select(app: LibraryApp) {
@@ -587,37 +648,38 @@ function App() {
     setSelectedDocId(doc.id);
   }
 
-  useEffect(() => {
-    invoke<HandlerInfo[]>("handler_catalog", { os: "dos" }).then(setDosHandlers, () => {});
-  }, []);
-
   // A new "Which app was this?" question starts on the likeliest answer.
   useEffect(() => {
     setIdentifyChoice(session?.identify?.candidates[0] ?? "");
     setIdentifyVersion("");
   }, [session?.identify]);
 
+  /** What `floppy import` or `floppy open` brought at launch (cli.rs), already added by the time the window asks. */
+  async function takeStartupImport() {
+    const startup = await invoke<StartupImport | null>("take_startup_import");
+    if (startup?.app) {
+      await refresh();
+      select(startup.app);
+      setMessage(`Imported ${startup.app.name} as ${guestPath(startup.app)}.`);
+    } else if (startup?.document) {
+      await refresh();
+      selectDoc(startup.document);
+      setMessage(`Added ${startup.document.name} as ${docPath(startup.document)}.`);
+    } else if (startup?.error) {
+      setError(startup.error);
+    }
+  }
+
   useEffect(() => {
-    void (async () => {
-      try {
-        await refresh();
-        await refreshStatuses();
-        const startup = await invoke<StartupImport | null>("take_startup_import");
-        if (startup?.app) {
-          await refresh();
-          select(startup.app);
-          setMessage(`Imported ${startup.app.name} as ${guestPath(startup.app)}.`);
-        } else if (startup?.document) {
-          await refresh();
-          selectDoc(startup.document);
-          setMessage(`Added ${startup.document.name} as ${docPath(startup.document)}.`);
-        } else if (startup?.error) {
-          setError(startup.error);
-        }
-      } catch (e) {
-        fail(e);
-      }
-    })();
+    const startupStep = (step: StartupStep, task: Promise<unknown>) =>
+      task.catch(fail).finally(() => setStartupPending((pending) => pending.filter((s) => s !== step)));
+    const library = refresh();
+    startupStep("library", library);
+    startupStep("setup", refreshStatuses());
+    startupStep("handlers", invoke<HandlerInfo[]>("handler_catalog", { os: "dos" }).then(setDosHandlers));
+    startupStep("sources", invoke<SetupSource[]>("setup_sources").then(setSources));
+    // After the library, which it refreshes; the library's own error is shown once.
+    startupStep("opened", library.catch(() => {}).then(takeStartupImport));
     const unlisten = listen("running-changed", () => void refreshRunning());
     // What a guest saved into its documents folder, sorted once it quit.
     const unlistenDocs = listen("documents-changed", () => void refresh());
@@ -625,10 +687,9 @@ function App() {
     // Taken once here too, for files that arrived before the window.
     const unlistenOpened = listen("files-opened", () => void openedRef.current());
     void openedRef.current();
-    // Old disks macOS couldn't mount (media.rs), and copy progress.
+    // Old disks macOS couldn't mount (media.rs).
     invoke<OldMedia[]>("old_media").then(setOldMedia, () => {});
     const unlistenMedia = listen<OldMedia[]>("old-media-changed", (e) => setOldMedia(e.payload));
-    const unlistenProgress = listen<MediaProgress>("media-progress", (e) => setMediaProgress(e.payload));
     // What a DOS session saved (documents.rs), listed once DOSBox quits.
     const unlistenSession = listen<SessionReport>("session-ended", (e) => {
       setSession(e.payload);
@@ -640,7 +701,6 @@ function App() {
       unlistenSession.then((f) => f());
       unlistenOpened.then((f) => f());
       unlistenMedia.then((f) => f());
-      unlistenProgress.then((f) => f());
     };
   }, []);
 
@@ -700,46 +760,64 @@ function App() {
   /**
    * Puts each dropped item where it belongs (drops.rs): straight away when
    * there's a clear winner or an answer for its kind, else it's queued for
-   * the "Where does this go?" dialog.
+   * the "Where does this go?" dialog. Setup files among them are added
+   * together once the rest are in.
    */
   async function placePaths(paths: string[]) {
-    setError(null);
     setMessage(null);
-    const ask: DropClassification[] = [];
+    const setup: string[] = [];
     const failures: string[] = [];
-    const done: string[] = [];
-    let last: ImportedItem | null = null;
-    for (const path of paths) {
-      setBusy(`Looking at ${baseName(path)}`);
-      try {
-        const c = await invoke<DropClassification>("classify_drop", { os: guest, path });
-        if (!c.decided) {
-          ask.push(c);
-          continue;
+    let added = "";
+    await act(
+      paths.length === 1 ? `Looking at ${baseName(paths[0])}…` : `Adding ${plural(paths.length, "item")}…`,
+      async (update) => {
+        const ask: DropClassification[] = [];
+        const done: string[] = [];
+        let last: ImportedItem | null = null;
+        for (const [i, path] of paths.entries()) {
+          const of = paths.length > 1 ? ` (${i + 1} of ${paths.length})` : "";
+          update({ label: `Looking at ${baseName(path)}${of}…`, value: i / paths.length });
+          try {
+            const c = await invoke<DropClassification>("classify_drop", { os: guest, path });
+            const choice = c.decided;
+            if (!choice) {
+              ask.push(c);
+              continue;
+            }
+            if (choice.to === "setup") {
+              setup.push(path);
+              continue;
+            }
+            update({ label: `Adding ${c.name}${of}…` });
+            last = await withImportProgress(update, i / paths.length, 1 / paths.length, () =>
+              invoke<ImportedItem>("import_as", { path, choice }),
+            );
+            const by = c.decidedBy && c.decidedBy !== "its contents" && c.decidedBy !== "nothing else fits" ? ` (going by ${c.decidedBy})` : "";
+            done.push(`${c.name} as ${describeChoice(choice)}${by}`);
+          } catch (e) {
+            failures.push(String(e));
+          }
         }
-        if (c.decided.to === "setup") {
-          setBusy(null);
-          await addSetupFiles([path]);
-          continue;
+        await refresh();
+        if (last?.app) select(last.app);
+        else if (last?.document) selectDoc(last.document);
+        if (done.length) {
+          added = `Added ${done.join("; ")}.`;
+          setMessage(added);
         }
-        setBusy(`Adding ${c.name}`);
-        last = await invoke<ImportedItem>("import_as", { path, choice: c.decided });
-        const by = c.decidedBy && c.decidedBy !== "its contents" && c.decidedBy !== "nothing else fits" ? ` (going by ${c.decidedBy})` : "";
-        done.push(`${c.name} as ${describeChoice(c.decided)}${by}`);
-      } catch (e) {
-        failures.push(String(e));
-      }
-    }
-    setBusy(null);
-    await refresh();
-    if (last?.app) select(last.app);
-    else if (last?.document) selectDoc(last.document);
-    if (done.length) setMessage(`Added ${done.join("; ")}.`);
-    if (failures.length) setError(failures.join("\n"));
-    if (ask.length) {
-      setDropPick(0);
-      setDropRemember(true);
-      setAskDrops((queue) => [...queue, ...ask]);
+        if (failures.length) setError(failures.join("\n"));
+        if (ask.length) {
+          setDropPick(0);
+          setDropRemember(true);
+          setAskDrops((queue) => [...queue, ...ask]);
+        }
+      },
+      WORK,
+    );
+    if (setup.length) {
+      await addSetupFiles(setup, added ? `${added} ` : "");
+      // Adding setup files starts with a clean error line: keep the failures above.
+      if (failures.length) setError((shown) => [...failures, shown].filter(Boolean).join("\n"));
     }
   }
 
@@ -750,69 +828,66 @@ function App() {
     setAskDrops((queue) => queue.slice(1));
     setDropPick(0);
     setDropRemember(true);
-    if (skip) return;
+    if (skip) {
+      setMessage(`Skipped ${c.name}. Nothing was added.`);
+      return;
+    }
     const option = c.options[dropPick];
     if (!option) return;
-    try {
-      await invoke("record_drop_choice", {
-        signature: c.signature,
-        choice: option.choice,
-        offered: c.options.map((o) => o.choice),
-        remember: dropRemember,
-      });
-      if (option.choice.to === "setup") {
-        await addSetupFiles([c.path]);
-        return;
-      }
-      setBusy(`Adding ${c.name}`);
-      const item = await invoke<ImportedItem>("import_as", { path: c.path, choice: option.choice });
-      setBusy(null);
-      await refresh();
-      if (item.app) select(item.app);
-      else if (item.document) selectDoc(item.document);
-      setMessage(`Added ${c.name} as ${describeChoice(option.choice)}.`);
-    } catch (e) {
-      setBusy(null);
-      fail(e);
-    }
+    const toSetup = option.choice.to === "setup";
+    const recorded = await act(
+      `Adding ${c.name}…`,
+      async (update) => {
+        await invoke("record_drop_choice", {
+          signature: c.signature,
+          choice: option.choice,
+          offered: c.options.map((o) => o.choice),
+          remember: dropRemember,
+        });
+        if (toSetup) return;
+        const item = await withImportProgress(update, 0, 1, () => invoke<ImportedItem>("import_as", { path: c.path, choice: option.choice }));
+        await refresh();
+        if (item.app) select(item.app);
+        else if (item.document) selectDoc(item.document);
+        setMessage(`Added ${c.name} as ${describeChoice(option.choice)}.`);
+      },
+      WORK,
+    );
+    if (recorded && toSetup) await addSetupFiles([c.path]);
   }
 
   /** Learns from another Floppy's findings (learned.rs). */
   async function learnFindings(path: string) {
-    setError(null);
-    setBusy(`Learning from ${baseName(path)}`);
-    try {
-      const l = await invoke<LearnSummary>("learn_findings", { path });
-      await refresh();
-      if (l.own) setMessage(`${baseName(path)} is this Floppy's own findings: nothing to learn from it.`);
-      else if (l.already) setMessage(`Floppy already learned from ${baseName(path)}.`);
-      else {
-        const people = l.forMaintainers
-          ? ` ${l.forMaintainers} note${l.forMaintainers === 1 ? "" : "s"} for Floppy's maintainers (errors, setup reports) stay in the file.`
-          : "";
-        const pack = l.aiVersion
-          ? ` Floppy AI is now version ${l.aiVersion}.`
-          : l.unsignedPack
-            ? " It calls itself a Floppy AI pack but isn't signed by Floppy's maintainers, so it was learned from like anyone's findings: the AI version and where Floppy points you for setup files stay as they were."
+    await act(
+      `Learning from ${baseName(path)}…`,
+      async () => {
+        const l = await invoke<LearnSummary>("learn_findings", { path });
+        await refresh();
+        if (l.own) setMessage(`${baseName(path)} is this Floppy's own findings: nothing to learn from it.`);
+        else if (l.already) setMessage(`Floppy already learned from ${baseName(path)}.`);
+        else {
+          const people = l.forMaintainers
+            ? ` ${l.forMaintainers} note${l.forMaintainers === 1 ? "" : "s"} for Floppy's maintainers (errors, setup reports) stay in the file.`
             : "";
-        const sources = l.setupSources ? ` ${l.setupSources} setup source${l.setupSources === 1 ? "" : "s"} updated.` : "";
-        const kept = l.materials ? ` ${l.materials} material${l.materials === 1 ? "" : "s"} kept to read (About Floppy).` : "";
-        setMessage(`Learned from ${baseName(path)}: ${describeLearned(l)}.${pack}${sources}${kept}${people}`);
-      }
-      if (l.skipped.length) setError(`Left out:\n${l.skipped.join("\n")}`);
-    } catch (e) {
-      fail(e);
-    } finally {
-      setBusy(null);
-    }
+          const pack = l.aiVersion
+            ? ` Floppy AI is now version ${l.aiVersion}.`
+            : l.unsignedPack
+              ? " It calls itself a Floppy AI pack but isn't signed by Floppy's maintainers, so it was learned from like anyone's findings: the AI version and where Floppy points you for setup files stay as they were."
+              : "";
+          const sources = l.setupSources ? ` ${l.setupSources} setup source${l.setupSources === 1 ? "" : "s"} updated.` : "";
+          const kept = l.materials ? ` ${l.materials} material${l.materials === 1 ? "" : "s"} kept to read (About Floppy).` : "";
+          setMessage(`Learned from ${baseName(path)}: ${describeLearned(l)}.${pack}${sources}${kept}${people}`);
+        }
+        if (l.skipped.length) setError(`Left out:\n${l.skipped.join("\n")}`);
+      },
+      WORK,
+    );
   }
 
   async function revealLearned() {
-    try {
+    await act(`${SHOW_IN_FILES}…`, async () => {
       await revealItemInDir(await invoke<string>("learned_folder"));
-    } catch (e) {
-      fail(e);
-    }
+    });
   }
 
   async function pickFindings() {
@@ -822,13 +897,11 @@ function App() {
 
   async function forgetLearned() {
     setConfirmForget(false);
-    try {
+    await act("Forgetting what was learned…", async () => {
       await invoke("forget_learned");
       await refresh();
       setMessage("Forgot everything learned from findings. Your own answers and test results are kept.");
-    } catch (e) {
-      fail(e);
-    }
+    });
   }
 
   /** Files opened with Floppy: a disc from Diskette, or anything Open With sent. */
@@ -846,70 +919,70 @@ function App() {
 
   /** Imports everything on a disc Diskette made: setup files, then apps (commands.rs `import_disc`). */
   async function importDisc(path: string) {
-    setError(null);
     setMessage(null);
-    setBusy(`Reading ${baseName(path)}`);
-    try {
-      const r = await invoke<DiscImport>("import_disc", { path });
-      await refresh();
-      await refreshStatuses();
-      const apps = r.apps.imported.length ? ` Imported ${r.apps.imported.join(", ")}.` : "";
-      const already = r.apps.already.length ? ` Already in the library: ${r.apps.already.join(", ")}.` : "";
-      setMessage(describeImport(r.setup) + apps + already);
-      const problems = [...r.setup.skipped, ...r.apps.failed];
-      if (problems.length) setError(problems.join("\n"));
-    } catch (e) {
-      fail(e);
-    } finally {
-      setBusy(null);
-    }
+    await act(
+      `Reading ${baseName(path)}…`,
+      async () => {
+        const r = await invoke<DiscImport>("import_disc", { path });
+        await refresh();
+        await refreshStatuses();
+        const apps = r.apps.imported.length ? ` Imported ${r.apps.imported.join(", ")}.` : "";
+        const already = r.apps.already.length ? ` Already in the library: ${r.apps.already.join(", ")}.` : "";
+        setMessage(describeImport(r.setup) + apps + already);
+        const problems = [...r.setup.skipped, ...r.apps.failed];
+        if (problems.length) setError(problems.join("\n"));
+      },
+      WORK,
+    );
   }
 
   /** Hands Diskette a list of everything still missing (request.rs); its disc comes back as an opened file. */
   async function askDiskette() {
-    setError(null);
-    try {
-      const r = await invoke<RequestSummary>("ask_diskette");
-      setAskDismissed(true);
-      setMessage(
-        `Asked Diskette for ${describeRequest(r)}. If it finds any on your drives, it offers to Burn A CD, and the disc comes back here.`,
-      );
-    } catch (e) {
-      fail(e);
-    }
+    await act(
+      "Asking Diskette…",
+      async () => {
+        const r = await invoke<RequestSummary>("ask_diskette");
+        setAskDismissed(true);
+        setMessage(
+          `Asked Diskette for ${describeRequest(r)}. If it finds any on your drives, it offers to Burn A CD, and the disc comes back here.`,
+        );
+      },
+      "ask-diskette",
+    );
   }
 
   /** Imports one after another: each copy is disk-bound, so running them in parallel wouldn't be faster. */
   async function importPaths(paths: string[]) {
-    setError(null);
     setMessage(null);
-    let last: ImportedItem | null = null;
-    const failures: string[] = [];
-    for (const path of paths) {
-      setBusy(`Importing ${baseName(path)}`);
-      try {
-        // An app, or else a document for the guest's documents folder.
-        last = await invoke<ImportedItem>("import_item", { os: guest, path });
-      } catch (e) {
-        failures.push(String(e));
-      }
-    }
-    setBusy(null);
-    await refresh();
-    if (last?.app) {
-      select(last.app);
-      setMessage(
-        paths.length === 1 ? `Imported ${last.app.name} as ${guestPath(last.app)}.` : `Imported ${paths.length - failures.length} of ${paths.length}.`,
-      );
-    } else if (last?.document) {
-      selectDoc(last.document);
-      setMessage(
-        paths.length === 1
-          ? `Added ${last.document.name} as ${docPath(last.document)}.`
-          : `Imported ${paths.length - failures.length} of ${paths.length}.`,
-      );
-    }
-    if (failures.length) setError(failures.join("\n"));
+    await act(
+      paths.length === 1 ? `Importing ${baseName(paths[0])}…` : `Importing ${plural(paths.length, "item")}…`,
+      async (update) => {
+        let last: ImportedItem | null = null;
+        const failures: string[] = [];
+        for (const [i, path] of paths.entries()) {
+          if (paths.length > 1) update({ label: `Importing ${baseName(path)} (${i + 1} of ${paths.length})…` });
+          try {
+            // An app, or else a document for the guest's documents folder.
+            last = await withImportProgress(update, i / paths.length, 1 / paths.length, () =>
+              invoke<ImportedItem>("import_item", { os: guest, path }),
+            );
+          } catch (e) {
+            failures.push(String(e));
+          }
+        }
+        await refresh();
+        const count = `Imported ${paths.length - failures.length} of ${paths.length}.`;
+        if (last?.app) {
+          select(last.app);
+          setMessage(paths.length === 1 ? `Imported ${last.app.name} as ${guestPath(last.app)}.` : count);
+        } else if (last?.document) {
+          selectDoc(last.document);
+          setMessage(paths.length === 1 ? `Added ${last.document.name} as ${docPath(last.document)}.` : count);
+        }
+        if (failures.length) setError(failures.join("\n"));
+      },
+      WORK,
+    );
   }
 
   async function pickFolder() {
@@ -930,99 +1003,122 @@ function App() {
   async function pickDocuments() {
     const picked = await open({ multiple: true, title: `Add documents to ${guestFilePath(guest, DOCS_DIR[guest])}` });
     if (!Array.isArray(picked) || !picked.length) return;
-    setError(null);
     setMessage(null);
-    let last: LibraryDoc | null = null;
-    const failures: string[] = [];
-    for (const path of picked) {
-      setBusy(`Adding ${baseName(path)}`);
-      try {
-        last = await invoke<LibraryDoc>("add_document", { os: guest, path });
-      } catch (e) {
-        failures.push(String(e));
-      }
-    }
-    setBusy(null);
-    await refresh();
-    if (last) {
-      selectDoc(last);
-      setMessage(picked.length === 1 ? `Added ${last.name} as ${docPath(last)}.` : `Added ${picked.length - failures.length} of ${picked.length}.`);
-    }
-    if (failures.length) setError(failures.join("\n"));
+    await act(
+      picked.length === 1 ? `Adding ${baseName(picked[0])}…` : `Adding ${plural(picked.length, "document")}…`,
+      async (update) => {
+        let last: LibraryDoc | null = null;
+        const failures: string[] = [];
+        for (const [i, path] of picked.entries()) {
+          if (picked.length > 1) update({ label: `Adding ${baseName(path)} (${i + 1} of ${picked.length})…`, value: i / picked.length });
+          try {
+            last = await invoke<LibraryDoc>("add_document", { os: guest, path });
+          } catch (e) {
+            failures.push(String(e));
+          }
+        }
+        await refresh();
+        if (last) {
+          selectDoc(last);
+          setMessage(picked.length === 1 ? `Added ${last.name} as ${docPath(last)}.` : `Added ${picked.length - failures.length} of ${picked.length}.`);
+        }
+        if (failures.length) setError(failures.join("\n"));
+      },
+      WORK,
+    );
   }
 
   /** Opens a document in the chosen app; what it saves is listed when DOSBox quits. */
   async function openDocument(doc: LibraryDoc, opener: Opener) {
-    setError(null);
     setSession(null);
-    try {
-      await invoke("open_document", { id: doc.id, appId: opener.appId, program: opener.program });
-      setMessage(`Opening ${doc.name} in ${opener.appName}. What it saves is listed when DOSBox quits.`);
-      await refresh();
-    } catch (e) {
-      fail(e);
-    }
+    await act(
+      `Opening ${doc.name} in ${opener.appName}…`,
+      async () => {
+        await invoke("open_document", { id: doc.id, appId: opener.appId, program: opener.program });
+        setMessage(`Opening ${doc.name} in ${opener.appName}. What it saves is listed when DOSBox quits.`);
+        await refresh();
+      },
+      `open-doc:${doc.id}`,
+    );
   }
 
   async function removeDocument(doc: LibraryDoc) {
-    try {
-      await invoke("remove_document", { id: doc.id });
-      if (selectedDocId === doc.id) setSelectedDocId(null);
-      setMessage(`Removed ${doc.name}.`);
-      await refresh();
-    } catch (e) {
-      fail(e);
-    }
+    await act(
+      `Removing ${doc.name}…`,
+      async () => {
+        await invoke("remove_document", { id: doc.id });
+        if (selectedDocId === doc.id) setSelectedDocId(null);
+        setMessage(`Removed ${doc.name}.`);
+        await refresh();
+      },
+      `remove-doc:${doc.id}`,
+    );
   }
 
   async function revealLibraryFile(os: GuestOs, path: string) {
-    try {
+    await act(`${SHOW_IN_FILES}…`, async () => {
       await revealItemInDir(await invoke<string>("library_file", { os, path }));
-    } catch (e) {
-      fail(e);
-    }
+    });
   }
 
   async function exportLibraryFile(os: GuestOs, path: string) {
     const dest = await open({ directory: true, title: "Export to this folder" });
     if (typeof dest !== "string") return;
-    try {
+    await act(`Exporting ${baseName(path)}…`, async () => {
       const copy = await invoke<string>("export_file", { os, path, destDir: dest });
       setMessage(`Exported ${baseName(copy)}.`);
-    } catch (e) {
-      fail(e);
-    }
+    });
   }
 
   async function setAppOpens(app: LibraryApp, text: string) {
     const exts = text.split(/[\s,;]+/).filter(Boolean);
-    try {
-      await invoke("set_app_opens", { id: app.id, exts });
-      await refresh();
-    } catch (e) {
-      fail(e);
-    }
+    // Leaving the field unchanged is no action: nothing to save or say.
+    const asTyped = [...new Set(exts.map((e) => e.replace(/^\./, "").toUpperCase()))];
+    if (asTyped.join() === app.opens.join()) return;
+    await act(
+      `Saving what ${app.name} opens…`,
+      async () => {
+        const r = await invoke<LibraryApp>("set_app_opens", { id: app.id, exts });
+        await refresh();
+        setMessage(
+          r.opens.length
+            ? `${r.name} also opens ${r.opens.map((e) => `.${e}`).join(", ")} files.`
+            : `${r.name} no longer opens any file types besides the ones Floppy knows it opens.`,
+        );
+      },
+      `app:${app.id}`,
+    );
   }
 
   /** Says which known app (and version) an app is; null: not confirmed yet. */
   async function setIdentity(app: LibraryApp, identity: { handler: string | null; version: string | null } | null) {
-    try {
-      await invoke("set_app_identity", { id: app.id, identity });
-      await refresh();
-    } catch (e) {
-      fail(e);
-    }
+    await act(
+      `Saving what ${app.name} is…`,
+      async () => {
+        const r = await invoke<LibraryApp>("set_app_identity", { id: app.id, identity });
+        await refresh();
+        const what = !identity
+          ? `${app.name} is back to not confirmed.`
+          : identity.handler
+            ? `Noted: ${app.name} is ${[identity.handler, identity.version].filter(Boolean).join(" ")}.`
+            : `Noted: ${app.name} isn't one of the apps Floppy knows.`;
+        setMessage(r.name !== app.name ? `${what} It's now called ${r.name}.` : what);
+      },
+      `app:${app.id}`,
+    );
   }
 
   /** Makes an app the version its app's documents open with. */
   async function makeFavorite(app: LibraryApp) {
-    try {
-      await invoke("set_favorite_app", { id: app.id });
-      await refresh();
-      setMessage(`${app.identity?.handler ?? app.name} documents now open with ${app.name}.`);
-    } catch (e) {
-      fail(e);
-    }
+    await act(
+      `Making ${app.name} the favorite…`,
+      async () => {
+        await invoke("set_favorite_app", { id: app.id });
+        await refresh();
+        setMessage(`${app.identity?.handler ?? app.name} documents now open with ${app.name}.`);
+      },
+      `app:${app.id}`,
+    );
   }
 
   /** Answers (or puts off) the after-session "Which app was this?". */
@@ -1031,21 +1127,25 @@ function App() {
     if (!ask || !session) return;
     if (confirm) {
       const handler = identifyChoice === OTHER_APP ? null : identifyChoice;
-      try {
-        await invoke("set_app_identity", {
-          id: ask.appId,
-          identity: { handler, version: handler ? identifyVersion.trim() || null : null },
-        });
-        await refresh();
-        setMessage(
-          handler
-            ? `Noted: ${ask.appName} is ${[handler, identifyVersion.trim()].filter(Boolean).join(" ")}.`
-            : `Noted: ${ask.appName} isn't one of the apps Floppy knows.`,
-        );
-      } catch (e) {
-        fail(e);
-        return;
-      }
+      const saved = await act(
+        `Saving what ${ask.appName} is…`,
+        async () => {
+          await invoke("set_app_identity", {
+            id: ask.appId,
+            identity: { handler, version: handler ? identifyVersion.trim() || null : null },
+          });
+          await refresh();
+          setMessage(
+            handler
+              ? `Noted: ${ask.appName} is ${[handler, identifyVersion.trim()].filter(Boolean).join(" ")}.`
+              : `Noted: ${ask.appName} isn't one of the apps Floppy knows.`,
+          );
+        },
+        "identify",
+      );
+      if (!saved) return;
+    } else {
+      setMessage(`Floppy asks again after ${ask.appName}'s next session.`);
     }
     const rest = { ...session, identify: null };
     setSession(rest.changes.length || rest.verify ? rest : null);
@@ -1062,18 +1162,16 @@ function App() {
           : "Choose your Mac startup disk image";
     const path = await open({ directory, title });
     if (typeof path !== "string") return;
-    setError(null);
     setMessage(null);
-    setBusy(`Copying ${baseName(path)}`);
-    try {
-      await invoke("set_system_file", { os: guest, kind, path });
-      await refreshStatuses();
-      setMessage(`Added ${baseName(path)}.`);
-    } catch (e) {
-      fail(e);
-    } finally {
-      setBusy(null);
-    }
+    await act(
+      `Copying ${baseName(path)}…`,
+      async () => {
+        await invoke("set_system_file", { os: guest, kind, path });
+        await refreshStatuses();
+        setMessage(`Added ${baseName(path)}.`);
+      },
+      WORK,
+    );
   }
 
   /** Points Floppy at an emulator that isn't where it looks (bundled, /Applications, ~/Applications or PATH). */
@@ -1083,39 +1181,36 @@ function App() {
     const filters = isLinux ? [] : [{ name: "Application", extensions: ["app"] }];
     const path = await open({ title: `Locate ${name}`, filters });
     if (typeof path !== "string") return;
-    setError(null);
     setMessage(null);
-    try {
-      await invoke<GuestStatus>("locate_emulator", { os, path });
-      await refreshStatuses();
-      setMessage(`Floppy will start ${GUEST_LABEL[os]} apps with ${baseName(path)}.`);
-    } catch (e) {
-      fail(e);
-    }
+    await act(
+      `Checking ${baseName(path)}…`,
+      async () => {
+        await invoke<GuestStatus>("locate_emulator", { os, path });
+        await refreshStatuses();
+        setMessage(`Floppy will start ${GUEST_LABEL[os]} apps with ${baseName(path)}.`);
+      },
+      `locate:${os}`,
+    );
   }
 
   /** Opens where to get a setup file in the browser, then watches Downloads for it. */
   async function openSource(src: SetupSource) {
-    setError(null);
-    try {
+    await act(`Opening ${src.name}…`, async () => {
       await openUrl(src.url);
       setWatchDownloads(true);
       setMessage(
         `Opened ${src.name} in your browser. When the download has finished, come back here: Floppy looks in your Downloads folder and adds it by itself.`,
       );
-    } catch (e) {
-      fail(e);
-    }
+    });
   }
 
-  /** Fills missing setup files from the Downloads folder (cd.rs `import_from_downloads`). */
+  /**
+   * Fills missing setup files from the Downloads folder (cd.rs
+   * `import_from_downloads`). `quiet` is the look Floppy takes by itself
+   * when it comes back to the front: no bar, and only a find is reported.
+   */
   async function lookInDownloads(quiet: boolean) {
-    if (!quiet) {
-      setError(null);
-      setMessage(null);
-      setBusy("Looking in Downloads");
-    }
-    try {
+    const look = async () => {
       const r = await invoke<CdImport>("import_from_downloads");
       if (r.added.length) {
         await refreshStatuses();
@@ -1126,11 +1221,13 @@ function App() {
         );
         setWatchDownloads(true);
       }
-    } catch (e) {
-      if (!quiet) fail(e);
-    } finally {
-      if (!quiet) setBusy(null);
+    };
+    if (quiet) {
+      await look().catch(() => {});
+      return;
     }
+    setMessage(null);
+    await act("Looking in Downloads…", look, WORK);
   }
 
   /** Burn A CD: a compressed disc image of the system's setup files and settings (backup.rs). */
@@ -1143,29 +1240,30 @@ function App() {
       filters: [{ name: "Disc image", extensions: ["iso"] }],
     });
     if (!path) return;
-    setError(null);
     setMessage(null);
-    setBusy("Burning a CD");
-    try {
-      const r = await invoke<BackupMade>("make_backup", { path });
-      setBackup(await invoke<BackupStatus>("backup_status"));
-      setMessage(
-        `Burned ${baseName(path)}: ${r.slots.join(", ")}, ${formatBytes(r.originalBytes)} compressed to ${formatBytes(r.discBytes)}. Keep it somewhere safe. To restore, open it with Floppy or drop it on this window.`,
-      );
-    } catch (e) {
-      fail(e);
-    } finally {
-      setBusy(null);
-    }
+    await act(
+      "Burning a CD…",
+      async () => {
+        const r = await invoke<BackupMade>("make_backup", { path });
+        setBackup(await invoke<BackupStatus>("backup_status"));
+        setMessage(
+          `Burned ${baseName(path)}: ${r.slots.join(", ")}, ${formatBytes(r.originalBytes)} compressed to ${formatBytes(r.discBytes)}. Keep it somewhere safe. To restore, open it with Floppy or drop it on this window.`,
+        );
+      },
+      WORK,
+    );
   }
 
   async function declineBackup() {
-    try {
-      await invoke("decline_backup");
-      setBackup(await invoke<BackupStatus>("backup_status"));
-    } catch (e) {
-      fail(e);
-    }
+    await act(
+      "Putting off the backup…",
+      async () => {
+        await invoke("decline_backup");
+        setBackup(await invoke<BackupStatus>("backup_status"));
+        setMessage("Floppy won't offer a backup again until your setup files change. Backup Floppy System… in the gear menu makes one any time.");
+      },
+      "decline-backup",
+    );
   }
 
   /** Opens Report a Setup Problem for `slot`, guessing the likely kind. */
@@ -1179,20 +1277,22 @@ function App() {
   /** Keeps the report for the next Export Findings (findings.rs `add_setup_report`). */
   async function sendReport() {
     if (!reportSlot) return;
-    try {
-      await invoke("add_setup_report", {
-        slot: reportSlot,
-        kind: reportKind,
-        source: reportSource.trim() || null,
-        note: reportNote.trim(),
-      });
-      setReportSlot(null);
-      setMessage(
-        "Thanks. The report goes out with your next Export Findings… (gear menu), so Floppy's list of sources can be fixed for everyone. Nothing is sent until you export and share it.",
-      );
-    } catch (e) {
-      fail(e);
-    }
+    await act(
+      "Keeping the report…",
+      async () => {
+        await invoke("add_setup_report", {
+          slot: reportSlot,
+          kind: reportKind,
+          source: reportSource.trim() || null,
+          note: reportNote.trim(),
+        });
+        setReportSlot(null);
+        setMessage(
+          "Thanks. The report goes out with your next Export Findings… (gear menu), so Floppy's list of sources can be fixed for everyone. Nothing is sent until you export and share it.",
+        );
+      },
+      "report",
+    );
   }
 
   /** Saves the missing-files list: the system files still needed, one file name per line (cd.rs). */
@@ -1203,35 +1303,34 @@ function App() {
       filters: [{ name: "Text", extensions: ["txt"] }],
     });
     if (!path) return;
-    setError(null);
-    try {
+    await act("Saving the missing-files list…", async () => {
       const count = await invoke<number>("write_missing_list", { path });
       setMessage(
         count === 0
           ? "Nothing is missing: every guest has its system files."
           : `Saved ${baseName(path)}. Gather the files it names into a disc image or folder (Diskette's Burn A CD does this), then import that.`,
       );
-    } catch (e) {
-      fail(e);
-    }
+    });
   }
 
-  /** Adds whatever system files are among `paths`: the files themselves, folders, zips or disc images (cd.rs `import_dropped`). */
-  async function addSetupFiles(paths: string[]) {
+  /**
+   * Adds whatever system files are among `paths`: the files themselves,
+   * folders, zips or disc images (cd.rs `import_dropped`). `before` starts
+   * the status message, for what the same drop already added.
+   */
+  async function addSetupFiles(paths: string[], before = "") {
     if (!paths.length) return;
-    setError(null);
     setMessage(null);
-    setBusy(`Checking ${paths.length === 1 ? baseName(paths[0]) : `${paths.length} items`}`);
-    try {
-      const r = await invoke<CdImport>("import_setup_files", { paths });
-      await refreshStatuses();
-      setMessage(describeImport(r));
-      if (r.skipped.length) setError(r.skipped.join("\n"));
-    } catch (e) {
-      fail(e);
-    } finally {
-      setBusy(null);
-    }
+    await act(
+      `Checking ${paths.length === 1 ? baseName(paths[0]) : plural(paths.length, "item")}…`,
+      async () => {
+        const r = await invoke<CdImport>("import_setup_files", { paths });
+        await refreshStatuses();
+        setMessage(before + describeImport(r));
+        if (r.skipped.length) setError(r.skipped.join("\n"));
+      },
+      WORK,
+    );
   }
 
   async function pickSetupFiles() {
@@ -1241,18 +1340,19 @@ function App() {
 
   /** Records whether the app opened the document's file type correctly (verify.rs). */
   async function answerVerification(worked: boolean) {
-    if (!session?.verify) return;
-    try {
-      await invoke("record_verification", { pending: session.verify, worked, note: verifyNote.trim() || null });
-      setSession({ ...session, verify: null });
-      setVerifyNote("");
-      await refresh();
-      setMessage(
-        `Recorded that ${session.verify.appName} ${worked ? "opened" : "didn't open"} ${session.verify.fileType} files correctly.`,
-      );
-    } catch (e) {
-      fail(e);
-    }
+    const verify = session?.verify;
+    if (!session || !verify) return;
+    await act(
+      "Recording the result…",
+      async () => {
+        await invoke("record_verification", { pending: verify, worked, note: verifyNote.trim() || null });
+        setSession({ ...session, verify: null });
+        setVerifyNote("");
+        await refresh();
+        setMessage(`Recorded that ${verify.appName} ${worked ? "opened" : "didn't open"} ${verify.fileType} files correctly.`);
+      },
+      "verify",
+    );
   }
 
   /** Saves what Floppy has learned as a zip, for scripts/merge-findings.py. Nothing leaves otherwise. */
@@ -1264,14 +1364,12 @@ function App() {
       filters: [{ name: "Zip", extensions: ["zip"] }],
     });
     if (!path) return;
-    try {
+    await act("Exporting findings…", async () => {
       const n = await invoke<FindingsSummary>("export_findings", { path });
       setMessage(
         `Saved ${baseName(path)}: ${describeFindings(n)}. It holds no documents, files or file names. Drop it on another Floppy to teach it, or send it to Floppy's maintainers so every Floppy learns it from the next release.`,
       );
-    } catch (e) {
-      fail(e);
-    }
+    });
   }
 
   /** Saves the wanted-apps list (handlers.rs): old apps that open old files, for a disc maker to gather. */
@@ -1282,17 +1380,14 @@ function App() {
       filters: [{ name: "Text", extensions: ["txt"] }],
     });
     if (!path) return;
-    setError(null);
-    try {
+    await act("Saving the wanted-apps list…", async () => {
       const count = await invoke<number>("write_wanted_apps", { path });
       setMessage(
         count === 0
           ? "Every app Floppy knows opens old files is already in the library."
           : `Saved ${baseName(path)}, asking for ${count} app files. Gather them into a disc image or folder (Diskette's Burn A CD does this), then use Import Apps Disc.`,
       );
-    } catch (e) {
-      fail(e);
-    }
+    });
   }
 
   /** Imports the old apps on a disc made from the wanted-apps list. */
@@ -1303,21 +1398,19 @@ function App() {
         : { title: "Import an apps disc", filters: [{ name: "Disc image", extensions: ["iso", "cdr", "dmg", "toast"] }] },
     );
     if (typeof path !== "string") return;
-    setError(null);
     setMessage(null);
-    setBusy(`Reading ${baseName(path)}`);
-    try {
-      const r = await invoke<{ imported: string[]; already: string[]; failed: string[] }>("import_apps_disc", { path });
-      await refresh();
-      const imported = r.imported.length ? `Imported ${r.imported.join(", ")}.` : "Found no new apps.";
-      const already = r.already.length ? ` Already in the library: ${r.already.join(", ")}.` : "";
-      setMessage(imported + already);
-      if (r.failed.length) setError(r.failed.join("\n"));
-    } catch (e) {
-      fail(e);
-    } finally {
-      setBusy(null);
-    }
+    await act(
+      `Reading ${baseName(path)}…`,
+      async () => {
+        const r = await invoke<{ imported: string[]; already: string[]; failed: string[] }>("import_apps_disc", { path });
+        await refresh();
+        const imported = r.imported.length ? `Imported ${r.imported.join(", ")}.` : "Found no new apps.";
+        const already = r.already.length ? ` Already in the library: ${r.already.join(", ")}.` : "";
+        setMessage(imported + already);
+        if (r.failed.length) setError(r.failed.join("\n"));
+      },
+      WORK,
+    );
   }
 
   /** Sets up every guest it can from a files disc: a disc image or folder of gathered system files. */
@@ -1328,120 +1421,148 @@ function App() {
         : { title: "Import a files disc", filters: [{ name: "Disc image", extensions: ["iso", "cdr", "dmg", "toast"] }] },
     );
     if (typeof path !== "string") return;
-    setError(null);
     setMessage(null);
-    setBusy(`Reading ${baseName(path)}`);
-    try {
-      const r = await invoke<CdImport>("import_files_disc", { path });
-      await refreshStatuses();
-      setMessage(describeImport(r));
-    } catch (e) {
-      fail(e);
-    } finally {
-      setBusy(null);
-    }
+    await act(
+      `Reading ${baseName(path)}…`,
+      async () => {
+        const r = await invoke<CdImport>("import_files_disc", { path });
+        await refreshStatuses();
+        setMessage(describeImport(r));
+      },
+      WORK,
+    );
   }
 
   /**
    * Copies an old disk into the library (macOS asks for the password to
    * read it) and imports it into the guest its contents belong to, then
-   * opens it there when that guest is ready and free.
+   * opens it there when that guest is ready and free. The copy is counted
+   * in bytes (`media-progress`).
    */
   async function copyMedia(m: OldMedia) {
-    setError(null);
     setMessage(null);
-    setBusy(`Copying ${m.name}`);
-    setMediaProgress({ device: m.device, done: 0, total: m.size });
-    try {
-      const app = await invoke<LibraryApp>("copy_old_media", { device: m.device });
-      const list = await refresh();
-      await refreshStatuses();
-      select(app);
-      const s = (await invoke<GuestStatus[]>("guest_statuses")).find((x) => x.os === app.os);
-      const guestBusy = list.some((a) => a.os === app.os && running.has(a.id));
-      const copied = `Copied ${m.name} as ${guestPath(app)}.`;
-      if (s && !s.blocker && !guestBusy && app.program) {
-        await invoke("launch_app", { id: app.id, promptOnly: false });
-        setMessage(`${copied} Opening it in ${GUEST_LABEL[app.os]}.`);
-      } else if (s?.blocker) {
-        setMessage(`${copied} It opens once ${GUEST_LABEL[app.os]} is set up: ${s.blocker}`);
-      } else {
-        setMessage(`${copied} Launch it when the ${GUEST_LABEL[app.os]} running now has quit.`);
-      }
-    } catch (e) {
-      fail(e);
-    } finally {
-      setBusy(null);
-      setMediaProgress(null);
-    }
+    await act(
+      `Copying ${m.name}…`,
+      async (update) => {
+        const unlisten = await listen<MediaProgress>("media-progress", (e) => {
+          const { device, done, total } = e.payload;
+          if (device !== m.device || !done) return;
+          update({ label: `Copying ${m.name} (${formatBytes(done)} of ${formatBytes(total)})…`, value: done / Math.max(1, total) });
+        });
+        let app: LibraryApp;
+        try {
+          app = await invoke<LibraryApp>("copy_old_media", { device: m.device });
+        } finally {
+          unlisten();
+        }
+        const list = await refresh();
+        await refreshStatuses();
+        select(app);
+        const s = (await invoke<GuestStatus[]>("guest_statuses")).find((x) => x.os === app.os);
+        const guestBusy = list.some((a) => a.os === app.os && running.has(a.id));
+        const copied = `Copied ${m.name} as ${guestPath(app)}.`;
+        if (s && !s.blocker && !guestBusy && app.program) {
+          await invoke("launch_app", { id: app.id, promptOnly: false });
+          setMessage(`${copied} Opening it in ${GUEST_LABEL[app.os]}.`);
+        } else if (s?.blocker) {
+          setMessage(`${copied} It opens once ${GUEST_LABEL[app.os]} is set up: ${s.blocker}`);
+        } else {
+          setMessage(`${copied} Launch it when the ${GUEST_LABEL[app.os]} running now has quit.`);
+        }
+      },
+      WORK,
+    );
   }
 
   async function ignoreMedia(m: OldMedia) {
-    await invoke("dismiss_media", { device: m.device }).catch(fail);
+    await act(
+      `Ignoring ${m.name}…`,
+      async () => {
+        await invoke("dismiss_media", { device: m.device });
+        setMessage(`Ignoring ${m.name} until it's detached.`);
+      },
+      `media:${m.device}`,
+    );
   }
 
   async function setModel(model: string) {
-    try {
-      await invoke("set_guest_model", { os: guest, model });
-      await refreshStatuses();
-    } catch (e) {
-      fail(e);
-    }
+    await act(
+      `Switching the Amiga to an ${model}…`,
+      async () => {
+        await invoke("set_guest_model", { os: guest, model });
+        await refreshStatuses();
+        setMessage(`The Amiga now starts as an ${model}.`);
+      },
+      "model",
+    );
   }
 
   /** Turns the Amiga's built-in AROS replacement Kickstart on or off (commands.rs `set_aros`). */
   async function useAros(on: boolean) {
-    setError(null);
-    try {
-      await invoke<GuestStatus>("set_aros", { on });
-      await refreshStatuses();
-      setMessage(
-        on
-          ? "The Amiga starts with the free AROS Kickstart for now. When Floppy finds a real Kickstart ROM (dropped here, in Downloads, or on a files disc) it switches to it by itself."
-          : "Stopped using AROS. Add a Kickstart ROM to start the Amiga.",
-      );
-    } catch (e) {
-      fail(e);
-    }
+    await act(
+      on ? "Switching to AROS…" : "Stopping AROS…",
+      async () => {
+        await invoke<GuestStatus>("set_aros", { on });
+        await refreshStatuses();
+        setMessage(
+          on
+            ? "The Amiga starts with the free AROS Kickstart for now. When Floppy finds a real Kickstart ROM (dropped here, in Downloads, or on a files disc) it switches to it by itself."
+            : "Stopped using AROS. Add a Kickstart ROM to start the Amiga.",
+        );
+      },
+      "aros",
+    );
   }
 
   async function launch(app: LibraryApp, promptOnly: boolean) {
-    setError(null);
-    try {
-      await invoke("launch_app", { id: app.id, promptOnly });
-    } catch (e) {
-      fail(e);
-    }
+    const emulator = EMULATOR_LABEL[app.os];
+    await act(
+      promptOnly ? `Starting ${emulator}…` : `Starting ${app.name}…`,
+      async () => {
+        await invoke("launch_app", { id: app.id, promptOnly });
+        setMessage(promptOnly ? `Starting ${emulator}: ${GUEST_UI[app.os].bootOnlyTitle.toLowerCase()}.` : `Starting ${app.name} in ${emulator}.`);
+      },
+      `launch:${app.id}`,
+    );
   }
 
   async function setProgram(app: LibraryApp, program: string) {
-    try {
-      await invoke("set_program", { id: app.id, program });
-      await refresh();
-    } catch (e) {
-      fail(e);
-    }
+    await act(
+      `Saving what ${app.name} ${app.os === "dos" ? "runs" : "opens"}…`,
+      async () => {
+        await invoke("set_program", { id: app.id, program });
+        await refresh();
+        setMessage(`${app.name} now ${app.os === "dos" ? "runs" : "opens"} ${guestPath(app, program)}.`);
+      },
+      `app:${app.id}`,
+    );
   }
 
   /** Keeps what went wrong running an app, for the user and Export Findings. */
   async function setAppErrors(app: LibraryApp, errors: string) {
     if (errors.trim() === app.errors) return;
-    try {
-      await invoke("set_app_errors", { id: app.id, errors });
-      await refresh();
-    } catch (e) {
-      fail(e);
-    }
+    await act(
+      `Saving ${app.name}'s errors…`,
+      async () => {
+        await invoke("set_app_errors", { id: app.id, errors });
+        await refresh();
+        setMessage(errors.trim() ? `Kept what goes wrong running ${app.name}.` : `Cleared ${app.name}'s errors.`);
+      },
+      `app:${app.id}`,
+    );
   }
 
   /** Whether an app Floppy doesn't know shares its errors in Export Findings. */
   async function setShareErrors(app: LibraryApp, share: boolean) {
-    try {
-      await invoke("set_app_share_errors", { id: app.id, share });
-      await refresh();
-    } catch (e) {
-      fail(e);
-    }
+    await act(
+      `Saving ${app.name}'s sharing…`,
+      async () => {
+        await invoke("set_app_share_errors", { id: app.id, share });
+        await refresh();
+        setMessage(share ? `${app.name}'s errors go in your next Export Findings.` : `${app.name}'s errors stay on this computer.`);
+      },
+      `app:${app.id}`,
+    );
   }
 
   async function commitName(app: LibraryApp) {
@@ -1450,32 +1571,35 @@ function App() {
       setNameDraft(app.name);
       return;
     }
-    try {
-      await invoke("rename_app", { id: app.id, name });
-      await refresh();
-    } catch (e) {
-      fail(e);
-    }
+    await act(
+      `Renaming ${app.name}…`,
+      async () => {
+        await invoke("rename_app", { id: app.id, name });
+        await refresh();
+        setMessage(`Renamed ${app.name} to ${name}.`);
+      },
+      `app:${app.id}`,
+    );
   }
 
   async function reveal(app: LibraryApp) {
-    try {
+    await act(`${SHOW_IN_FILES}…`, async () => {
       await revealItemInDir(await invoke<string>("app_folder", { id: app.id }));
-    } catch (e) {
-      fail(e);
-    }
+    });
   }
 
   async function remove(app: LibraryApp) {
     setConfirmRemove(null);
-    try {
-      await invoke("remove_app", { id: app.id });
-      if (selectedId === app.id) setSelectedId(null);
-      setMessage(`Removed ${app.name}.`);
-      await refresh();
-    } catch (e) {
-      fail(e);
-    }
+    await act(
+      `Removing ${app.name}…`,
+      async () => {
+        await invoke("remove_app", { id: app.id });
+        if (selectedId === app.id) setSelectedId(null);
+        setMessage(`Removed ${app.name}.`);
+        await refresh();
+      },
+      `remove:${app.id}`,
+    );
   }
 
   const blocker = status?.blocker ?? null;
@@ -1486,6 +1610,11 @@ function App() {
 
   return (
     <main className="app">
+      <StartupScreen
+        progress={1 - startupPending.length / STARTUP_STEPS.length}
+        label={startupPending.length > 0 ? STARTUP_LABELS[startupPending[0]] : ""}
+        done={startupPending.length === 0}
+      />
       <header className="top">
         <div className="title-group">
           <h1>
@@ -1537,7 +1666,7 @@ function App() {
               <button
                 type="button"
                 className="menu-item"
-                disabled={!!busy}
+                disabled={working || isBusy("locate:mac-classic")}
                 title={basiliskTitle(basiliskStatus)}
                 onClick={() => fromGear(() => void locateEmulator("mac-classic"))}
               >
@@ -1546,22 +1675,22 @@ function App() {
               </button>
               <div className="menu-sep" />
               <div className="menu-note">Old apps you own that open old files</div>
-              <button type="button" className="menu-item" disabled={!!busy} onClick={() => fromGear(() => void saveWantedApps())}>
+              <button type="button" className="menu-item" disabled={working} onClick={() => fromGear(() => void saveWantedApps())}>
                 <ExportIcon />
                 <span>Save Wanted-Apps List…</span>
               </button>
-              <button type="button" className="menu-item" disabled={!!busy} onClick={() => fromGear(() => void importAppsDisc(false))}>
+              <button type="button" className="menu-item" disabled={working} onClick={() => fromGear(() => void importAppsDisc(false))}>
                 <DiscIcon />
                 <span>Import Apps Disc…</span>
               </button>
-              <button type="button" className="menu-item" disabled={!!busy} onClick={() => fromGear(() => void importAppsDisc(true))}>
+              <button type="button" className="menu-item" disabled={working} onClick={() => fromGear(() => void importAppsDisc(true))}>
                 <FolderIcon />
                 <span>Import Apps Folder…</span>
               </button>
               <button
                 type="button"
                 className="menu-item"
-                disabled={!!busy || !disketteRunning || requestTotal === 0}
+                disabled={working || isBusy("ask-diskette") || !disketteRunning || requestTotal === 0}
                 title={
                   !disketteRunning
                     ? "Open Diskette first: it looks through your cataloged drives"
@@ -1594,7 +1723,7 @@ function App() {
               <button
                 type="button"
                 className="menu-item"
-                disabled={!!busy}
+                disabled={working}
                 title={
                   knowledge?.sources
                     ? `Learned from ${knowledge.sources} findings file${knowledge.sources === 1 ? "" : "s"} so far: ${describeLearned(knowledge)}. Add another's, or drop one on the window.`
@@ -1621,7 +1750,7 @@ function App() {
               <button
                 type="button"
                 className="menu-item"
-                disabled={!!busy || !backup?.slots.length}
+                disabled={working || !backup?.slots.length}
                 title={
                   backup?.slots.length
                     ? "Burn A CD: one compressed disc image of your setup files and settings, to restore Floppy in one step."
@@ -1669,10 +1798,10 @@ function App() {
                 value={verifyNote}
                 onChange={(e) => setVerifyNote(e.target.value)}
               />
-              <button type="button" className="small primary" onClick={() => void answerVerification(true)}>
+              <button type="button" className="small primary" disabled={isBusy("verify")} onClick={() => void answerVerification(true)}>
                 Worked
               </button>
-              <button type="button" className="small" onClick={() => void answerVerification(false)}>
+              <button type="button" className="small" disabled={isBusy("verify")} onClick={() => void answerVerification(false)}>
                 Didn't Work
               </button>
             </div>
@@ -1728,13 +1857,13 @@ function App() {
       </div>
 
       <div className="toolbar">
-        <button type="button" className="primary icontext-btn" onClick={() => void pickFolder()} disabled={!!busy}>
+        <button type="button" className="primary icontext-btn" onClick={() => void pickFolder()} disabled={working}>
           <span className="btn-icon">
             <FolderIcon />
           </span>
           Import Folder…
         </button>
-        <button type="button" className="icontext-btn" onClick={() => void pickFiles()} disabled={!!busy}>
+        <button type="button" className="icontext-btn" onClick={() => void pickFiles()} disabled={working}>
           <span className="btn-icon">
             <FileIcon />
           </span>
@@ -1745,7 +1874,7 @@ function App() {
             type="button"
             className="icontext-btn"
             onClick={() => void importFilesDisc(false)}
-            disabled={!!busy || systemInUse}
+            disabled={working || systemInUse}
             title="Add ROMs and startup disks from a disc image of gathered system files"
           >
             <span className="btn-icon">
@@ -1765,10 +1894,10 @@ function App() {
             <strong>Floppy's system is complete.</strong> Burn A CD to back it up: one compressed disc image of your{" "}
             {backup.slots.join(", ")} and their settings, so a new computer or a reinstall is set up again in one step.
           </p>
-          <button type="button" className="small primary" onClick={() => void burnBackup()} disabled={!!busy}>
+          <button type="button" className="small primary" onClick={() => void burnBackup()} disabled={working}>
             Burn A CD…
           </button>
-          <button type="button" className="small" onClick={() => void declineBackup()} disabled={!!busy}>
+          <button type="button" className="small" onClick={() => void declineBackup()} disabled={working || isBusy("decline-backup")}>
             Not Now
           </button>
         </div>
@@ -1783,7 +1912,12 @@ function App() {
             <strong>{GUEST_LABEL[guest]} apps can't start yet.</strong> {status.blocker} If you have a copy somewhere
             else, point Floppy at it.
           </p>
-          <button type="button" className="small primary" onClick={() => void locateEmulator(guest)} disabled={!!busy}>
+          <button
+            type="button"
+            className="small primary"
+            onClick={() => void locateEmulator(guest)}
+            disabled={working || isBusy(`locate:${guest}`)}
+          >
             Locate {status.emulator}…
           </button>
         </div>
@@ -1805,10 +1939,10 @@ function App() {
             zips or disc images, or download them (see where below) and Floppy picks them up from your Downloads
             folder. It recognizes each one by its contents, whatever it's called.
           </p>
-          <button type="button" className="small" onClick={() => void lookInDownloads(false)} disabled={!!busy || systemInUse}>
+          <button type="button" className="small" onClick={() => void lookInDownloads(false)} disabled={working || systemInUse}>
             Look in Downloads
           </button>
-          <button type="button" className="small" onClick={() => void pickSetupFiles()} disabled={!!busy || systemInUse}>
+          <button type="button" className="small" onClick={() => void pickSetupFiles()} disabled={working || systemInUse}>
             Choose Files…
           </button>
         </div>
@@ -1823,7 +1957,7 @@ function App() {
             <strong>Diskette is running.</strong> Ask it for {describeRequest(request)} Floppy still needs? It looks
             through your cataloged drives, and if it finds any, offers to Burn A CD and sends the disc back here.
           </p>
-          <button type="button" className="small primary" onClick={() => void askDiskette()} disabled={!!busy}>
+          <button type="button" className="small primary" onClick={() => void askDiskette()} disabled={working || isBusy("ask-diskette")}>
             Ask Diskette
           </button>
           <button type="button" className="small" onClick={() => setAskDismissed(true)}>
@@ -1847,10 +1981,10 @@ function App() {
             Floppy can copy it and open the copy in {m.hint ? GUEST_LABEL[m.hint] : "the emulator it belongs to"}. macOS
             asks for your password to read it, and the original isn't changed.
           </p>
-          <button type="button" className="small primary" onClick={() => void copyMedia(m)} disabled={!!busy}>
+          <button type="button" className="small primary" onClick={() => void copyMedia(m)} disabled={working}>
             Copy and Open
           </button>
-          <button type="button" className="small" onClick={() => void ignoreMedia(m)} disabled={!!busy}>
+          <button type="button" className="small" onClick={() => void ignoreMedia(m)} disabled={working || isBusy(`media:${m.device}`)}>
             Ignore
           </button>
         </div>
@@ -1862,27 +1996,18 @@ function App() {
             <p className="setup-drop-text">
               <strong>{a.name}</strong> is running in {EMULATOR_LABEL[a.os]}. {quitHint(a.os, quitAsked.has(a.id))}
             </p>
-            <button type="button" className={`small${quitAsked.has(a.id) ? " danger" : ""}`} onClick={() => void quitApp(a)}>
+            <button
+              type="button"
+              className={`small${quitAsked.has(a.id) ? " danger" : ""}`}
+              disabled={isBusy(`quit:${a.id}`)}
+              onClick={() => void quitApp(a)}
+            >
               {quitAsked.has(a.id) ? "Force Quit" : `Quit ${EMULATOR_LABEL[a.os]}`}
             </button>
           </div>
         ))}
 
-      {busy && (
-        <div className="scan-status-row">
-          <span className="scan-status-label">
-            {busy}
-            {mediaProgress && mediaProgress.done > 0
-              ? ` (${formatBytes(mediaProgress.done)} of ${formatBytes(mediaProgress.total)})`
-              : "…"}
-          </span>
-          {mediaProgress && mediaProgress.done > 0 ? (
-            <ProgressBar value={mediaProgress.done / Math.max(1, mediaProgress.total)} label={busy} />
-          ) : (
-            <ProgressBar indeterminate label={busy} />
-          )}
-        </div>
-      )}
+      <ActivityStatus activities={activities} />
 
       <div className="layout">
         <div className="layout-column">
@@ -1896,14 +2021,18 @@ function App() {
               <button
                 type="button"
                 className="primary icontext-btn"
-                disabled={!!busy || running.has(guestRunId("dos"))}
+                disabled={working || running.has(guestRunId("dos")) || isBusy(`launch:${guestRunId("dos")}`)}
                 onClick={() => void startGuest("dos")}
                 title="DOSBox at a C:\ prompt, with every app in the library on drive C:"
               >
                 <span className="btn-icon">
                   <PromptIcon />
                 </span>
-                {running.has(guestRunId("dos")) ? "DOS Is Running" : "Start DOS"}
+                {running.has(guestRunId("dos"))
+                  ? "DOS Is Running"
+                  : isBusy(`launch:${guestRunId("dos")}`)
+                    ? "Starting…"
+                    : "Start DOS"}
               </button>
             </div>
           )}
@@ -1911,7 +2040,7 @@ function App() {
           {guest !== "dos" && status && (
             <SystemSetup
               status={status}
-              disabled={!!busy || guestRunning}
+              disabled={working || guestRunning}
               onChoose={(kind, directory) => void chooseSystemFile(kind, directory)}
               onModel={(m) => void setModel(m)}
               onSaveList={() => void saveMissingList()}
@@ -1925,6 +2054,7 @@ function App() {
               onAros={(on) => void useAros(on)}
               onStart={() => void startGuest(guest)}
               started={running.has(guestRunId(guest))}
+              starting={isBusy(`launch:${guestRunId(guest)}`)}
             />
           )}
 
@@ -1936,7 +2066,7 @@ function App() {
                 <li key={app.id}>
                   <button
                     type="button"
-                    className={`app-row${app.id === selectedId ? " selected" : ""}`}
+                    className={`app-row${app.id === selectedId ? " selected" : ""}${isBusy(`remove:${app.id}`) ? " busy" : ""}`}
                     onClick={() => select(app)}
                     onDoubleClick={() => app.program && !launchBlocked && void launch(app, false)}
                   >
@@ -2010,7 +2140,7 @@ function App() {
             ))
           )}
           <div className="detail-actions">
-            <button type="button" className="icontext-btn" onClick={() => void pickDocuments()} disabled={!!busy}>
+            <button type="button" className="icontext-btn" onClick={() => void pickDocuments()} disabled={working}>
               <span className="btn-icon">
                 <FileIcon />
               </span>
@@ -2025,13 +2155,16 @@ function App() {
             <DocumentDetails
               doc={selectedDoc}
               apps={apps}
-              busy={!!busy}
+              busy={working}
+              opening={isBusy(`open-doc:${selectedDoc.id}`)}
+              removing={isBusy(`remove-doc:${selectedDoc.id}`)}
+              starting={isBusy(`launch:${guestRunId(selectedDoc.os)}`)}
               onOpen={(o) => void openDocument(selectedDoc, o)}
               onReveal={() => void revealLibraryFile(selectedDoc.os, selectedDoc.file)}
               onExport={() => void exportLibraryFile(selectedDoc.os, selectedDoc.file)}
               onRemove={() => void removeDocument(selectedDoc)}
               canStart={!!status?.complete && !!status.found && !status.blocker}
-              startBlocked={!!busy || guestRunning}
+              startBlocked={working || guestRunning}
               onStart={() => void startGuest(selectedDoc.os)}
             />
           ) : !selected ? (
@@ -2139,18 +2272,18 @@ function App() {
                   type="button"
                   className="primary icontext-btn"
                   onClick={() => void launch(selected, false)}
-                  disabled={launchBlocked || !selected.program || running.has(selected.id)}
+                  disabled={launchBlocked || !selected.program || running.has(selected.id) || isBusy(`launch:${selected.id}`)}
                 >
                   <span className="btn-icon">
                     <PlayIcon />
                   </span>
-                  {running.has(selected.id) ? "Running" : "Launch"}
+                  {running.has(selected.id) ? "Running" : isBusy(`launch:${selected.id}`) ? "Starting…" : "Launch"}
                 </button>
                 <button
                   type="button"
                   className="icontext-btn"
                   onClick={() => void launch(selected, true)}
-                  disabled={launchBlocked || running.has(selected.id) || workbenchMissing}
+                  disabled={launchBlocked || running.has(selected.id) || workbenchMissing || isBusy(`launch:${selected.id}`)}
                   title={ui.bootOnlyTitle}
                 >
                   <span className="btn-icon">
@@ -2168,7 +2301,7 @@ function App() {
                   type="button"
                   className="danger icontext-btn"
                   onClick={() => setConfirmRemove(selected)}
-                  disabled={running.has(selected.id) || (guest !== "dos" && guestRunning)}
+                  disabled={running.has(selected.id) || (guest !== "dos" && guestRunning) || isBusy(`remove:${selected.id}`)}
                 >
                   <span className="btn-icon">
                     <TrashIcon />
@@ -2260,8 +2393,8 @@ function App() {
             <button type="button" onClick={() => void answerIdentify(false)}>
               Ask Later
             </button>
-            <button type="button" className="primary" onClick={() => void answerIdentify(true)}>
-              Confirm
+            <button type="button" className="primary" disabled={isBusy("identify")} onClick={() => void answerIdentify(true)}>
+              {isBusy("identify") ? "Saving…" : "Confirm"}
             </button>
           </>
         }
@@ -2319,7 +2452,7 @@ function App() {
             <button
               type="button"
               className="primary"
-              disabled={!reportNote.trim() && !reportSource.trim()}
+              disabled={(!reportNote.trim() && !reportSource.trim()) || isBusy("report")}
               onClick={() => void sendReport()}
             >
               Keep for Export
@@ -2395,7 +2528,7 @@ function App() {
             <button type="button" onClick={() => setBackupOpen(false)}>
               Cancel
             </button>
-            <button type="button" className="primary" disabled={!!busy} onClick={() => void burnBackup()}>
+            <button type="button" className="primary" disabled={working} onClick={() => void burnBackup()}>
               Burn A CD…
             </button>
           </>
@@ -2650,6 +2783,9 @@ function DocumentDetails({
   doc,
   apps,
   busy,
+  opening,
+  removing,
+  starting,
   onOpen,
   onReveal,
   onExport,
@@ -2661,6 +2797,10 @@ function DocumentDetails({
   doc: LibraryDoc;
   apps: LibraryApp[];
   busy: boolean;
+  /** Its Open, Remove or Start is under way (lib/activity.ts `isBusy`). */
+  opening: boolean;
+  removing: boolean;
+  starting: boolean;
   onOpen: (o: Opener) => void;
   onReveal: () => void;
   onExport: () => void;
@@ -2724,23 +2864,23 @@ function DocumentDetails({
       </dl>
       <div className="detail-actions">
         {doc.os === "dos" ? (
-          <button type="button" className="primary icontext-btn" disabled={busy || !opener} onClick={() => opener && onOpen(opener)}>
+          <button type="button" className="primary icontext-btn" disabled={busy || opening || !opener} onClick={() => opener && onOpen(opener)}>
             <span className="btn-icon">
               <PlayIcon />
             </span>
-            Open
+            {opening ? "Opening…" : "Open"}
           </button>
         ) : (
           <button
             type="button"
             className="primary icontext-btn"
-            disabled={busy || !canStart || startBlocked}
+            disabled={busy || starting || !canStart || startBlocked}
             onClick={onStart}
           >
             <span className="btn-icon">
               <PlayIcon />
             </span>
-            Start {GUEST_LABEL[doc.os]}
+            {starting ? "Starting…" : `Start ${GUEST_LABEL[doc.os]}`}
           </button>
         )}
         <button type="button" className="icontext-btn" onClick={onReveal}>
@@ -2755,7 +2895,7 @@ function DocumentDetails({
           </span>
           Export…
         </button>
-        <button type="button" className="danger icontext-btn" onClick={onRemove}>
+        <button type="button" className="danger icontext-btn" disabled={removing} onClick={onRemove}>
           <span className="btn-icon">
             <TrashIcon />
           </span>
@@ -2783,6 +2923,7 @@ function SystemSetup({
   onAros,
   onStart,
   started,
+  starting,
 }: {
   status: GuestStatus;
   disabled: boolean;
@@ -2800,6 +2941,8 @@ function SystemSetup({
   /** Starts the guest on its own, shown once none of its setup files is missing. */
   onStart: () => void;
   started: boolean;
+  /** Start was pressed and the emulator is on its way. */
+  starting: boolean;
 }) {
   const amiga = status.os === "amiga";
   const { rom, boot, model, aros } = status.system;
@@ -2869,11 +3012,11 @@ function SystemSetup({
       )}
       {status.complete && status.found && !status.blocker && (
         <div className="detail-actions guest-start">
-          <button type="button" className="primary icontext-btn" disabled={disabled} onClick={onStart}>
+          <button type="button" className="primary icontext-btn" disabled={disabled || starting} onClick={onStart}>
             <span className="btn-icon">
               <PlayIcon />
             </span>
-            {started ? `${GUEST_LABEL[status.os]} Is Running` : `Start ${GUEST_LABEL[status.os]}`}
+            {started ? `${GUEST_LABEL[status.os]} Is Running` : starting ? "Starting…" : `Start ${GUEST_LABEL[status.os]}`}
           </button>
           <span className="system-note">
             {amiga ? "Boots Workbench, with your apps on the Floppy: drive." : "Boots the startup disk, with your apps on the Unix volume."}

@@ -6,9 +6,31 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#14161a" />
     <title>Floppy</title>
+    <!-- Startup screen styles live here, not in App.css, so the static splash
+         below paints before any JS or bundled CSS loads.
+         components/StartupScreen.tsx renders the same markup plus a progress
+         bar once React mounts. Colors mirror index.css's tokens. -->
     <style>
+      html, body { margin: 0; height: 100%; background: #14161a; }
+      .startup-screen {
+        position: fixed; inset: 0; z-index: 1000;
+        display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px;
+        background: #14161a; color: #e7e9ee;
+        font-family: "IBM Plex Sans", system-ui, sans-serif;
+        transition: opacity 0.2s ease;
+      }
+      .startup-screen.leaving { opacity: 0; pointer-events: none; }
+      .startup-mark { width: 96px; height: 96px; }
+      .startup-glyph { display: none; }
+      .startup-name { font-size: 22px; font-weight: 600; letter-spacing: -0.01em; }
+      .startup-progress { width: 220px; height: 6px; margin-top: 6px; }
+      .startup-label { min-height: 16px; font-size: 12px; color: #8b93a1; font-family: "IBM Plex Mono", ui-monospace, monospace; }
       /* ANSIapps theme (src/ansiapps-theme.css finishes the job once it loads) */
-      html[data-theme="ansiapps"], html[data-theme="ansiapps"] body { background: #0000aa; }
+      html[data-theme="ansiapps"], html[data-theme="ansiapps"] body,
+      html[data-theme="ansiapps"] .startup-screen { background: #0000aa; }
+      /* Text only: the mark's CP437 twin (components/icons.tsx), not the image. */
+      html[data-theme="ansiapps"] .startup-mark { display: none; }
+      html[data-theme="ansiapps"] .startup-glyph { display: block; color: #55ff55; }
     </style>
     <!-- Applies the stored theme before first paint, so the ANSIapps theme
          never flashes the modern one. Same key and value as src/lib/theme.ts. -->
@@ -20,7 +42,15 @@
   </head>
 
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <div class="startup-screen">
+        <img class="startup-mark" src="/favicon.svg" alt="" />
+        <div class="startup-glyph" aria-hidden="true">◙</div>
+        <div class="startup-name">Floppy</div>
+        <div class="startup-progress"></div>
+        <div class="startup-label"></div>
+      </div>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

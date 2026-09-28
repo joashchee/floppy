@@ -372,6 +372,20 @@
   content: "████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████" / "";
 }
 
+/* No easing: a determinate fill jumps to each new width (the global
+   transition: none), and the sweep moves in whole steps, the way a
+   text-mode screen redraws. The one animation "no motion" allows, since a
+   stopped bar would look like a hang. */
+:root[data-theme="ansiapps"] .progress-bar-indeterminate .progress-bar-fill { animation-timing-function: steps(12, end); }
+:root[data-theme="ansiapps"] .progress-eta { color: var(--dos-lightgray); }
+
+/* ── Launch screen (markup and base styles in index.html) ─────────────── */
+
+:root[data-theme="ansiapps"] .startup-screen { background: var(--dos-blue); color: var(--dos-white); font-family: var(--font-ui); gap: 16px; transition: none; }
+:root[data-theme="ansiapps"] .startup-glyph { color: var(--accent); }
+:root[data-theme="ansiapps"] .startup-label { color: var(--dos-lightgray); font-family: var(--font-mono); }
+:root[data-theme="ansiapps"] .startup-progress { height: 16px; }
+
 /* ── Guest tiles: single-line boxes; the chosen guest is the cyan bar ─ */
 
 :root[data-theme="ansiapps"] .guest-tiles { gap: 16px 2ch; margin-bottom: 16px; }
@@ -393,6 +407,13 @@
 :root[data-theme="ansiapps"] .app-row { background: transparent; color: var(--text); padding: 0 1ch; }
 :root[data-theme="ansiapps"] .app-row:hover:not(:disabled) { background: var(--dos-black); }
 :root[data-theme="ansiapps"] .app-row.selected:hover:not(:disabled) { background: var(--dos-cyan); }
+/* An app being removed: grayed out in text-mode colors, not made transparent. */
+:root[data-theme="ansiapps"] .app-row.busy {
+  opacity: 1;
+  --text: var(--dos-darkgray);
+  --muted: var(--dos-darkgray);
+  --accent: var(--dos-darkgray);
+}
 :root[data-theme="ansiapps"] .app-row.selected {
   --text: var(--dos-black);
   --muted: var(--dos-black);

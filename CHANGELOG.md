@@ -8,6 +8,23 @@ against the day the change was made.
 
 ## Unreleased
 
+- **Feedback for everything you do, and a loading screen** (2026-09-29),
+  the ansiapps apps' shared conventions (Diskette is the reference):
+  - Every action shows a labeled progress bar while it runs and ends
+    with a message or an error. Actions that used to finish silently now
+    say what they did: Launch and Start ("Starting…" on the button),
+    Quit, renaming an app, Runs/Opens, Is and Version, Also opens,
+    Errors and Share, the Amiga model, Ignore on an old disk, Not Now on
+    the backup offer, and Ask Later.
+  - Importing an app counts the bytes copied or unpacked (the new
+    `import-progress` event), so a folder or zip import has a real bar,
+    and a batch of drops counts its items. Copying an old disk counts
+    bytes too. Every counting bar says when it should be done ("About 4
+    min left, done around 14:32").
+  - The window opens on a Floppy splash instead of a blank page, with a
+    bar over the launch-time loading, in both themes.
+  - The app being removed grays out, and its buttons wait until it's gone.
+
 - **Start DOS, Start Classic Mac, Start Amiga** (2026-09-28): once a
   guest has every setup file, a Start button boots it with no app. For
   DOS it's at the top of the Library panel (a `C:\` prompt with the

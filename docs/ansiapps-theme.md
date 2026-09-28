@@ -116,7 +116,8 @@ dialog (a color, like an attribute change).
   `( )` / `(•)`, text fields and
   pickers are black strips with a `▼` cell, and focus is reverse video
   (black on white).
-- **No motion** beyond the indeterminate progress bar.
+- **No motion** beyond the indeterminate progress bar, which steps in
+  12 whole moves rather than gliding (see Shared UI conventions).
 - **Buttons** are Turbo Vision green (black text), primary light green,
   danger red with white text, disabled dark gray on light gray.
 - **Floppy's own color keeps its meaning**: phosphor green becomes
@@ -124,6 +125,35 @@ dialog (a color, like an attribute change).
   icons, and the progress fill.
 - Icons are still inline SVG in `currentColor` (to be replaced by
   CP437 glyphs, see "Text only").
+
+## Shared UI conventions (every ansiapps app)
+
+Decided 2026-09-27 across the ansiapps apps. Beyond the two themes,
+every app shares the three behaviors below, and each must look right in
+both themes. `CLAUDE.md` has how Floppy does them.
+
+- **A loading screen from the first paint.** `index.html` holds a static
+  splash (mark, name, empty progress slot and label) with inline styles,
+  so it paints before any JS; the no-flash theme script runs first, so
+  the ANSIapps splash is blue from the start. `StartupScreen.tsx` renders
+  the same markup and adds a determinate bar over the launch-time steps.
+  ANSIapps look: blue screen, white name, the mark as its CP437 glyph
+  `◙` in light green (the text-only rule allows no image), the `░█` bar
+  and a light-gray label, on whole 16px cells. It disappears rather
+  than fading.
+- **Feedback for every user activity.** Anything the user sets off shows
+  a label and progress bar until it settles (`runActivity`,
+  `ActivityStatus.tsx`, after 150 ms), then a status message or an
+  error. The control acted on shows it's busy: disabled, or "Starting…".
+  In the ANSIapps theme a busy row turns dark gray rather than
+  transparent, since the palette allows no transparency.
+- **Estimated completion on every counting progress bar**, under it:
+  "About 4 min left, done around 14:32" (`useCompletionEstimate`,
+  `src/lib/estimate.ts`), redone only at 20, 40, 60, 80 and 90% or every
+  10 seconds so it holds steady. ANSIapps look: light-gray 16px text like
+  other status lines. A determinate fill jumps to each new width, and the
+  indeterminate sweep moves in 12 whole steps: the one animation the "no
+  motion" rule allows, because a stopped bar would look like a hang.
 
 ## Font licensing
 

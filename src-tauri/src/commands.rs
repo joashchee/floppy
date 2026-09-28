@@ -857,6 +857,28 @@ pub struct ImportedItem {
     document: Option<LibraryDoc>,
 }
 
+/// How far an app import's copy or unpack has got, in bytes
+/// (`import-progress`), so the window's bar can count it.
+#[derive(Serialize, Clone)]
+struct ImportProgress {
+    done: u64,
+    total: u64,
+}
+
+/// Emits `import-progress` for `Library::import_with_progress`, once per
+/// percent at most: a folder of thousands of small files would otherwise
+/// send an event for each.
+fn import_progress(app: &AppHandle) -> impl FnMut(u64, u64) + '_ {
+    let mut last = None;
+    move |done, total| {
+        let pct = if total == 0 { 100 } else { done.saturating_mul(100) / total };
+        if last != Some(pct) {
+            last = Some(pct);
+            let _ = app.emit("import-progress", ImportProgress { done, total });
+        }
+    }
+}
+
 /// Imports a dropped or picked path: an app (a folder, a zip, a program or
 /// disk image) or else a document for the guest's documents folder
 /// (`documents::is_app_source`).
@@ -869,7 +891,7 @@ pub async fn import_item(app: AppHandle, os: String, path: String) -> Result<Imp
         if !documents::is_app_source(os, &path) {
             Ok(ImportedItem { app: None, document: Some(library.import_document(os, &path)?) })
         } else {
-            Ok(ImportedItem { app: Some(library.import(os, &path)?), document: None })
+            Ok(ImportedItem { app: Some(library.import_with_progress(os, &path, &mut import_progress(&app))?), document: None })
         }
     })
     .await
@@ -894,7 +916,9 @@ pub async fn import_as(app: AppHandle, path: String, choice: drops::Choice) -> R
         let library = &app.state::<AppState>().library;
         let path = PathBuf::from(path);
         match choice.to {
-            drops::Dest::App => Ok(ImportedItem { app: Some(library.import(choice.os, &path)?), document: None }),
+            drops::Dest::App => {
+                Ok(ImportedItem { app: Some(library.import_with_progress(choice.os, &path, &mut import_progress(&app))?), document: None })
+            }
             drops::Dest::Document => Ok(ImportedItem { app: None, document: Some(library.import_document(choice.os, &path)?) }),
             drops::Dest::Setup => Err("Setup files are added with the setup files.".into()),
         }

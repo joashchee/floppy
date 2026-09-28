@@ -572,6 +572,50 @@ gitignored `CLAUDE.local.md`, never in committed files.
   imports from discs, and About Floppy. New actions of that kind go in
   its menu, grouped with `.menu-sep`, never as extra buttons in the main
   layout. Never remove it.
+- **Feedback for every user activity (all ansiapps apps).** Anything
+  the user sets off (a click, a drop, a menu item, a confirm button, a
+  field saved on blur) shows at once that it's underway, and ends with a
+  visible result: a status message on success, an error on failure.
+  Nothing may leave the user watching a window that looks idle. How:
+  - Run it through `act` in `App.tsx`, which wraps `runActivity`
+    (`useActivities`, `src/lib/activity.ts`): a label and `ProgressBar`
+    in the activity area (`components/ActivityStatus.tsx`) until it
+    settles, the error line cleared first and set on failure. The row
+    appears only after 150 ms, so instant work doesn't flash a bar. The
+    task says what it did with `setMessage`.
+  - Pick the bar to fit the work. **Determinate** (`update({ value })`)
+    whenever it can be counted, with the Rust side emitting progress:
+    app imports send `import-progress` in bytes (`withImportProgress`
+    follows it, one item's share of a batch), copying an old disk sends
+    `media-progress`, and a batch counts its items. **Indeterminate**
+    only when nothing can be counted (reading a disc, burning a backup
+    today). **Timed** (`durationMs`) when the duration is known.
+  - **Every determinate or timed bar shows an estimated completion**
+    ("About 4 min left, done around 14:32"): `ProgressBar` does it
+    through `useCompletionEstimate` (`src/lib/estimate.ts`). A bar with
+    no room for the line passes `hideEstimate` and shows it elsewhere,
+    as the startup screen does in its label. Never drop it.
+  - The control the user acted on shows it's busy too: pass a key to
+    `act` and use `isBusy(key)` (`launch:<id>` turns Launch into
+    "Starting…", `remove:<id>` grays the app's row). Work that changes
+    the library or setup files uses the `WORK` key, which disables the
+    other controls that would start more.
+  - Shared with the other apps: `activity.ts`, `estimate.ts`,
+    `ProgressBar.tsx` and `ActivityStatus.tsx` come from the design
+    system; keep them in step with Diskette's.
+- **An app loading screen, from the first paint.** The window is never
+  blank or half-drawn at launch. `index.html` holds a static splash (app
+  mark, name, an empty progress slot and label) whose styles are inline
+  in its `<head>`, so it paints before any JS or bundled CSS loads; the
+  pre-paint theme script there makes the ANSIapps splash blue, with the
+  mark as its CP437 glyph. `components/StartupScreen.tsx` renders the
+  same markup once React mounts, adds a determinate bar over the
+  launch-time calls (`STARTUP_STEPS` in `App.tsx`), labels the step
+  still running, then fades out (in the ANSIapps theme, just goes). A
+  failed step counts as finished, and its error shows in the app. New
+  launch-time work joins `STARTUP_STEPS` with its own label rather than
+  running unseen. Keep the splash and `StartupScreen` in step, and check
+  both themes.
 - **Two themes: modern (default) and ANSIapps**, an old-school DOS
   text-mode look toggled from the gear menu (`docs/ansiapps-theme.md`,
   `src/ansiapps-theme.css`, `src/lib/theme.ts`). New UI stays on the
