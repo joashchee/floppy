@@ -8,17 +8,24 @@ Floppy keeps it in a library and boots it in DOSBox Staging with one click.
 It also runs Amiga software in FS-UAE and classic Mac OS (System 7 to
 Mac OS 8.1) apps in Basilisk II, using ROMs and system disks you supply.
 
-It pairs well with Diskette, an offline catalog of your drives that
-points out the old apps you already own for obsolete formats. Floppy is
-where those apps run. They're separate programs, and anything can hand
-Floppy an app or its files through the plain interfaces below
-([Handoff](#handoff), [Finding missing files](#finding-missing-files)).
+## Get Floppy
+
+Floppy is free, and always will be. Download it from
+[ansiapps.com](https://ansiapps.com), the only place it's published.
+
+Floppy is the heart of ansiapps. Diskette (an offline catalog of your
+drives that finds the old apps and setup files you already own) and
+Crunchy (duplicate finding across those drives) are paid extensions to
+it. They're separate programs, and Floppy works fully without them:
+anything can hand Floppy an app or its files through the plain
+interfaces below ([Handoff](#handoff), [Finding missing
+files](#finding-missing-files)).
 
 ## Status
 
-Early development, macOS first. DOS is the most complete. Classic Mac and
-Amiga boot the guest with your library shared into it, but don't open a
-folder app for you yet.
+Early development, on macOS and Linux (Windows later). DOS is the most
+complete. Classic Mac and Amiga boot the guest with your library shared
+into it, but don't open a folder app for you yet.
 
 ## Building (macOS)
 
@@ -111,8 +118,9 @@ undamaged copy when there are several. The list format is specified in
 Floppy never bundles or downloads operating systems, ROMs, or the
 applications you run in it, abandonware included. You supply them.
 DOS needs no OS files, since DOSBox provides its own DOS. (FS-UAE's own
-download contains AROS, a free replacement Kickstart. Floppy doesn't use
-it, and always boots the Kickstart you provide.)
+download contains AROS, a free, open-source replacement Kickstart.
+Floppy uses it only if you choose **Use AROS for Now** in the Amiga
+setup, and switches to a real Kickstart as soon as you add one.)
 
 ## License
 

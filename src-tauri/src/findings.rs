@@ -20,6 +20,20 @@
 //!   app, version and program fingerprint. Into "Reported problems", for
 //!   a person to read. A known app's always go. Another app's go only
 //!   when the user ticks "Share", and then under its name in the library.
+//! - **Drop choices** (drops.rs): where the user said a dropped item goes
+//!   when Floppy had no clear winner, keyed by what kind of item it was
+//!   (file, folder or zip, extension, what its contents look like), never
+//!   its name. Into `docs/file-handling.md`'s "Drop choices", which Floppy
+//!   follows before asking.
+//! - **Setup reports**: what the user reported about getting a setup file:
+//!   a source that stopped working, a file that didn't work once set up
+//!   (with what Floppy recognized it as), or a better source. Into
+//!   `docs/legal-setupfiles.md`'s "Reported setup notes", for a person to
+//!   check before changing where the setup screen points.
+//!
+//! Findings are Floppy's training data. Merged into the living documents
+//! they teach every later release; dropped on another Floppy (learned.rs)
+//! they teach that one straight away, with no update.
 //!
 //! Each export holds only what earlier ones didn't: `library/findings.json`
 //! keeps what was shared, and each test result is marked exported
@@ -37,6 +51,7 @@ use serde::{Deserialize, Serialize};
 use crate::cd::{self, Slot};
 use crate::handlers;
 use crate::library::{GuestOs, IdentifiedBy, Library, SystemFile};
+use crate::drops;
 use crate::verify::{self, Tally};
 use crate::{amiga, sha1};
 
@@ -45,7 +60,7 @@ pub const FORMAT: &str = "floppy-findings";
 /// The file inside the zip.
 pub const JSON_NAME: &str = "floppy-findings.json";
 
-#[derive(Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Findings {
     pub format: String,
@@ -55,12 +70,29 @@ pub struct Findings {
     pub floppy_version: String,
     /// Unix seconds.
     pub exported: u64,
+    #[serde(default)]
     pub handler_tests: Vec<Tally>,
+    #[serde(default)]
     pub identities: Vec<IdentityFinding>,
+    #[serde(default)]
     pub file_types: Vec<FileTypeFinding>,
+    #[serde(default)]
     pub system_files: Vec<SystemFileFinding>,
     #[serde(default)]
     pub app_errors: Vec<AppErrorsFinding>,
+    #[serde(default)]
+    pub setup_reports: Vec<SetupReport>,
+    #[serde(default)]
+    pub drop_choices: Vec<DropChoiceFinding>,
+    /// The Floppy AI version (ai.rs) of the Floppy that exported them.
+    #[serde(default)]
+    pub ai_version: Option<u32>,
+    /// Set on a knowledge pack (`scripts/make-ai-pack.py`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pack: Option<PackInfo>,
+    /// Files under `materials/` in the zip (learned.rs).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub materials: Vec<Material>,
     /// How many test results `handler_tests` was totalled from, to mark
     /// them exported. Not shared.
     #[serde(skip)]
@@ -121,6 +153,141 @@ pub struct AppErrorsFinding {
     pub errors: String,
 }
 
+/// What a knowledge pack is: the Floppy AI version its materials make.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PackInfo {
+    pub ai_version: u32,
+    /// `YYYY-MM-DD`.
+    pub date: String,
+    /// What changed in this version.
+    #[serde(default)]
+    pub what: String,
+}
+
+/// A file a findings zip carries under `materials/`: plain text that
+/// adds to what Floppy knows, legal to share on ansiapps.com.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Material {
+    /// Its file name under `materials/`: `.md` or `.txt`.
+    pub name: String,
+    /// The licence it's shared under ("GPL-2.0-or-later", "CC0-1.0").
+    pub license: String,
+    /// Where it came from: a repo path or a link.
+    pub source: String,
+    #[serde(default)]
+    pub note: String,
+    /// Its SHA-256, checked when it's read. A signed pack's materials must
+    /// have one: the signature covers the JSON, the hashes the files.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sha256: Option<String>,
+}
+
+/// Where the user said a dropped item goes (drops.rs).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DropChoiceFinding {
+    pub signature: drops::Signature,
+    pub choice: drops::Choice,
+    /// What the dialog offered.
+    pub offered: Vec<drops::Choice>,
+    /// Unix seconds.
+    pub answered: u64,
+}
+
+impl DropChoiceFinding {
+    fn key(&self) -> String {
+        let s = &self.signature;
+        format!("drop {} {} {} {:?} {}", s.kind, s.ext, s.content, self.choice, self.answered)
+    }
+}
+
+/// What a setup report is about.
+pub const SETUP_REPORT_KINDS: [&str; 3] = ["source-broken", "didnt-work", "better-source"];
+
+/// Something the user reported about getting a setup file.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SetupReport {
+    /// cd.rs slot label.
+    pub slot: String,
+    /// One of `SETUP_REPORT_KINDS`.
+    pub kind: String,
+    /// The source it's about, or the better one: a link or a name.
+    pub source: Option<String>,
+    pub note: String,
+    /// For `didnt-work`: what Floppy recognized the file in the slot as,
+    /// with its size and, for a ROM or floppy, its SHA-1.
+    pub file: Option<String>,
+    /// Unix seconds.
+    pub reported: u64,
+}
+
+impl SetupReport {
+    fn key(&self) -> String {
+        format!("setup {} {} {} {} {}", self.slot, self.kind, self.source.as_deref().unwrap_or(""), self.note, self.reported)
+    }
+}
+
+const MAX_REPORT_NOTE: usize = 1000;
+const MAX_REPORT_SOURCE: usize = 300;
+
+/// Keeps a setup report for the next export. For "didn't work", notes
+/// what the file in that slot is, so a maintainer can tell which copy.
+pub fn add_setup_report(library: &Library, slot: &str, kind: &str, source: Option<&str>, note: &str) -> Result<(), String> {
+    let slot = Slot::from_label(slot).ok_or(format!("Unknown setup file {slot:?}."))?;
+    if !SETUP_REPORT_KINDS.contains(&kind) {
+        return Err(format!("Unknown kind of report {kind:?}."));
+    }
+    let note = scrub(note.trim());
+    let source = source.map(str::trim).filter(|s| !s.is_empty()).map(scrub);
+    if note.is_empty() && source.is_none() {
+        return Err("Say what happened, or where the better copy is.".into());
+    }
+    if note.chars().count() > MAX_REPORT_NOTE || source.as_ref().is_some_and(|s| s.chars().count() > MAX_REPORT_SOURCE) {
+        return Err("That's too long to send: keep it to a short paragraph.".into());
+    }
+    let file = if kind == "didnt-work" { slot_file(library, slot)? } else { None };
+    let reported = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+    let mut all = load_setup_reports(library);
+    all.push(SetupReport { slot: slot.label().to_string(), kind: kind.to_string(), source, note, file, reported });
+    let path = library.setup_reports_path();
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    let json = serde_json::to_vec_pretty(&all).map_err(|e| e.to_string())?;
+    std::fs::write(&path, json).map_err(|e| format!("Couldn't keep the report: {e}"))
+}
+
+fn load_setup_reports(library: &Library) -> Vec<SetupReport> {
+    std::fs::read(library.setup_reports_path()).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
+}
+
+/// What the file in `slot` is, for a "didn't work" report: never its
+/// name or where it is.
+fn slot_file(library: &Library, slot: Slot) -> Result<Option<String>, String> {
+    let Some(path) = library.system_file(slot.os(), slot.kind())? else {
+        // What ran instead, when that's the AROS fallback.
+        let aros = slot == Slot::Kickstart && library.system(GuestOs::Amiga)?.aros;
+        return Ok(aros.then(|| "AROS replacement Kickstart (FS-UAE's built-in copy)".to_string()));
+    };
+    let Ok(meta) = std::fs::metadata(&path) else { return Ok(None) };
+    if !meta.is_file() {
+        return Ok(Some("a folder".into()));
+    }
+    if slot == Slot::MacBoot {
+        let volume = crate::mac::volume_name(&path).filter(|v| !v.is_empty()).map(|v| format!(" \"{v}\"")).unwrap_or_default();
+        return Ok(Some(format!("startup disk{volume}, {} bytes", meta.len())));
+    }
+    if meta.len() > MAX_SYSTEM_FILE {
+        return Ok(Some(format!("{} bytes", meta.len())));
+    }
+    let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
+    let what = describe(slot, &path, &bytes).unwrap_or_else(|| slot.label().to_string());
+    Ok(Some(format!("{what}, {} bytes, SHA-1 {}", bytes.len(), sha1::hex(&bytes))))
+}
+
 /// How much is new since the last export, for the gear menu.
 #[derive(Serialize, Debug, Default, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -130,13 +297,15 @@ pub struct Summary {
     pub file_types: usize,
     pub system_files: usize,
     pub app_errors: usize,
+    pub setup_reports: usize,
+    pub drop_choices: usize,
     /// Unix seconds of the last export, if any.
     pub last_exported: Option<u64>,
 }
 
 impl Summary {
     fn total(&self) -> usize {
-        self.handler_tests + self.identities + self.file_types + self.system_files + self.app_errors
+        self.handler_tests + self.identities + self.file_types + self.system_files + self.app_errors + self.setup_reports + self.drop_choices
     }
 }
 
@@ -148,6 +317,8 @@ impl Findings {
             file_types: self.file_types.len(),
             system_files: self.system_files.len(),
             app_errors: self.app_errors.len(),
+            setup_reports: self.setup_reports.len(),
+            drop_choices: self.drop_choices.len(),
             last_exported: None,
         }
     }
@@ -191,6 +362,15 @@ struct Shared {
     last_exported: Option<u64>,
     /// Every identity, file type, system file and errors note exported.
     keys: BTreeSet<String>,
+    /// The IDs of this Floppy's own exports, so dropping one back on it
+    /// teaches it nothing twice (learned.rs).
+    #[serde(default)]
+    exported_ids: BTreeSet<String>,
+}
+
+/// Whether findings `id` came from this Floppy.
+pub fn is_own(library: &Library, id: &str) -> bool {
+    load_shared(library).exported_ids.contains(id)
 }
 
 fn load_shared(library: &Library) -> Shared {
@@ -212,6 +392,9 @@ pub fn mark_exported(library: &Library, findings: &Findings) -> Result<(), Strin
     shared.keys.extend(findings.file_types.iter().map(FileTypeFinding::key));
     shared.keys.extend(findings.system_files.iter().map(SystemFileFinding::key));
     shared.keys.extend(findings.app_errors.iter().map(AppErrorsFinding::key));
+    shared.keys.extend(findings.setup_reports.iter().map(SetupReport::key));
+    shared.keys.extend(findings.drop_choices.iter().map(DropChoiceFinding::key));
+    shared.exported_ids.insert(findings.id.clone());
     let path = library.findings_path();
     let tmp = path.with_extension("json.tmp");
     let json = serde_json::to_vec_pretty(&shared).map_err(|e| e.to_string())?;
@@ -308,6 +491,13 @@ pub fn collect(library: &Library) -> Result<Findings, String> {
     let (handler_tests, verifications_seen) = verify::unexported(library);
     let mut system_files = system_files(library)?;
     system_files.retain(|f| !shared.keys.contains(&f.key()));
+    let mut setup_reports = load_setup_reports(library);
+    setup_reports.retain(|r| !shared.keys.contains(&r.key()));
+    let drop_choices: Vec<DropChoiceFinding> = drops::load_answers(library)
+        .into_iter()
+        .map(|a| DropChoiceFinding { signature: a.signature, choice: a.choice, offered: a.offered, answered: a.answered })
+        .filter(|f| !shared.keys.contains(&f.key()))
+        .collect();
     Ok(Findings {
         format: FORMAT.into(),
         version: 1,
@@ -319,6 +509,11 @@ pub fn collect(library: &Library) -> Result<Findings, String> {
         file_types,
         system_files,
         app_errors,
+        setup_reports,
+        drop_choices,
+        ai_version: Some(crate::ai::info().version),
+        pack: None,
+        materials: Vec::new(),
         verifications_seen,
     })
 }
@@ -374,18 +569,29 @@ What this Floppy learned that can help every Floppy: which old apps
 opened which file types, which app and version each program is (by its
 size and SHA-256), file types you said an app opens, and setup files
 (ROMs, Workbench floppies) it didn't already know, by size and SHA-1,
-and what you wrote in a known app's Errors field (or another app's,
-with its name, when you ticked Share).
+what you wrote in a known app's Errors field (or another app's,
+with its name, when you ticked Share), and what you reported about
+getting setup files: a source that stopped working, a file that didn't
+work (with what Floppy recognized it as), or a better source, and where
+you said dropped files go when Floppy couldn't tell (by the kind of file:
+its extension and what its contents look like, never its name).
 
 It holds no documents, no document names, no programs or ROMs, and no
 file or folder names from your Mac. floppy-findings.json is all of it,
 as plain text, so you can read exactly what's there. Each export holds
 only what's new since the one before.
 
-Floppy never sends this anywhere. To share it, send the zip to Floppy's
-maintainers (see the GitHub repo). They merge it into Floppy's living
-documents with scripts/merge-findings.py, and the next release
-recognizes what you found.
+These are Floppy's training data. Floppy never sends them anywhere;
+you choose who gets them:
+
+- Drop this zip on anyone's Floppy window (or use Learn from Findings…
+  in its gear menu), and that Floppy learns what's in it straight away:
+  the app versions, file types, test results, setup files and drop
+  choices. Nothing it already knows is overruled, and it can forget
+  what it learned at any time.
+- Send it to Floppy's maintainers (see the GitHub repo). They merge it
+  into Floppy's living documents with scripts/merge-findings.py, and
+  every Floppy knows it from the next release on.
 ";
 
 /// Writes `findings` as a zip: the JSON and a README saying what's in it.
@@ -526,6 +732,47 @@ mod tests {
         assert!(e.sha256.is_some());
         mark_exported(&lib, &f).unwrap();
         assert!(collect(&lib).unwrap().is_empty());
+    }
+
+    #[test]
+    fn setup_reports_go_once_and_say_what_the_file_is() {
+        let t = TempDir::new();
+        let lib = Library::new(t.path().join("lib"));
+        let home = std::env::var("HOME").unwrap();
+        add_setup_report(&lib, "Mac startup disk", "source-broken", Some("https://example.org/753"), "Gone (404)").unwrap();
+        add_setup_report(&lib, "Kickstart ROM", "better-source", Some("https://example.org/roms"), "").unwrap();
+        let mut rom = vec![0u8; 524_288];
+        rom[..4].copy_from_slice(&[0x42, 0x1E, 0xF4, 0x8B]);
+        rom[8..10].copy_from_slice(&[0x06, 0x7C]);
+        let rom_path = t.path().join("secret-name.rom");
+        fs::write(&rom_path, &rom).unwrap();
+        lib.set_system_file(GuestOs::MacClassic, SystemFile::Rom, &rom_path, None).unwrap();
+        add_setup_report(&lib, "Mac ROM", "didnt-work", None, &format!("Black screen, see {home}/log")).unwrap();
+        // Nothing to say, an unknown slot or kind: refused.
+        assert!(add_setup_report(&lib, "Mac ROM", "didnt-work", Some(" "), " ").is_err());
+        assert!(add_setup_report(&lib, "Toaster", "didnt-work", None, "x").is_err());
+        assert!(add_setup_report(&lib, "Mac ROM", "meh", None, "x").is_err());
+
+        let f = collect(&lib).unwrap();
+        assert_eq!(f.summary().setup_reports, 3);
+        let didnt = f.setup_reports.iter().find(|r| r.kind == "didnt-work").unwrap();
+        assert_eq!(didnt.note, "Black screen, see ~/log");
+        let file = didnt.file.as_deref().unwrap();
+        assert!(file.starts_with("Mac ROM, checksum 421EF48B, 524288 bytes, SHA-1 "), "{file}");
+        let json = serde_json::to_string(&f).unwrap();
+        assert!(!json.contains("secret-name") && !json.contains(&home));
+        mark_exported(&lib, &f).unwrap();
+        assert_eq!(collect(&lib).unwrap().summary().setup_reports, 0);
+    }
+
+    #[test]
+    fn a_kickstart_report_says_when_aros_was_running() {
+        let t = TempDir::new();
+        let lib = Library::new(t.path().join("lib"));
+        lib.set_aros(GuestOs::Amiga, true).unwrap();
+        add_setup_report(&lib, "Kickstart ROM", "didnt-work", None, "Guru meditation in my game").unwrap();
+        let f = collect(&lib).unwrap();
+        assert_eq!(f.setup_reports[0].file.as_deref(), Some("AROS replacement Kickstart (FS-UAE's built-in copy)"));
     }
 
     #[test]

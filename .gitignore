@@ -22,3 +22,11 @@ yarn-error.log*
 /src-tauri/resources/fs-uae/
 # Fetched by scripts/fetch-basilisk.sh — also third-party.
 /src-tauri/resources/basilisk/
+
+# Deep-research working files; the distilled reference lives in docs/.
+/research_notes/
+/reports/
+
+# Signing keys (examples/ai-pack-key.rs): the Floppy AI pack key's secret
+# never enters a repo.
+*.key

@@ -93,7 +93,7 @@ fn document_opens_in_its_app_and_the_change_is_listed() {
     let doc = lib.import_document(GuestOs::Dos, &doc_src).unwrap();
 
     // The app is offered for the document, and runs with its DOS path.
-    let opener = dos_openers(&doc.file, None, &lib.list().unwrap(), &[]).into_iter().next().expect("no opener");
+    let opener = dos_openers(&doc.file, None, &lib.list().unwrap(), &[], &[]).into_iter().next().expect("no opener");
     assert_eq!(opener.app_id, app.id);
     let mount_root = lib.os_root(GuestOs::Dos);
     let args = dos_path(&doc);

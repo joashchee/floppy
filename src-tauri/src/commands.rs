@@ -2,7 +2,9 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::process::Child;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -12,6 +14,9 @@ use crate::documents::{self, Change, Opener};
 use crate::library::{GuestOs, GuestSystem, Library, LibraryApp, LibraryDoc, SystemFile};
 use crate::cd::{self, CdImport};
 use crate::discs;
+use crate::drops;
+use crate::learned;
+use crate::backup;
 use crate::findings;
 use crate::handlers;
 use crate::request;
@@ -23,6 +28,9 @@ pub struct AppState {
     pub library: Library,
     /// Apps with an emulator window open, and their guest OS.
     pub running: Arc<Mutex<HashMap<String, GuestOs>>>,
+    /// Their emulator processes, for Quit and Force Quit. Reaped only by
+    /// the thread that waits on each, so a process ID here is never reused.
+    pub children: Arc<Mutex<HashMap<String, Arc<Mutex<Child>>>>>,
     /// Result of a `floppy import …` launch, taken once by the frontend.
     pub startup: Mutex<Option<StartupImport>>,
 }
@@ -79,7 +87,7 @@ fn guest_status(app: &AppHandle, library: &Library, os: GuestOs) -> Result<Guest
         _ => None,
     };
     let blocker = if found.is_none() {
-        Some(emu.missing_message().to_string())
+        Some(emu.missing_message())
     } else {
         match os {
             GuestOs::Dos => None,
@@ -87,7 +95,9 @@ fn guest_status(app: &AppHandle, library: &Library, os: GuestOs) -> Result<Guest
             GuestOs::MacClassic if system.boot.is_none() => {
                 Some("Add a startup disk image (System 7 to Mac OS 8.1) to start the Mac.".into())
             }
-            GuestOs::Amiga if system.rom.is_none() => Some("Add a Kickstart ROM to start the Amiga.".into()),
+            GuestOs::Amiga if system.rom.is_none() && !system.aros => {
+                Some("Add a Kickstart ROM to start the Amiga, or use the free AROS replacement for now.".into())
+            }
             _ => None,
         }
     };
@@ -213,6 +223,14 @@ pub fn locate_emulator(app: AppHandle, state: State<AppState>, os: String, path:
     guest_status(&app, &state.library, os)
 }
 
+/// Turns the Amiga's built-in AROS replacement Kickstart on or off
+/// (`Library::set_aros`).
+#[tauri::command]
+pub fn set_aros(app: AppHandle, state: State<AppState>, on: bool) -> Result<GuestStatus, String> {
+    state.library.set_aros(GuestOs::Amiga, on)?;
+    guest_status(&app, &state.library, GuestOs::Amiga)
+}
+
 #[tauri::command]
 pub fn set_guest_model(state: State<AppState>, os: String, model: String) -> Result<GuestSystem, String> {
     let os = GuestOs::parse(&os).ok_or("Unknown guest OS.")?;
@@ -266,6 +284,37 @@ pub fn request_summary(state: State<AppState>) -> Result<request::RequestSummary
 #[tauri::command]
 pub fn ask_diskette(state: State<AppState>) -> Result<request::RequestSummary, String> {
     request::send(&state.library)
+}
+
+/// Whether to offer a system backup, and what it would hold (backup.rs).
+#[tauri::command]
+pub fn backup_status(state: State<AppState>) -> Result<backup::Status, String> {
+    backup::status(&state.library)
+}
+
+/// Not Now on the backup offer, until the setup files change.
+#[tauri::command]
+pub fn decline_backup(state: State<AppState>) -> Result<(), String> {
+    backup::decline(&state.library)
+}
+
+/// Burns the system backup disc image to `path` (backup.rs).
+#[tauri::command]
+pub async fn make_backup(app: AppHandle, path: String) -> Result<backup::Made, String> {
+    let state = app.state::<AppState>();
+    if running_map(&state).values().any(|o| o.single_instance()) {
+        return Err("Quit Basilisk II and FS-UAE before backing up, so their disks aren't changing.".into());
+    }
+    let handle = app.clone();
+    tauri::async_runtime::spawn_blocking(move || backup::make(&handle.state::<AppState>().library, Path::new(&path)))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Whether `path` is a system backup disc Floppy made.
+#[tauri::command]
+pub fn is_backup_disc(path: String) -> bool {
+    backup::is_backup(Path::new(&path))
 }
 
 /// Whether `path` is a disc Diskette's Burn A CD made (discs.rs).
@@ -429,6 +478,47 @@ pub async fn import_setup_files(app: AppHandle, paths: Vec<String>) -> Result<Cd
         .map_err(|e| e.to_string())?
 }
 
+/// Keeps what the user reported about getting a setup file for the next
+/// Export Findings (`findings::add_setup_report`).
+#[tauri::command]
+pub fn add_setup_report(
+    state: State<AppState>,
+    slot: String,
+    kind: String,
+    source: Option<String>,
+    note: String,
+) -> Result<(), String> {
+    findings::add_setup_report(&state.library, &slot, &kind, source.as_deref(), &note)
+}
+
+/// Where to get each setup file (`cd::setup_sources`), for the setup screen.
+#[tauri::command]
+pub fn setup_sources() -> Vec<cd::SetupSource> {
+    // A newer knowledge pack's, where it has them (learned.rs).
+    learned::setup_sources()
+}
+
+/// Fills missing setup files from the user's Downloads folder, after they
+/// fetched one in the browser (`cd::import_from_downloads`).
+#[tauri::command]
+pub async fn import_from_downloads(app: AppHandle) -> Result<CdImport, String> {
+    let state = app.state::<AppState>();
+    if running_map(&state).values().any(|o| o.single_instance()) {
+        return Err("Quit Basilisk II and FS-UAE before adding system files.".into());
+    }
+    // Linux desktops name it in user-dirs.dirs, which minimal setups lack.
+    let dir = app
+        .path()
+        .download_dir()
+        .ok()
+        .or_else(|| app.path().home_dir().ok().map(|h| h.join("Downloads")).filter(|d| d.is_dir()))
+        .ok_or("Floppy couldn't find your Downloads folder.")?;
+    let handle = app.clone();
+    tauri::async_runtime::spawn_blocking(move || cd::import_from_downloads(&handle.state::<AppState>().library, &dir))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
 #[tauri::command]
 pub fn running_apps(state: State<AppState>) -> Vec<String> {
     running_map(&state).into_keys().collect()
@@ -461,7 +551,11 @@ fn write_launch_config(library: &Library, entry: &LibraryApp, program: Option<&s
         }
         GuestOs::Amiga => {
             let sys = library.system(entry.os)?;
-            let kickstart = library.system_file(entry.os, SystemFile::Rom)?.ok_or("Add a Kickstart ROM first.")?;
+            // A real Kickstart always wins over the AROS fallback.
+            let kickstart = library.system_file(entry.os, SystemFile::Rom)?;
+            if kickstart.is_none() && !sys.aros {
+                return Err("Add a Kickstart ROM first, or use the free AROS replacement.".into());
+            }
             let workbench = library.system_file(entry.os, SystemFile::Boot)?;
             // The chosen disk first, then the app's other floppies for the
             // swap list. A chosen program file boots Workbench instead.
@@ -477,7 +571,7 @@ fn write_launch_config(library: &Library, entry: &LibraryApp, program: Option<&s
             let conf = amiga::fsuae_conf(&amiga::Launch {
                 base_dir: &base_dir,
                 model: sys.model.as_deref().unwrap_or("A1200"),
-                kickstart: &kickstart,
+                kickstart: kickstart.as_deref(),
                 workbench: workbench.as_deref(),
                 shared: &shared,
                 app_disks,
@@ -609,30 +703,60 @@ fn start(
     }
     let emu = Emulator::for_os(entry.os);
     let chosen = emulator::chosen(&state.library, emu);
-    let (bin, _) = emu.locate(app.path().resource_dir().ok().as_deref(), chosen.as_deref()).ok_or(emu.missing_message())?;
+    let (bin, _) = emu.locate(app.path().resource_dir().ok().as_deref(), chosen.as_deref()).ok_or_else(|| emu.missing_message())?;
     let conf_path = write_launch_config(&state.library, &entry, program.as_deref(), args.as_deref())?;
     let ran = program.clone();
     let os_root = state.library.os_root(entry.os);
     let before = (entry.os == GuestOs::Dos).then(|| documents::snapshot(&os_root));
+    // Anything added while the guest was off gets sorted before it starts.
+    let _ = state.library.tidy_documents(entry.os);
 
-    let mut child = emu.spawn(&bin, &conf_path).map_err(|e| format!("Couldn't start {}: {e}", emu.name()))?;
+    let child = emu.spawn(&bin, &conf_path).map_err(|e| format!("Couldn't start {}: {e}", emu.name()))?;
+    let child = Arc::new(Mutex::new(child));
     let running = state.running.clone();
+    let children = state.children.clone();
     running.lock().unwrap_or_else(|p| p.into_inner()).insert(id.clone(), entry.os);
+    children.lock().unwrap_or_else(|p| p.into_inner()).insert(id.clone(), child.clone());
     let _ = app.emit("running-changed", ());
     std::thread::spawn(move || {
-        let _ = child.wait();
+        // Polled, not a blocking wait, so Quit can reach the process
+        // meanwhile (`quit_app`).
+        loop {
+            match child.lock().unwrap_or_else(|p| p.into_inner()).try_wait() {
+                Ok(None) => {}
+                Ok(Some(_)) | Err(_) => break,
+            }
+            std::thread::sleep(Duration::from_millis(250));
+        }
+        children.lock().unwrap_or_else(|p| p.into_inner()).remove(&id);
         running.lock().unwrap_or_else(|p| p.into_inner()).remove(&id);
+        // The emulator was in front: without this, the Mac, Linux or the
+        // window manager picks whatever app comes next, not Floppy.
+        if let Some(w) = app.get_webview_window("main") {
+            let _ = w.unminimize();
+            let _ = w.show();
+            let _ = w.set_focus();
+        }
+        let library = &app.state::<AppState>().library;
+        // What was saved into the documents folder goes in its type's
+        // folder now the guest can't see it move.
+        let moves = library.tidy_documents(entry.os).unwrap_or_default();
+        let _ = app.emit("documents-changed", ());
         if let Some(before) = before {
-            let library = &app.state::<AppState>().library;
             let changes = documents::changes(&before, &documents::snapshot(&os_root));
-            let _ = library.adopt_documents(entry.os);
             // Identified during the session, in its details, needn't be asked.
             let now = library.get(&entry.id).unwrap_or_else(|_| entry.clone());
             let identify = identify_ask(&now, ran.as_deref());
             // A document session always reports, to ask whether it worked.
             if !changes.is_empty() || document.is_some() || identify.is_some() {
                 let docs = library.documents().unwrap_or_default();
-                let changes = changes.into_iter().map(|c: Change| SessionChange { name: display_name(&docs, entry.os, &c.path), path: c.path, new: c.new }).collect();
+                let changes = changes
+                    .into_iter()
+                    .map(|c: Change| {
+                        let path = moves.iter().find(|(from, _)| *from == c.path).map_or(c.path, |(_, to)| to.clone());
+                        SessionChange { name: display_name(&docs, entry.os, &path), path, new: c.new }
+                    })
+                    .collect();
                 let (document, verify) = match document {
                     Some((d, p)) => (Some(d.name), Some(p)),
                     None => (None, None),
@@ -644,6 +768,21 @@ fn start(
         let _ = app.emit("running-changed", ());
     });
     Ok(())
+}
+
+/// Quits a running app's emulator: asks it to (`force` false), or makes
+/// it. DOSBox and FS-UAE quit when asked. Basilisk II passes the request
+/// on to the Mac as its power key, and quits once the Mac has shut down;
+/// a Mac that can't answer (stuck, or with no startup disk) needs
+/// `force`, which is like switching a real one off.
+#[tauri::command]
+pub fn quit_app(state: State<AppState>, id: String, force: bool) -> Result<(), String> {
+    let child = state.children.lock().unwrap_or_else(|p| p.into_inner()).get(&id).cloned().ok_or("That app isn't running.")?;
+    let mut child = child.lock().unwrap_or_else(|p| p.into_inner());
+    if child.try_wait().map_err(|e| e.to_string())?.is_some() {
+        return Ok(());
+    }
+    emulator::stop(&mut child, force).map_err(|e| format!("Couldn't quit it: {e}"))
 }
 
 /// A document's original name for a library-relative path, else the
@@ -663,15 +802,16 @@ pub struct ImportedItem {
     document: Option<LibraryDoc>,
 }
 
-/// Imports a dropped or picked path. For DOS, a folder, zip or program is
-/// an app and any other file is a document. Other guests take apps only.
+/// Imports a dropped or picked path: an app (a folder, a zip, a program or
+/// disk image) or else a document for the guest's documents folder
+/// (`documents::is_app_source`).
 #[tauri::command]
 pub async fn import_item(app: AppHandle, os: String, path: String) -> Result<ImportedItem, String> {
     let os = GuestOs::parse(&os).ok_or("Unknown guest OS.")?;
     tauri::async_runtime::spawn_blocking(move || {
         let library = &app.state::<AppState>().library;
         let path = PathBuf::from(path);
-        if os == GuestOs::Dos && !documents::is_dos_app_source(&path) {
+        if !documents::is_app_source(os, &path) {
             Ok(ImportedItem { app: None, document: Some(library.import_document(os, &path)?) })
         } else {
             Ok(ImportedItem { app: Some(library.import(os, &path)?), document: None })
@@ -681,8 +821,105 @@ pub async fn import_item(app: AppHandle, os: String, path: String) -> Result<Imp
     .map_err(|e| e.to_string())?
 }
 
+/// What a dropped item is and where it could go, dropped on the `os`
+/// tab (drops.rs). `decided` is set when there's no need to ask.
+#[tauri::command]
+pub async fn classify_drop(app: AppHandle, os: String, path: String) -> Result<drops::Classification, String> {
+    let os = GuestOs::parse(&os).ok_or("Unknown guest OS.")?;
+    tauri::async_runtime::spawn_blocking(move || drops::classify(&app.state::<AppState>().library, Path::new(&path), os))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Imports a dropped item where it was decided to go: an app or a
+/// document. Setup files go through `import_setup_files`.
+#[tauri::command]
+pub async fn import_as(app: AppHandle, path: String, choice: drops::Choice) -> Result<ImportedItem, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let library = &app.state::<AppState>().library;
+        let path = PathBuf::from(path);
+        match choice.to {
+            drops::Dest::App => Ok(ImportedItem { app: Some(library.import(choice.os, &path)?), document: None }),
+            drops::Dest::Document => Ok(ImportedItem { app: None, document: Some(library.import_document(choice.os, &path)?) }),
+            drops::Dest::Setup => Err("Setup files are added with the setup files.".into()),
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Keeps the user's answer to "where does this go?", for next time when
+/// `remember`, and for the next Export Findings either way.
+#[tauri::command]
+pub fn record_drop_choice(
+    state: State<AppState>,
+    signature: drops::Signature,
+    choice: drops::Choice,
+    offered: Vec<drops::Choice>,
+    remember: bool,
+) -> Result<(), String> {
+    drops::record(&state.library, signature, choice, offered, remember)
+}
+
+/// Whether a dropped file is Floppy findings, to learn from (learned.rs).
+#[tauri::command]
+pub async fn is_findings(path: String) -> bool {
+    tauri::async_runtime::spawn_blocking(move || learned::is_findings(Path::new(&path))).await.unwrap_or(false)
+}
+
+/// Learns from findings another Floppy exported (learned.rs).
+#[tauri::command]
+pub async fn learn_findings(app: AppHandle, path: String) -> Result<learned::LearnSummary, String> {
+    tauri::async_runtime::spawn_blocking(move || learned::learn(&app.state::<AppState>().library, Path::new(&path)))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// How much Floppy has learned from findings, for the gear menu.
+#[tauri::command]
+pub fn knowledge_summary() -> learned::KnowledgeSummary {
+    learned::summary()
+}
+
+/// Floppy AI's version (ai.rs), for the header and About.
+#[tauri::command]
+pub fn ai_info() -> crate::ai::AiInfo {
+    crate::ai::info()
+}
+
+/// The folder of materials findings brought, for Show in Finder.
+#[tauri::command]
+pub fn learned_folder(state: State<AppState>) -> Result<String, String> {
+    let dir = state.library.learned_dir();
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(dir.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+pub fn forget_learned(state: State<AppState>) -> Result<(), String> {
+    learned::forget(&state.library)
+}
+
+/// Adds a file as a document whatever it is (a zip too), in its guest's
+/// documents folder under its type.
+#[tauri::command]
+pub async fn add_document(app: AppHandle, os: String, path: String) -> Result<LibraryDoc, String> {
+    let os = GuestOs::parse(&os).ok_or("Unknown guest OS.")?;
+    tauri::async_runtime::spawn_blocking(move || app.state::<AppState>().library.import_document(os, Path::new(&path)))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Every guest's documents, each guest's folder sorted first unless its
+/// emulator is running (it would see files move).
 #[tauri::command]
 pub fn list_documents(state: State<AppState>) -> Result<Vec<LibraryDoc>, String> {
+    let running = running_map(&state);
+    for os in [GuestOs::Dos, GuestOs::MacClassic, GuestOs::Amiga] {
+        if !running.values().any(|o| *o == os) {
+            state.library.tidy_documents(os)?;
+        }
+    }
     state.library.documents()
 }
 
@@ -691,7 +928,11 @@ pub fn list_documents(state: State<AppState>) -> Result<Vec<LibraryDoc>, String>
 pub fn document_openers(state: State<AppState>, id: String) -> Result<Vec<Opener>, String> {
     let doc = state.library.document(&id)?;
     Ok(match doc.os {
-        GuestOs::Dos => documents::dos_openers(&doc.file, doc.opens_with.as_deref(), &state.library.list()?, &verify::tallies(&state.library)),
+        GuestOs::Dos => {
+            // Other Floppys' test results (learned.rs) only break ties.
+            let tests = verify::tallies(&state.library);
+            documents::dos_openers(&doc.file, doc.opens_with.as_deref(), &state.library.list()?, &tests, &learned::current().tests)
+        }
         _ => Vec::new(),
     })
 }

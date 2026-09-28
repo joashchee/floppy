@@ -28,9 +28,21 @@ What goes where:
                          published list has. The missing-files list asks
                          for them. Rows that known_files.rs now lists are
                          dropped.
+    Reported setup notes what users reported about getting setup files:
+                         a source that stopped working, a file that
+                         didn't work, or a better source. For people to
+                         check before changing "Where Floppy points you";
+                         Floppy doesn't use it.
+  docs/file-handling.md
+    Drop choices         where users said a dropped file, folder or zip
+                         goes when Floppy had no clear winner, per kind of
+                         item (kind, extension, contents). Counts add up;
+                         Floppy follows the choice with most answers.
 
-Floppy reads the other four tables straight from the documents when it's
-built, so merging is all it takes. Each findings file is merged once
+Floppy reads the other five tables straight from the documents when it's
+built, so merging is all it takes. When a merge changes any of them, the
+script also raises Floppy AI's version (docs/floppy-ai.md) and says to
+build the knowledge pack for ansiapps.com (scripts/make-ai-pack.py). Each findings file is merged once
 (its ID is recorded in app-handlers.md), and both documents get a
 check-log row. A fingerprint already listed as a different app or
 version is reported and left alone: someone has to look. The script
@@ -57,11 +69,47 @@ HEADERS = {
     "filetypes": "| Guest | App | Extension | Reports | Last reported |",
     "reported": "| Slot | What | Size | SHA-1 | Reports | Last reported |",
     "problems": "| Guest | App | Version | Program | Errors | Reported |",
+    "setup-notes": "| Slot | Kind | Source | Note | File | Reports | Last reported |",
+    "drops": "| Kind | Extension | Contents | Goes to | Answers | Last answered |",
 }
+DEST = {"app": "App", "document": "Document", "setup": "Setup file"}
+SLOTS = {"Mac ROM", "Mac startup disk", "Kickstart ROM", "Workbench disk"}
+PROGRAM_EXTS = {"EXE", "COM", "BAT", "SYS", "DLL", "OVL", "DRV", "PIF"}
+
+
+def program_ok(name):
+    """A program's plain file name: no path, no quotes or markup."""
+    return bool(re.fullmatch(r"[^\x00-\x1f/\\:<>|`'\"]{1,64}", name)) and not name.startswith(".")
+
+
+def count_ok(n):
+    """A test count as Floppy writes them: a whole number, not absurd."""
+    return isinstance(n, int) and not isinstance(n, bool) and 0 <= n <= 10_000
+
+
+SETUP_KINDS = {"source-broken": "Source broken", "didnt-work": "Didn't work", "better-source": "Better source"}
+
+
+# Bidi overrides and isolates, zero-width characters, soft hyphens: text
+# that reads as something it isn't.
+SNEAKY = re.compile("[\u00ad\u200b-\u200f\u202a-\u202e\u2060-\u2069\ufeff\x00-\x08\x0b-\x1f\x7f]")
+MAX_CELL = 300
 
 
 def cell(s):
-    return str(s).replace("|", "/").replace("\n", " ").strip()
+    """Someone else's text, safe in a living document's table: no pipes,
+    newlines, backticks, HTML or comment markers (which would break the
+    tables Floppy reads), no sneaky characters, and short."""
+    s = SNEAKY.sub("", str(s))
+    s = s.replace("<!--", "").replace("-->", "").replace("<", "\u2039").replace(">", "\u203a")
+    s = s.replace("|", "/").replace("`", "'").replace("\r", " ").replace("\n", " ").strip()
+    return s[:MAX_CELL]
+
+
+def safe_id(s):
+    """A findings ID as it goes in the merged-reports registry comment."""
+    s = re.sub(r"[^A-Za-z0-9_.-]", "", str(s))[:80]
+    return s or None
 
 
 def block(doc, name):
@@ -117,6 +165,24 @@ def handler_exts(doc):
     return out
 
 
+def table_text(doc, name):
+    m = re.search(rf"<!-- {name}:start -->\n(.*?)<!-- {name}:end -->", doc, re.S)
+    return m.group(1) if m else ""
+
+
+def bump_ai(path, what):
+    """Adds a row to docs/floppy-ai.md's versions table; returns the new version."""
+    doc = open(path, encoding="utf-8").read()
+    m = re.search(r"(<!-- ai-versions:start -->\n\|[^\n]*\n\|[^\n]*\n)(\| *(\d+) *\|)?", doc)
+    if not m:
+        sys.exit("docs/floppy-ai.md has no ai-versions table.")
+    version = int(m.group(3) or 0) + 1
+    row = f"| {version} | {dt.date.today().isoformat()} | {cell(what)} |\n"
+    doc = doc[: m.end(1)] + row + doc[m.end(1):]
+    open(path, "w", encoding="utf-8").write(doc)
+    return version
+
+
 def add_log_row(doc, text):
     today = dt.date.today().isoformat()
     log = re.search(r"## Check log\n\n\| Date \| What was checked \| Result \|\n\|---\|---\|---\|\n", doc)
@@ -132,9 +198,13 @@ def main():
         sys.exit(__doc__.split("\n\n")[1])
     handlers_path = os.path.join(root, "docs", "app-handlers.md")
     setup_path = os.path.join(root, "docs", "legal-setupfiles.md")
+    drops_path = os.path.join(root, "docs", "file-handling.md")
     known_rs = os.path.join(root, "src-tauri", "src", "known_files.rs")
     hdoc = open(handlers_path, encoding="utf-8").read()
     sdoc = open(setup_path, encoding="utf-8").read()
+    ddoc = open(drops_path, encoding="utf-8").read()
+    ai_path = os.path.join(root, "docs", "floppy-ai.md")
+    before = {n: table_text(d, n) for d, n in ((hdoc, "versions"), (hdoc, "filetypes"), (sdoc, "reported"), (ddoc, "drops"))}
     published = set(re.findall(r'sha1: "([0-9a-f]{40})"', open(known_rs, encoding="utf-8").read()))
 
     reg = re.search(r"<!-- merged-reports:(.*?)-->", hdoc)
@@ -175,9 +245,23 @@ def main():
             slot, what, size, sha1, reports, last = c
             reported[sha1.lower()] = {"slot": slot, "what": what, "size": int(size.replace(",", "") or 0),
                                       "sha1": sha1.lower(), "reports": int(reports or 0), "last": last}
+    setup_notes = {}
+    for c in block(sdoc, "setup-notes")[1]:
+        if len(c) == 7:
+            slot, kind, source, note, file, reports, last = c
+            setup_notes[(slot, kind, source, note, file)] = {
+                "slot": slot, "kind": kind, "source": source, "note": note, "file": file,
+                "reports": int(reports or 0), "last": last}
+    drops = {}
+    for c in block(ddoc, "drops")[1]:
+        if len(c) == 6:
+            kind, ext, content, goes, answers, last = c
+            ext = ext.lstrip(".").lower()
+            drops[(kind, ext, content, goes)] = {"kind": kind, "ext": ext, "content": content, "goes": goes,
+                                                 "answers": int(answers or 0), "last": last}
     table_exts = handler_exts(hdoc)
 
-    merged, skipped, conflicts, new_problems = 0, 0, [], []
+    merged, skipped, conflicts, new_problems, new_setup_notes = 0, 0, [], [], []
 
     def add_version(guest, app, version, program, size, sha, worked, failed, last):
         known = versions.get(sha)
@@ -194,6 +278,11 @@ def main():
 
     for path in args:
         data = load(path)
+        data["id"] = safe_id(data.get("id"))
+        if not data["id"]:
+            print(f"Skipped {path}: its ID isn't one Floppy writes.")
+            skipped += 1
+            continue
         if data["id"] in merged_ids:
             print(f"Skipped {path}: already merged.")
             skipped += 1
@@ -201,12 +290,17 @@ def main():
         exported = day(data.get("exported", dt.datetime.now().timestamp()))
 
         for t in data.get("handlerTests", []):
-            guest = GUEST.get(t["os"], t["os"])
+            if t.get("os") not in GUEST or not (count_ok(t.get("worked")) and count_ok(t.get("failed"))):
+                continue
+            guest = GUEST[t["os"]]
             version = cell(t.get("version") or "")
-            key = (guest, t["app"].lower(), version, t["program"].upper(), t["fileType"].upper())
-            last = day(t["lastTested"])
-            row = tested.setdefault(key, {"guest": guest, "app": t["app"], "version": version, "program": t["program"],
-                                          "type": t["fileType"], "worked": 0, "failed": 0, "last": "", "notes": []})
+            app, program, ftype = cell(t.get("app") or ""), cell(t.get("program") or ""), cell(t.get("fileType") or "")
+            if not (app and program and ftype) or not program_ok(program):
+                continue
+            key = (guest, app.lower(), version, program.upper(), ftype.upper())
+            last = day(t["lastTested"]) if isinstance(t.get("lastTested"), int) else exported
+            row = tested.setdefault(key, {"guest": guest, "app": app, "version": version, "program": program,
+                                          "type": ftype, "worked": 0, "failed": 0, "last": "", "notes": []})
             row["worked"] += t["worked"]
             row["failed"] += t["failed"]
             row["last"] = max(row["last"], last)
@@ -216,35 +310,45 @@ def main():
                     row["notes"].append(n)
             row["notes"] = row["notes"][-MAX_NOTES:]
             sha = (t.get("sha256") or "").lower()
-            if t.get("confirmed") and version and t.get("size") and re.fullmatch(r"[0-9a-f]{64}", sha):
-                add_version(guest, t["app"], version, t["program"], t["size"], sha, t["worked"], t["failed"], last)
+            size = t.get("size")
+            if t.get("confirmed") and version and isinstance(size, int) and size > 0 and re.fullmatch(r"[0-9a-f]{64}", sha):
+                add_version(guest, app, version, program, size, sha, t["worked"], t["failed"], last)
 
         for i in data.get("identities", []):
             sha = (i.get("sha256") or "").lower()
             version = cell(i.get("version") or "")
-            if version and re.fullmatch(r"[0-9a-f]{64}", sha):
-                add_version(GUEST.get(i["os"], i["os"]), i["app"], version, i["program"], i["size"], sha, 0, 0, exported)
+            size = i.get("size")
+            if i.get("os") in GUEST and program_ok(cell(i.get("program") or "")) and version and isinstance(size, int) and size > 0 and re.fullmatch(r"[0-9a-f]{64}", sha):
+                add_version(GUEST[i["os"]], cell(i["app"]), version, cell(i["program"]), size, sha, 0, 0, exported)
 
-        for f in {(x["os"], x["app"], x["ext"].upper()) for x in data.get("fileTypes", [])}:
+        for f in {(x.get("os"), cell(x.get("app") or ""), str(x.get("ext") or "").lstrip(".").upper())
+                  for x in data.get("fileTypes", [])}:
             os_, app, ext = f
+            # A plain extension, never a program's (as learned.rs refuses).
+            if os_ not in GUEST or not app or not re.fullmatch(r"[A-Z0-9]{1,8}", ext) or ext in PROGRAM_EXTS:
+                continue
             if ext in table_exts.get(app.lower(), set()):
                 continue
-            guest = GUEST.get(os_, os_)
+            guest = GUEST[os_]
             row = filetypes.setdefault((guest, app.lower(), ext), {"guest": guest, "app": app, "ext": ext, "reports": 0, "last": ""})
             row["reports"] += 1
             row["last"] = max(row["last"], exported)
 
         for s in {x["sha1"].lower(): x for x in data.get("systemFiles", [])}.values():
-            sha1 = s["sha1"].lower()
+            sha1 = str(s.get("sha1") or "").lower()
             if sha1 in published or not re.fullmatch(r"[0-9a-f]{40}", sha1):
                 continue
-            row = reported.setdefault(sha1, {"slot": s["slot"], "what": cell(s["what"]), "size": s["size"],
+            if s.get("slot") not in SLOTS or not isinstance(s.get("size"), int) or s["size"] <= 0:
+                continue
+            row = reported.setdefault(sha1, {"slot": s["slot"], "what": cell(s.get("what") or ""), "size": s["size"],
                                              "sha1": sha1, "reports": 0, "last": ""})
             row["reports"] += 1
             row["last"] = max(row["last"], exported)
 
         for e in data.get("appErrors", []):
-            guest = GUEST.get(e["os"], e["os"])
+            if e.get("os") not in GUEST:
+                continue
+            guest = GUEST[e["os"]]
             version = cell(e.get("version") or "")
             program = cell(e.get("program") or "")
             sha = (e.get("sha256") or "").lower()
@@ -260,6 +364,33 @@ def main():
                                        "errors": errors, "last": ""})
             row["last"] = max(row["last"], exported)
             new_problems.append(row)
+
+        for r in data.get("setupReports", []):
+            kind = SETUP_KINDS.get(r.get("kind"), cell(r.get("kind") or ""))
+            source, note, file = cell(r.get("source") or ""), cell(r.get("note") or ""), cell(r.get("file") or "")
+            if not (source or note):
+                continue
+            if r.get("slot") not in SLOTS or r.get("kind") not in SETUP_KINDS:
+                continue
+            key = (r["slot"], kind, source, note, file)
+            row = setup_notes.setdefault(key, {"slot": key[0], "kind": kind, "source": source, "note": note,
+                                               "file": file, "reports": 0, "last": ""})
+            row["reports"] += 1
+            row["last"] = max(row["last"], day(r["reported"]) if r.get("reported") else exported)
+            new_setup_notes.append(row)
+
+        for d in data.get("dropChoices", []):
+            sig, choice = d.get("signature", {}), d.get("choice", {})
+            kind, ext, content = cell(sig.get("kind", "")), cell(sig.get("ext", "")).lower(), cell(sig.get("content", ""))
+            if kind not in ("file", "folder", "zip") or choice.get("to") not in DEST or choice.get("os") not in GUEST:
+                continue
+            if "`" in ext + content or len(ext) > 12 or len(content) > 48:
+                continue
+            goes = f"{DEST[choice['to']]}, {GUEST[choice['os']]}"
+            row = drops.setdefault((kind, ext, content, goes), {"kind": kind, "ext": ext, "content": content,
+                                                                "goes": goes, "answers": 0, "last": ""})
+            row["answers"] += 1
+            row["last"] = max(row["last"], day(d["answered"]) if d.get("answered") else exported)
 
         merged_ids.append(data["id"])
         merged += 1
@@ -293,19 +424,43 @@ def main():
     sdoc = replace_block(sdoc, "reported", [
         f"| {r['slot']} | {cell(r['what'])} | {r['size']} | `{r['sha1']}` | {r['reports']} | {r['last']} |"
         for r in sorted(reported.values(), key=lambda r: (r["slot"], r["what"], r["sha1"]))])
+    sdoc = replace_block(sdoc, "setup-notes", [
+        f"| {r['slot']} | {r['kind']} | {r['source']} | {r['note']} | {r['file']} | {r['reports']} | {r['last']} |"
+        for r in sorted(setup_notes.values(), key=lambda r: (r["slot"], r["kind"], r["last"]))])
+
+    ddoc = replace_block(ddoc, "drops", [
+        f"| {r['kind']} | {'.' + r['ext'] if r['ext'] else ''} | {r['content']} | {r['goes']} | {r['answers']} | {r['last']} |"
+        for r in sorted(drops.values(), key=lambda r: (r["kind"], r["ext"], r["content"], -r["answers"], r["goes"]))])
 
     files = f"{merged} findings {'file' if merged == 1 else 'files'}"
     hdoc = add_log_row(hdoc, f"Merged {files} | {len(tested)} tested combinations, {len(versions)} known versions, "
                              f"{len(filetypes)} reported file types, {len(problems)} reported problems")
-    sdoc = add_log_row(sdoc, f"Merged {files} | {len(reported)} setup files reported by users")
+    sdoc = add_log_row(sdoc, f"Merged {files} | {len(reported)} setup files reported by users, "
+                             f"{len(setup_notes)} setup notes")
     open(handlers_path, "w", encoding="utf-8").write(hdoc)
     open(setup_path, "w", encoding="utf-8").write(sdoc)
+    ddoc = add_log_row(ddoc, f"Merged {files} | {len(drops)} drop choices")
+    open(drops_path, "w", encoding="utf-8").write(ddoc)
+    after = {n: table_text(d, n) for d, n in ((hdoc, "versions"), (hdoc, "filetypes"), (sdoc, "reported"), (ddoc, "drops"))}
+    changed = [n for n in before if before[n] != after[n]]
+    labels = {"versions": "known versions", "filetypes": "reported file types", "reported": "setup files reported by users",
+              "drops": "drop choices"}
+    new_ai = None
+    if changed:
+        new_ai = bump_ai(ai_path, f"Merged {files}: {', '.join(labels[n] for n in changed)} changed")
 
     print(f"Merged {files}{f', skipped {skipped}' if skipped else ''}: {len(tested)} tested combinations, "
           f"{len(versions)} known versions, {len(filetypes)} reported file types, {len(problems)} reported problems, "
-          f"{len(reported)} reported setup files.")
+          f"{len(reported)} reported setup files, {len(drops)} drop choices.")
+    if new_ai:
+        print(f"Floppy AI is now version {new_ai} (docs/floppy-ai.md). Build and publish its knowledge pack: "
+              "scripts/make-ai-pack.py --site <ansiapps-site checkout>, then commit both repos.")
     for r in new_problems:
         print(f"Problem reported with {r['app']} {r['version']}".rstrip() + f": {r['errors']}")
+    for r in new_setup_notes:
+        print(f"Setup note, {r['slot']}, {r['kind']}: {r['note'] or r['source']}"
+              + (f" ({r['source']})" if r['note'] and r['source'] else "")
+              + " -- check it, then update Where Floppy points you in docs/legal-setupfiles.md.")
     for r in dropped:
         print(f"Dropped reported {r['what']} ({r['sha1'][:12]}…): known_files.rs lists it now.")
     for c in conflicts:
@@ -321,6 +476,15 @@ def main():
                     and f"`{r['program']}`".lower() in line.lower()):
                 print(f"Consider marking verified (tested in Floppy {r['worked']}x): "
                       f"{line.split('|')[1].strip()} ({r['program']}, {r['type']})")
+    # Kinds of item users sent different ways: Floppy follows the most
+    # answers, and asks on a tie. Worth a look: maybe drops.rs should tell.
+    by_sig = {}
+    for r in drops.values():
+        by_sig.setdefault((r["kind"], r["ext"], r["content"]), []).append(r)
+    for (kind, ext, content), rows in sorted(by_sig.items()):
+        if len(rows) > 1:
+            ways = ", ".join(f"{r['goes']} ({r['answers']})" for r in sorted(rows, key=lambda r: -r["answers"]))
+            print(f"Drop choices differ for {kind} .{ext} {content}: {ways}")
     for r in filetypes.values():
         if r["reports"] >= 2:
             print(f"Consider adding .{r['ext']} to {r['app']}'s row ({r['reports']} reports), then delete it "

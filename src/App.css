@@ -45,6 +45,8 @@ header.top h1 span.accent { color: var(--accent); }
   color: var(--muted);
   vertical-align: middle;
 }
+/* Floppy AI's version, beside the app's */
+.version-tag.ai-version { margin-left: 6px; cursor: help; }
 header.top p {
   color: var(--muted);
   font-size: 13px;
@@ -203,6 +205,10 @@ button.icontext-btn .btn-icon { display: inline-flex; width: 14px; height: 14px;
    min-width: 0, or a long name widens its track. */
 .layout { display: grid; grid-template-columns: 1fr 1.3fr; gap: 22px; align-items: start; }
 .layout > .panel { min-width: 0; }
+/* The left column: the library's apps, then its documents. */
+.layout-column { display: flex; flex-direction: column; min-width: 0; }
+.docs-panel > .detail-actions { margin-top: 12px; }
+.layout-column > .panel { min-width: 0; }
 @media (max-width: 720px) {
   .layout { grid-template-columns: 1fr; }
 }
@@ -397,6 +403,25 @@ button.icontext-btn .btn-icon { display: inline-flex; width: 14px; height: 14px;
 .system-row .system-label { font-size: 11px; color: var(--muted); width: 92px; flex-shrink: 0; }
 .system-row .system-value { flex: 1; min-width: 120px; font-family: var(--font-mono); font-size: 11px; overflow-wrap: anywhere; }
 .system-row .system-value.missing { color: var(--muted); font-style: italic; }
+.setup-sources { display: flex; flex-direction: column; gap: 6px; border-top: 1px solid var(--line); padding-top: 10px; }
+.setup-sources h4 { margin: 0; font-size: 11px; font-weight: 600; color: var(--muted); }
+.setup-sources ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.setup-source { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 4px 8px; }
+.setup-source-name { font-size: 12px; min-width: 0; line-height: 1.6; }
+.setup-source-note { grid-column: 1 / -1; line-height: 1.45; }
+.source-kind {
+  display: inline-block;
+  margin-right: 4px;
+  text-align: center;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  padding: 2px 6px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  color: var(--muted);
+}
+.source-kind.free { color: var(--accent); border-color: var(--accent-dim); }
+.dialog-box .field + .field { margin-top: 10px; }
 .system-row select {
   background: var(--panel-2);
   border: 1px solid var(--line);
@@ -405,6 +430,20 @@ button.icontext-btn .btn-icon { display: inline-flex; width: 14px; height: 14px;
   padding: 6px 8px;
   font-family: var(--font-mono);
   font-size: 12px;
+}
+/* Pickers are drawn here, not by the platform: WebKitGTK's native ones
+   (Linux) ignore the theme's colors. The caret is two small triangles in
+   the text color, so it follows both themes. */
+.field select,
+.system-row select {
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: 28px;
+  background-image: linear-gradient(45deg, transparent 50%, currentColor 50%),
+    linear-gradient(135deg, currentColor 50%, transparent 50%);
+  background-position: calc(100% - 15px) 55%, calc(100% - 10px) 55%;
+  background-size: 5px 5px;
+  background-repeat: no-repeat;
 }
 .system-note { font-size: 12px; color: var(--muted); line-height: 1.5; margin: 0; }
 .system-note.warn { color: var(--warn); }
@@ -430,6 +469,7 @@ button.icontext-btn .btn-icon { display: inline-flex; width: 14px; height: 14px;
    with a solid border, since it's something that just happened rather
    than a standing to-do. */
 .media-offer { border-style: solid; border-color: var(--accent-dim); }
+.running-offer { border-style: solid; }
 
 /* Documents (documents.rs): a second list under the DOS apps. */
 .list-heading { display: flex; align-items: center; gap: 8px; margin: 16px 0 8px; font-size: 12px; font-weight: 600; }
@@ -461,3 +501,13 @@ button.icontext-btn .btn-icon { display: inline-flex; width: 14px; height: 14px;
 .field-check { display: flex; align-items: flex-start; gap: 8px; font-size: 13px; color: var(--text); line-height: 1.4; }
 .field-check input[type="checkbox"] { flex-shrink: 0; width: 15px; height: 15px; margin: 2px 0 0; accent-color: var(--accent); }
 .dialog-box .field { margin-top: 12px; }
+/* "Where does this go?": one radio per option, with why */
+.drop-options { display: flex; flex-direction: column; gap: 8px; margin: 12px 0; }
+.drop-option { display: flex; align-items: flex-start; gap: 8px; cursor: pointer; font-size: 13px; line-height: 1.4; }
+.drop-option input[type="radio"] { flex-shrink: 0; width: 15px; height: 15px; margin: 2px 0 0; accent-color: var(--accent); }
+.drop-option-label { display: block; color: var(--text); font-weight: 600; }
+.drop-option-why { display: block; color: var(--muted); }
+.drop-remember { margin-bottom: 8px; }
+
+/* CP437 twins of the icons, shown only by the ANSIapps theme */
+.icon-glyph { display: none; }

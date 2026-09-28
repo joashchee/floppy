@@ -7,7 +7,10 @@ why each emulator was picked and its licensing and reliability checks,
 and `docs/floppy-notes.md` is a condensed history of the work so far.
 `docs/legal-setupfiles.md` is a living list of free, legal sources for
 the system files setup asks for. `docs/app-handlers.md` is a living list
-of old apps that open old formats (confidence and sources per entry).
+of old apps that open old formats (confidence and sources per entry),
+and `docs/file-handling.md` of where dropped files go ("Drop choices",
+read at build time, `drops.rs`). `docs/floppy-ai.md` versions all of that
+knowledge as **Floppy AI** (below).
 Its code copy is `HANDLERS` in `handlers.rs`, and a test keeps the two in
 step. Its "Known versions" and "Reported file types" tables, and
 `legal-setupfiles.md`'s "Reported by users", have no code copy: Floppy
@@ -35,7 +38,7 @@ gitignored `CLAUDE.local.md`, never in committed files.
 2. **Floppy stays a separate program from anything that feeds it.**
    Other programs talk to it only across a process boundary, through
    documented plain interfaces: `floppy import [--os
-   dos|mac-classic|amiga] <path>` and `floppy open <file>` (`cli.rs`), the missing-files list and
+   dos|mac-classic|amiga] <path>` and `floppy open [--os …] <file>` (`cli.rs`), the missing-files list and
    files disc (`cd.rs`), the request list and `#reply-to:` disc
    (`request.rs`), and later perhaps a URL scheme. Never read
    another app's private data (its database or internal files), never
@@ -46,19 +49,58 @@ gitignored `CLAUDE.local.md`, never in committed files.
 3. **Never bundle or download guest software.** That means no ROMs,
    operating systems (Mac OS, Kickstart, Windows 3.x), or applications,
    abandonware included. Users supply their own. DOS needs none: DOSBox
-   provides the DOS. Mac ROMs, startup disks, Kickstarts and Workbench
+   provides the DOS. The one exception is **AROS**, the free, open-source
+   replacement Kickstart that already ships inside FS-UAE's own
+   `fs-uae.dat` (AROS Public License): Floppy doesn't add or download it,
+   and uses it only when the user picks **Use AROS for Now**. Mac ROMs, startup disks, Kickstarts and Workbench
    are copied from the user's own files into `library/system/<os>/`.
 4. **No network access, no telemetry, no accounts.** Floppy works fully
    offline. (`scripts/fetch-*.sh` are build-time steps, not app code.)
+   Opening a page in the user's browser when they click **Open Page** is
+   fine: the browser does the fetching, not Floppy.
 5. **Bundle identifier is fixed: `com.ansiapps.floppy`.** macOS keys the
    app-data folder (the whole library) on it.
 6. **All user data lives under Tauri's app-data dir** (`library/`), never
    a hardcoded path.
 7. **macOS and Linux supported, Windows later.** A feature built for one
    of macOS or Linux gets the other side too, or a parity row saying
-   what's missing. Distribution: itch.io (free or pay-what-you-want) plus
-   GitHub releases (the DMG, and the Linux `.deb`/AppImage). Never the Mac App Store,
-   whose terms are incompatible with the GPL.
+   what's missing.
+8. **Always free, downloaded only from ansiapps.com.** Floppy is the hero
+   app of ansiapps.com and costs nothing, ever: no price, no
+   pay-what-you-want, no paid tier or unlock. The app (the DMG, and the
+   Linux `.deb`/AppImage) is published only on ansiapps.com: not itch.io,
+   not the Mac App Store (whose terms are incompatible with the GPL), and
+   not as GitHub release downloads. GitHub keeps the source, the
+   emulator source bundles and AROS notice each release must offer
+   (linked from the download page), and the `basilisk-ii-*` build
+   releases the fetch script pins. Diskette and Crunchy are ansiapps' paid
+   extensions to Floppy: separate apps that work with it only through the
+   interfaces in rule 2, so Floppy never needs them and never nags about
+   them.
+9. **Friction as close to zero as the law allows, for every feature.**
+   Whenever a feature is added or touched, ask what still stands between
+   the user and a working result, and remove it, staying fully legal and
+   compliant with every open-source licence involved. Rules 1, 3, 4 and 8
+   come first: never bundle, download or share guest software; never add
+   network access or telemetry; ship the source every licence asks for.
+   Within those limits, the checklist:
+   - **Do it for the user:** detect, recognize by content, and fill in
+     instead of asking (as with setup files, Downloads pickup, backups).
+   - **Say exactly what's missing and where to get it legally**, with
+     one click to the page, and the caveat when a source is a mirror or
+     a stand-in (`docs/legal-setupfiles.md`, the AROS offer).
+   - **Offer the free, open-source fallback** when one exists, labelled
+     honestly, and switch to the better option by itself once it's there.
+   - **Never dead-end:** every blocker message comes with a button that
+     fixes it (Locate…, Look in Downloads, Report a Setup Problem…).
+   - **Same flow on macOS and Linux** (rule 7), with no extra tools to
+     install.
+   - **Offer, don't nag:** ask once per situation and remember the answer
+     (the backup offer).
+   - **Let users say what's still in the way** through Export Findings,
+     and fold what they report into the living documents.
+   When a friction fix would bend a licence or rule 3, don't ship it: say
+   so, and suggest the closest legal alternative.
 
 ## How the library works
 
@@ -83,6 +125,32 @@ gitignored `CLAUDE.local.md`, never in committed files.
   (`import_dropped`): files, folders, zips and disc images in any mix.
   The setup strip and the overlay's "add setup files" target show only
   on the Mac or Amiga tab, while that guest's system files are missing.
+- **Getting setup files, with as little friction as possible:** each
+  missing slot lists where to get it, from `docs/legal-setupfiles.md`'s
+  "Where Floppy points you" table (`cd::setup_sources`, read at build
+  time, a test checks every row and that every slot has one). **Open
+  Page** opens it in the browser; from then on, each time Floppy comes
+  back to the front, it looks in the Downloads folder
+  (`cd::import_from_downloads`: the folder and one level down, no
+  unfinished downloads, zips up to 64 MB, nothing mounted) and adds what
+  it recognizes. **Look in Downloads** does the same on demand. On
+  Linux without `user-dirs.dirs`, Downloads is `~/Downloads`.
+- **Drops (`drops.rs`):** every dropped file, folder or zip (and every
+  file opened with Floppy) is judged by contents (3), name or the tab it
+  was dropped on (2), or could-go-there (1), per destination: an app,
+  document or setup file of any guest. A single top option at 2+ wins,
+  even for another guest than the tab. Otherwise: the user's remembered
+  answer for that **signature** (kind, extension, contents, never a
+  name), then `docs/file-handling.md`'s "Drop choices", then choices
+  learned from other users' findings, then the **"Where does this go?"**
+  dialog (every option with why; "Do the same for other …" remembers).
+  Answers are kept in `library/drop-choices.json` and exported as
+  findings. Findings files dropped on the window are learned from
+  instead (`learned.rs`). The Import buttons still import into the tab's
+  guest as asked.
+- A missing emulator gets its own strip with **Locate <emulator>…**
+  (any guest, not only the Mac). Its message says to reinstall Floppy in
+  a release build, and to run the fetch script in a development one.
 - `discs.rs`: files discs made from the list. A Burn A CD disc carries
   the ISO Application ID `DISKETTE BURN A CD` and a `diskette-burn.json`
   manifest (disc `id`, the answered list's SHA-1, and per-line counts).
@@ -96,6 +164,34 @@ gitignored `CLAUDE.local.md`, never in committed files.
 
   State is in `library/files-discs.json`. `sha1.rs` exists only to match
   a disc to the list it answers.
+
+## System backup (`backup.rs`, `iso.rs`)
+
+- **Burn A CD** backs up what makes Floppy work: the setup files (Mac
+  ROM and startup disk, Kickstart plus any `rom.key`, Workbench file or
+  folder) and their settings (Amiga model, AROS), not apps or
+  documents. It's one ISO 9660 disc image Floppy writes itself
+  (`iso.rs`, level 1, Application ID `FLOPPY SYSTEM BACKUP`) holding
+  `SYSTEM.ZIP` (Deflate-compressed, with a `floppy-backup.json`
+  manifest: slot, name, size, SHA-256 per file) and a `README.TXT` on
+  restoring with or without Floppy. Any OS mounts it; the files are
+  plain zip entries.
+- **Offered** by a strip once the system is fully working: every guest
+  has every setup file, meaning `cd::missing_slots` is empty (Mac ROM,
+  startup disk, Kickstart and Workbench today; AROS doesn't count as a
+  Kickstart). **A guest added later must add its setup files to
+  `cd::SLOTS`**, which puts them in the completeness check, the backup
+  and the restore with no other change. Offered once per set of files: `library/backup.json` keeps
+  the fingerprint (slot, name, size, mtime) last backed up or turned
+  down with **Not Now**. **Backup Floppy System…** in the gear menu
+  explains it and does the same on demand.
+- **Restoring:** a backup disc dropped or opened anywhere, picked with
+  Import Files Disc or Choose Files, or found by Look in Downloads is
+  read directly, nothing mounted (`backup::restore`, reached through
+  `cd::import_dropped`/`import_cd`). Every file is checked against its
+  SHA-256, and only empty slots are filled (`CdImport.kept` lists the
+  rest). A library restored whole counts as backed up, so the offer
+  doesn't come straight back.
 
 ## Old media (`media.rs`)
 
@@ -114,22 +210,56 @@ gitignored `CLAUDE.local.md`, never in committed files.
 
 - An old file is opened in the app that made it: it's imported as a
   document, matched to apps already in the library, and launched with
-  the app. DOS only so far; Amiga and classic Mac are next (see the
-  plan page linked from `CLAUDE.local.md`).
-- DOS documents live in `C:\DOCS` (`library/dos/DOCS/`, reserved: no
-  app folder takes that name) under 8.3 names. The original name is
-  kept in `library.json` (`documents`) and used on export.
+  the app. Opening in the app is DOS only so far; Mac and Amiga
+  documents are kept, sorted and shown, and the user starts the guest
+  and opens them there (auto-open is next: see the plan page linked
+  from `CLAUDE.local.md`).
+- **Every guest has a documents folder**, reserved in its library folder
+  (no app folder takes the name, `documents::docs_dir`): `C:\DOCS`
+  (`library/dos/DOCS/`), the Mac's `Unix:Documents` and the Amiga's
+  `Floppy:Documents` (`library/<os>/Documents/`). **It's sorted into a
+  folder per file type** named the way its guest names things
+  (`documents::type_folder`): the extension for DOS, already 8.3 (`WP5`,
+  `OTHER` for none); the Finder type code on the Mac (`TEXT`), else the
+  extension in capitals; the IFF type on the Amiga (`ILBM`), else the
+  extension. `Library::tidy_documents` keeps it that way whoever put
+  files there: files at any depth move into their type's folder under a
+  free name the guest takes (8.3 for DOS, `Name 2.txt` otherwise), via
+  `.sorting/` so a sort cut short finishes next time, with the Mac's
+  `.rsrc`/`.finf` forks on Linux; new files are listed under their file
+  name, gone ones leave the list, and emptied folders go. It runs when
+  the list loads and when an emulator quits, never while that guest's
+  emulator is running (it would see files move). The UI shows the
+  library panel's apps only, and a **Docs** panel below it grouped by
+  type folder, with **Add Documents…**. The original name is kept in
+  `library.json` (`documents`) and used on export.
+- A dropped or picked file that isn't an app for its guest
+  (`documents::is_app_source`: DOS folders, zips and programs; Mac
+  folders, zips, disk images, archives, `APPL` files and MacBinary apps;
+  Amiga folders, zips, disk images and hunk executables) becomes a
+  document. `floppy open [--os dos|mac-classic|amiga] <file>` does the
+  same from outside (`cli.rs`). A MacBinary document is decoded.
 - Matching: `DOS_APPS`, a public table of well-known programs and the
   extensions they open, plus extensions the user adds per app ("Also
   opens"). The app a document last opened with is offered first.
-- `open_document` runs `PROGRAM C:\DOCS\FILE` in `[autoexec]`. Every
+- `open_document` runs `PROGRAM C:\DOCS\WP5\FILE` in `[autoexec]`. Every
   DOS launch snapshots drive C: and, when DOSBox quits, emits
-  `session-ended` with the files that are new or changed (Show in Finder
-  and Export, which uses the original name). Files saved into `C:\DOCS`
-  become documents.
-- `floppy open [--os dos] <file>` hands Floppy a document (`cli.rs`),
-  like `floppy import` does an app. A dropped file that isn't a folder,
-  zip or program becomes a document on the DOS tab.
+  `session-ended` with the files that are new or changed, at the paths
+  they were sorted to (Show in Finder and Export, which uses the original
+  name).
+
+## Running emulators
+
+- `AppState.children` holds each running emulator's process, reaped only
+  by the thread that waits on it (polling `try_wait`), so its process ID
+  is never reused while Floppy can still signal it. A strip shows each
+  running app with **Quit <emulator>** (`quit_app`: SIGTERM), then
+  **Force Quit** (SIGKILL). DOSBox and FS-UAE quit on SIGTERM. Basilisk
+  II's SDL turns SIGTERM, its window's close button and Cmd-Q into the
+  Mac's power key, which only asks the Mac to shut down, hence Force
+  Quit and the hint (Shut Down, or Ctrl-Esc, its emergency quit).
+- When an emulator quits, Floppy brings its window back to the front,
+  then sorts that guest's documents folder (`documents-changed`).
 
 ## Handler apps (`handlers.rs`)
 
@@ -191,7 +321,61 @@ gitignored `CLAUDE.local.md`, never in committed files.
   record.
 - Test results leave only in an **Export Findings…** zip (below).
 
-## Findings (`findings.rs`)
+## Floppy AI (`ai.rs`, `docs/floppy-ai.md`)
+
+- **Floppy AI** is what Floppy knows about old files, apps and setup
+  without being told: the living documents' tables, `HANDLERS`,
+  `known_files.rs` and how `drops.rs` judges items. Its version is
+  separate from the app's: the top row of `docs/floppy-ai.md`'s table,
+  read at build time and shown next to the app version ("v0.3.0 · AI 1",
+  with `+` once it learned from findings; About says more).
+- **Bump it whenever that knowledge changes**, app release or not.
+  `merge-findings.py` adds the row itself when a merge changes a table
+  Floppy reads; add one by hand for a changed "Where Floppy points you",
+  `HANDLERS`, `known_files.rs` or `drops.rs` judgement. A test fails if
+  the versions don't go down row by row.
+- **Then publish its knowledge pack:** `scripts/make-ai-pack.py --site
+  <ansiapps-site checkout>` builds `Floppy AI <N>.zip` (a findings zip
+  whose materials are the living documents, reproducible byte for byte)
+  into `public/downloads/floppy-ai/` and `src/data/floppy-ai.json`, which
+  Floppy's card on ansiapps.com offers. Commit both repos; the site's
+  `main` deploys it. A published version's zip is never replaced: bump
+  the version instead. `--material PATH=LICENCE=SOURCE` adds a plain
+  `.md`/`.txt` under a licence that allows sharing on ansiapps.com
+  (never guest software, ROMs or disk images: rule 3).
+- **Only signed packs are official.** `make-ai-pack.py --sign KEYFILE`
+  signs the pack's JSON with the maintainers' Ed25519 key (made and used
+  by `examples/ai-pack-key.rs`; the secret stays on the maintainer's
+  machine, never in a repo: `*.key` is gitignored). Floppy checks it
+  against "Pack keys" in `docs/floppy-ai.md` (`ai::verify`). A signed pack
+  newer than the build raises the Floppy's AI version, and its setup
+  sources replace the build's for links to sites the build already
+  points to. Unsigned, it's ordinary findings. `--site` refuses an
+  unsigned pack unless `--allow-unsigned`. The maintainer's key is at
+  `~/.config/ansiapps/floppy-ai-pack.key` on their Mac, so packs are
+  built and signed there (`--sign ~/.config/ansiapps/floppy-ai-pack.key`),
+  never in a cloud session.
+- **Harden against abuse whenever the AI processes change (standing
+  rule).** Findings, packs and drops come from other people, so treat
+  them as hostile. Any change to `drops.rs`, `learned.rs`, `findings.rs`,
+  `ai.rs`, what they reach in `handlers.rs`, `cd.rs`, `documents.rs` and
+  `mac.rs`, or `merge-findings.py`/`make-ai-pack.py` gets a review against
+  `docs/floppy-ai.md`'s **Safeguards** table (forged or swapped packs,
+  smuggled files, poisoning that overrules Floppy or the user, floods,
+  sneaky text, oversized reads, document injection, double counting),
+  new safeguards for any new way in, a test that tries the abuse, and a
+  new row in that table.
+
+## Findings (`findings.rs`, `learned.rs`)
+
+- **Findings are Floppy's training data**, for how it handles obsolete
+  formats, app handlers and everything else it manages. Two ways they
+  teach: Claude merges them into the living documents (below), which
+  permanently refines every later release, and any user can drop them
+  on their own Floppy to teach it at once. Whatever Floppy learns to
+  decide, or asks the user about, should end up in findings, and every
+  kind of finding should have a living document to merge into and a
+  way for `learned.rs` to apply it.
 
 - **Export Findings…** (gear menu, only when asked: rule 4) writes
   `Floppy findings <date>.zip`: `floppy-findings.json` plus a README.
@@ -201,8 +385,32 @@ gitignored `CLAUDE.local.md`, never in committed files.
   doesn't list (size and SHA-1), and **Errors** notes (the details
   panel's field; `$HOME` becomes `~`): always for known apps, and for
   others, with the app's name, only when the user ticks Share
-  (`share_errors`). Never documents, their
-  names, files, or file and folder names.
+  (`share_errors`), and **setup reports**: **Report a Setup Problem…**
+  under the system files keeps a note that a source stopped working, a
+  file didn't work (with what Floppy recognized it as: type, size and,
+  for ROMs and floppies, SHA-1) or a better source, in
+  `library/setup-reports.json` until the next export, and **drop
+  choices** (drops.rs: signature, choice, what was offered). Never
+  documents, their names, files, or file and folder names.
+- **Learning from findings** (`learned.rs`): a findings zip or JSON
+  dropped on the window, or picked with **Learn from Findings…** (gear
+  menu), is applied on top of what Floppy was built knowing, and kept in
+  `library/learned.json`: app versions by fingerprint
+  (`handlers::known_versions`), file types (`handlers::opens_ext`), test
+  results (ranking "Open with"), setup files (`cd::is_known`) and drop
+  choices (`drops::classify`). Errors notes and setup reports are only
+  counted: they need a person. Floppy's own knowledge wins (a
+  fingerprint it knows as another app or version is skipped and
+  listed), malformed entries are skipped, each file is learned once by
+  ID, the library's own exports (`findings.json`'s `exportedIds`) not at
+  all, and **Forget What Was Learned…** empties it. Learning only ever
+  reads a file the user brings (rule 4).
+- **Materials:** any findings zip may carry plain `.md`/`.txt` files
+  under `materials/`, each listed in the JSON with its licence and
+  source. Floppy keeps them in `library/learned/<id>/` (About Floppy →
+  Show Materials) and learns from the living documents among them with
+  the build-time parsers. Knowledge packs are exactly that. Floppy's own
+  Export Findings adds no materials.
 - Each export holds only what's new: `library/findings.json` keeps the
   keys of what went, and test results are marked `exported`
   (`verify.rs`), since merging adds counts up. "Open with" still ranks
@@ -211,8 +419,11 @@ gitignored `CLAUDE.local.md`, never in committed files.
   `floppy-handler-tests` JSON reports) into the living documents, once
   per findings ID: "Tested in Floppy", "Known versions", "Reported
   file types" and "Reported problems" (people only, not read by Floppy)
-  in `docs/app-handlers.md`, "Reported by users" in
-  `docs/legal-setupfiles.md`. `handlers.rs` and `cd.rs` read those
+  in `docs/app-handlers.md`, "Reported by users" and "Reported setup
+  notes" (people only) in `docs/legal-setupfiles.md`, and "Drop choices"
+  in `docs/file-handling.md`. For a setup note,
+  check the source yourself, then fix "Where Floppy points you" and
+  delete the note's row. `handlers.rs`, `cd.rs` and `drops.rs` read those
   tables at build time (`include_str!`), so the next release recognizes
   the new versions, offers apps for the new file types, and asks for the
   new setup files. A unit test fails on a malformed row.
@@ -220,9 +431,11 @@ gitignored `CLAUDE.local.md`, never in committed files.
   conversation:** run `scripts/merge-findings.py <path>…` and read its
   output and the diff. It prints conflicts (a fingerprint listed as
   another app or version: ask the user), *believed* entries tests now
-  back, and reported file types with 2+ reports. For those, add the
-  extension to the app's row and to `HANDLERS`, and delete the reported
-  row. Then run the tests and add a CHANGELOG bullet. Findings come from
+  back, reported file types with 2+ reports, and kinds of dropped item
+  users sent different ways. For file types, add the extension to the
+  app's row and to `HANDLERS`, and delete the reported row. For drop
+  choices that differ, or that always go one way, consider teaching
+  `drops::options` to tell by itself. Then run the tests and add a CHANGELOG bullet. Findings come from
   users: sanity-check anything odd before committing.
 
 ## How DOS mode works
@@ -278,6 +491,16 @@ gitignored `CLAUDE.local.md`, never in committed files.
   for folder apps, and the library as the non-booting `Floppy:` drive.
 - FS-UAE comes from `scripts/fetch-fs-uae.sh` (pinned version and per-arch
   SHA-256, macOS and Linux x86-64) into the gitignored `src-tauri/resources/fs-uae/`.
+- **AROS fallback:** with no Kickstart, the setup offers **Use AROS for
+  Now** (`GuestSystem.aros`, `Library::set_aros`), with its caveats: it
+  runs some bootable-disk games and demos, many programs fail, and it
+  can't boot Commodore's Workbench. Launch then writes `kickstart_file =
+  internal`, which makes FS-UAE boot the AROS ROM in its own
+  `fs-uae.dat` (the 2015-05-20 m68k build, exec 51.3) without scanning
+  for ROM files. The Kickstart slot stays empty, so the missing-files
+  list, Look in Downloads, drops and files discs keep looking for a real
+  one; setting one clears `aros` and the app says it switched. A "didn't
+  work" setup report on the Kickstart says AROS was running.
 
 ## Testing
 
@@ -285,8 +508,9 @@ gitignored `CLAUDE.local.md`, never in committed files.
 - `cargo test --manifest-path src-tauri/Cargo.toml -- --ignored`: the
   end-to-end test (`e2e.rs`) runs a real `.COM` in the bundled DOSBox,
   headless via `SDL_VIDEODRIVER=dummy`. It needs the fetch script first.
-  FS-UAE can't run headless (it needs OpenGL and a window server), and
-  Basilisk II can't boot without a user's ROM, so Mac and Amiga launches
+  FS-UAE needs OpenGL and a window server, so it has no headless test
+  (under Xvfb it does run: AROS booted to "Waiting for bootable media",
+  2026-09-27), and Basilisk II can't boot without a user's ROM, so Mac and Amiga launches
   are covered by config-generation unit tests only. Fork handling tests
   run on both hosts, each against its own layout (named forks on macOS,
   `.rsrc`/`.finf` folders elsewhere); the `fs::copy` one is macOS only.
@@ -314,8 +538,12 @@ gitignored `CLAUDE.local.md`, never in committed files.
   `--remap-path-prefix` and fails if `$HOME` is still in the built app.
   Arguments pass through to `tauri build` (`--bundles app` skips the DMG,
   which needs `hdiutil`). It then downloads the bundled GPL emulators'
-  source into `src-tauri/target/release/bundle/source/`. Attach those to
-  the GitHub release with the DMG: shipping their binaries means offering
+  source into `src-tauri/target/release/bundle/source/`, and writes
+  `AROS-SOURCE.txt` there too: which AROS build FS-UAE's `fs-uae.dat`
+  carries (read from the ROM itself), its licence and where its source
+  is. Publish all of it on the Floppy repo's GitHub release for that
+  version, and link it from the ansiapps.com download page next to the
+  DMG and Linux packages (rule 8): shipping their binaries means offering
   their source.
   Last, it copies the new `Floppy.app` into `~/Applications/`, replacing
   the old one, so the installed app is always the latest release build.
@@ -340,7 +568,20 @@ gitignored `CLAUDE.local.md`, never in committed files.
   text-mode look toggled from the gear menu (`docs/ansiapps-theme.md`,
   `src/ansiapps-theme.css`, `src/lib/theme.ts`). New UI stays on the
   color tokens so the ANSIapps theme follows it, and gets checked in
-  both themes. The theme's font (`public/fonts/ansiapps/`) is CC BY-SA
+  both themes.
+- **Polishing the ANSIapps theme is a standing convention (all ansiapps
+  apps).** In it, **everything is drawn with text from the one
+  monospaced font**, the way DOS text mode did: frames with CP437
+  box-drawing characters, shadows as dark cells, icons as CP437 glyphs,
+  progress and scroll bars from `░▒▓█`, checkboxes as `[X]`, all on the
+  8×16 cell grid (16px font, 16px rows, sizes in whole cells). No CSS
+  borders, box-shadows, rounded corners, SVG icons or images in that
+  theme. The how-to, with glyph tables, the exact 16-color palette and
+  Turbo Vision's component recipes, is `docs/ansiapps-textmode.md`;
+  follow it and extend it. Every new UI element gets its text-mode form
+  when it's built, and touched UI gets polished toward it. Floppy's
+  frames come from `src/lib/textmode.ts` (add a box to its `FRAMES`
+  list) and its icons' CP437 twins from `components/icons.tsx`. The theme's font (`public/fonts/ansiapps/`) is CC BY-SA
   4.0: ship it unmodified as its own file with its license and the
   About credit. Never subset, convert or inline it.
 

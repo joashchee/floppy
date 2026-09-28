@@ -31,9 +31,9 @@ All three run as separate executables with a per-launch config file
     binary runs. Release signing must re-sign it.
   - It needs OpenGL and a window server, and segfaults when run headless,
     so there's no end-to-end test for it.
-  - Its download carries AROS, a free replacement Kickstart. Floppy never
-    uses it. **Open question:** strip it at fetch time to respect rule 3's
-    spirit?
+  - Its download carries AROS, a free replacement Kickstart. Decided
+    2026-09-27: kept, and offered as an opt-in fallback until the user
+    has a real Kickstart (rule 3's one exception).
 - **Basilisk II.** The fork is active (last commit 2026-08-30).
   - It has no binary releases. macOS builds live on the Emaculation forum
     behind a Cloudflare check, and building from source needs full Xcode,
@@ -173,7 +173,6 @@ the user's drives. The two files are the whole interface (rule 2).
 - Auto-open apps inside the guest: a Mac Startup Items alias, or Amiga
   `user-startup`.
 - SheepShaver for PPC-only Mac apps.
-- Decide on AROS in FS-UAE's download (above).
 - Code signing: re-sign the nested `DOSBox Staging.app` and `FS-UAE.app`.
 - Universal arm64 + x86-64 build: the FS-UAE fetch is per-arch.
 - Windows/Linux: Mac fork handling, FS-UAE paths, Basilisk II detection,

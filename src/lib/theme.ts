@@ -7,6 +7,8 @@
  * same key and value.
  */
 
+import { startTextMode, stopTextMode } from "./textmode";
+
 export type Theme = "modern" | "ansiapps";
 
 /** Also read by the inline script in index.html. */
@@ -23,6 +25,9 @@ export function loadTheme(): Theme {
 export function applyTheme(theme: Theme) {
   if (theme === "ansiapps") document.documentElement.dataset.theme = "ansiapps";
   else delete document.documentElement.dataset.theme;
+  // The ANSIapps theme draws its frames and arrows as text (textmode.ts).
+  if (theme === "ansiapps") startTextMode();
+  else stopTextMode();
   try {
     localStorage.setItem(THEME_KEY, theme);
   } catch {

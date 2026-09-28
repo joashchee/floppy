@@ -8,6 +8,169 @@ against the day the change was made.
 
 ## Unreleased
 
+- The maintainers' first Floppy AI pack key is listed in
+  `docs/floppy-ai.md` (2026-09-28): packs signed with it are official.
+
+- **Floppy AI hardened against abuse** (2026-09-28), with a standing
+  rule to review every change to it (`docs/floppy-ai.md`, "Safeguards"):
+  - knowledge packs count only when signed with the maintainers' Ed25519
+    key (`ed25519-dalek`, BSD-3-Clause; `examples/ai-pack-key.rs`,
+    `make-ai-pack.py --sign`), so a forged pack can't raise the AI
+    version or point setup links at pirated ROMs or malware on a shared
+    host; materials carry SHA-256s the signature covers;
+  - other people's test results only break ties in "Open with", never
+    bury the user's own working app; learned identities say so
+    (`learned`) and are never exported as the user's own;
+  - program extensions are never learned as document types; program
+    names must be plain file names;
+  - floods are capped (5,000 entries of a kind per file, 50,000 kept,
+    1,000 files, 32 materials), counts saturate, IDs are plain, and
+    bidi-override and zero-width characters are refused;
+  - a dropped file is no longer read whole to see whether it's
+    MacBinary (at most 64 MiB), and a folder's setup-file check stops
+    walking early;
+  - `merge-findings.py` strips table markers, HTML, backticks and pipes
+    from every cell, checks every field's shape, and drops unknown guests
+    and slots.
+
+- **Floppy AI versions and knowledge packs** (2026-09-28): what Floppy
+  knows about old files, apps and setup now has its own version
+  (`docs/floppy-ai.md`, `ai.rs`), shown next to the app version
+  ("v0.3.0 · AI 1") and in About Floppy. `merge-findings.py` raises it
+  whenever a merge changes what Floppy knows, and
+  `scripts/make-ai-pack.py --site` builds that version's knowledge pack
+  for ansiapps.com: a findings zip whose materials are the living
+  documents. Dropped on Floppy, a pack teaches it everything in them
+  with the same parsers the build uses, raises its AI version when
+  newer, and updates where to get setup files (links to known sites
+  only). Any findings zip can carry plain-text materials with their
+  licence, kept to read under About Floppy → Show Materials.
+
+- **Drops that could go more than one way ask you** (2026-09-27): each
+  dropped file, folder or zip is judged by its contents, then its name,
+  then the tab it was dropped on (`drops.rs`). A clear winner is used
+  straight away, even when it belongs to another guest (an `.adf`
+  dropped on the DOS tab becomes an Amiga app). Otherwise a "Where does
+  this go?" dialog lists every option with why, best first, and your
+  answer is remembered for that kind of item (unless you untick it) and
+  shared by the next Export Findings as a drop choice. Kinds of item are
+  described by extension and contents, never by name.
+- **Findings teach other Floppys** (2026-09-27): drop an Export Findings
+  zip on Floppy's window, or use Learn from Findings… in the gear menu,
+  and Floppy learns what's in it at once (`learned.rs`): app versions by
+  fingerprint, file types known apps open, test results for "Open with",
+  setup files others used, and drop choices. Floppy's own knowledge is
+  never overruled (conflicts are listed), each file is learned once, its
+  own exports not at all, and Forget What Was Learned… undoes it.
+  `scripts/merge-findings.py` merges drop choices into the new living
+  document `docs/file-handling.md`, which Floppy reads when it's built.
+
+- **A Docs panel for every guest, sorted by file type** (2026-09-27):
+  each guest's library panel lists only its apps now, and a Docs panel
+  below it lists its documents folder (`C:\DOCS`, the Mac's
+  `Unix:Documents`, the Amiga's `Floppy:Documents`), grouped by type.
+  Floppy sorts that folder into a folder per type, named the way the
+  guest names things: the extension for DOS (`C:\DOCS\WP5`, `OTHER` for
+  none), the Finder type code on the Mac (`TEXT`), the IFF type on the
+  Amiga (`ILBM`), else the extension. Whatever an app saved there, or
+  the user put there, is sorted and listed when the emulator quits and
+  whenever the list loads; files deleted in the guest leave the list.
+  Mac and Amiga documents can now be added (Add Documents…, drops,
+  `floppy open --os`), and MacBinary documents come in decoded. Only
+  DOS documents open in their app by themselves so far; for the others,
+  Start Mac OS or Start Workbench and open them there.
+- **Quitting Basilisk II (and any emulator) from Floppy** (2026-09-27):
+  closing Basilisk II's window or pressing Cmd-Q only presses the
+  emulated Mac's power key, so a Mac that couldn't answer (stuck, or at
+  the question-mark disk) kept Basilisk II open, and Floppy stayed
+  behind whatever came next. A strip now shows each running app with
+  **Quit**, which asks the emulator to quit, then **Force Quit**, and
+  says how to quit the Mac itself (Shut Down, or Ctrl-Esc in its
+  window). When an emulator quits, Floppy comes back to the front.
+- ANSIapps theme: rows in lists were drawn in black on blue; columns
+  now snap to whole cells (a half-pixel edge filled in WebKitGTK's `║`).
+
+- **ANSIapps theme redrawn in text** (2026-09-27): everything in the
+  theme is now characters from the IBM VGA font on an 8x16 grid. Panels
+  and dialogs get double box-drawing frames with their titles in the top
+  border, the gear menu and setup boxes single frames with `├─┤`
+  separators, windows and menus Turbo Vision's shadow cells
+  (`src/lib/textmode.ts`, `aria-hidden` over the real HTML). Buttons are
+  Turbo Vision's green bars with `▄`/`▀` shadows, icons CP437 glyphs,
+  selects get a `▼` cell, progress bars are `█` over `░`, status pills
+  `[text]`, and rows are exactly 16px so box characters join. No CSS
+  borders, box-shadows or SVG remain in the theme; the modern theme is
+  unchanged.
+- **ANSIapps theme: text only, as a standing convention** (2026-09-27):
+  in the ANSIapps theme everything is to be drawn with characters from
+  the one monospaced font, as DOS text mode did (CLAUDE.md, Dev
+  conventions; `docs/ansiapps-theme.md`, "Text only").
+  `docs/ansiapps-textmode.md` is the expert reference from deep research:
+  CP437 glyphs and what the shipped VGA font actually covers (measured),
+  the exact 16-color palette, Turbo Vision's component recipes (read
+  from its source), ANSI/ASCII art craft, and faithful, accessible
+  rendering on the web. It lists what today's theme still does in CSS
+  (20px rows, CSS borders and shadows, SVG icons) to migrate.
+- **Standing rule: friction as close to zero as the law allows**
+  (2026-09-27): CLAUDE.md rule 9 has every new or touched feature
+  checked for what still stands between the user and a working result,
+  and that removed, within the legal and open-source licence rules (1, 3,
+  4, 8), with a checklist drawn from the setup work.
+- **Free forever, from ansiapps.com only** (2026-09-27): Floppy is
+  ansiapps' hero app and always free (CLAUDE.md rule 8). It's published
+  only on ansiapps.com, no longer planned for itch.io or as GitHub
+  release downloads; GitHub keeps the source and the emulator sources
+  each release offers. Diskette and Crunchy are paid extensions to it,
+  separate apps Floppy never needs. README, the release scripts'
+  instructions and CLAUDE.md say so.
+- **Back up Floppy's system: Burn A CD** (2026-09-27): once the system
+  is fully working (every guest has every setup file: the Mac its ROM
+  and startup disk, the Amiga its Kickstart and Workbench, and any guest
+  added later its own), a strip offers to Burn A CD:
+  one compressed disc image (.iso) of the setup files and their
+  settings, for restoring after a reinstall or on a new computer. **Not
+  Now** holds until the files change. **Backup Floppy System…** in the
+  gear menu does the same whenever you like. Floppy writes the ISO
+  itself (no tools needed, same on macOS and Linux). To restore, open or
+  drop the disc (or leave it in Downloads): Floppy reads it without
+  mounting, checks each file's SHA-256, and fills only what isn't set
+  up, keeping the rest. A 25 MB Mac setup made a 72 KB disc in testing.
+- **AROS source notice in every release** (2026-09-27): the release
+  script's source step (`scripts/fetch-sources.sh`) also writes
+  `AROS-SOURCE.txt`, naming the AROS build inside the bundled FS-UAE (read
+  from its `fs-uae.dat`), its licence (AROS Public License) and where its
+  source is, to attach to the release with the emulator sources. It fails
+  if FS-UAE stops carrying an AROS ROM it can identify.
+- **Start the Amiga now with the free AROS Kickstart** (2026-09-27): with
+  no Kickstart ROM, the Amiga setup offers **Use AROS for Now**, the
+  open-source replacement already inside FS-UAE, with its caveats (some
+  games and demos run, many programs don't, no Commodore Workbench). The
+  Kickstart stays on every "still needed" list, and as soon as Floppy
+  finds a real one (dropped, in Downloads, on a files disc, or chosen) it
+  switches to it and says so. **Stop Using AROS** turns it off. A
+  "didn't work" setup report on the Kickstart notes that AROS was
+  running. CLAUDE.md's rule 3 names AROS as its one exception.
+- **Less friction getting setup files** (2026-09-27):
+  - Each missing ROM or startup disk lists where to get it: free, paid,
+    or how to copy it from hardware you own, with plain notes (System
+    7.5.3 is a free Apple release, but the Internet Archive copy is a
+    mirror). The list is `docs/legal-setupfiles.md`'s new "Where Floppy
+    points you" table, read when Floppy is built. **Open Page** opens it
+    in the browser.
+  - After that, Floppy checks the Downloads folder whenever its window
+    comes back to the front and adds what it recognizes by content, so
+    a downloaded System 7.5.3 image is set up without any dragging.
+    **Look in Downloads** checks on demand.
+  - **Report a Setup Problem…** keeps a note (source broken, file didn't
+    work, better source) for the next **Export Findings…**, and
+    `merge-findings.py` adds it to the new "Reported setup notes" table.
+  - A missing emulator gets its own strip with **Locate…**, for DOSBox
+    Staging and FS-UAE as well as Basilisk II, and the message no longer
+    tells release users to run a build script.
+  - Dropdowns are drawn by Floppy, so they follow the theme on Linux,
+    where WebKitGTK's native ones came out pale and hard to read.
+  - `docs/legal-setupfiles.md` re-checked: Amiga Forever Essentials'
+    own page and E-Maculation's Mac ROM capture guide added.
 - **Basilisk II for Linux** (2026-09-27): the Basilisk II workflow also
   builds a Linux x86-64 binary (the Unix build with SDL2 linked
   statically, so it needs only libc and libstdc++). A `platforms` input

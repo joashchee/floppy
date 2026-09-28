@@ -3,11 +3,20 @@
    here is scoped to html[data-theme="ansiapps"] (set by lib/theme.ts, and
    before first paint by index.html), so the modern theme is untouched.
 
-   Mostly token overrides: the 16-color CGA/VGA text-mode palette, one
-   bitmap font at its native 16px, square corners, double-line frames and
-   hard black drop shadows. Blue "desktop" panels in the Norton Commander
-   mold, and light-gray Turbo Vision-style menus and dialogs. Floppy's
-   phosphor green stays its accent, as light green.
+   TEXT ONLY: everything is drawn with characters from the one font, as
+   DOS text mode did (docs/ansiapps-textmode.md is the reference). The
+   screen is a grid of 8x16 cells: the font at 16px, rows 16px, spacing
+   in whole cells (1ch = 8px, 16px = one row). Frames, titles and shadows
+   are aria-hidden layers of CP437 box characters (lib/textmode.ts);
+   buttons draw Turbo Vision's ▄/▀ shadow and checkboxes their [X] in
+   generated text marked as empty alt text; icons are CP437 glyphs
+   (components/icons.tsx); bars are █ over ░. No CSS borders, box
+   shadows, rounded corners, SVG or images.
+
+   Colors: the 16 CGA/VGA text-mode colors only. Blue "desktop" panels
+   in the Norton Commander mold, light-gray Turbo Vision menus and
+   dialogs, green Turbo Vision buttons. Floppy's phosphor green stays
+   its accent, as light green.
 
    Font: IBM VGA 8x16 from VileR's Ultimate Oldschool PC Font Pack
    (int10h.org), CC BY-SA 4.0, shipped unmodified with its license in
@@ -22,7 +31,7 @@
 }
 
 :root[data-theme="ansiapps"] {
-  /* CGA/VGA text-mode palette */
+  /* CGA/VGA text-mode palette (exact DAC values: 00/55/AA/FF) */
   --dos-black: #000000;
   --dos-blue: #0000aa;
   --dos-green: #00aa00;
@@ -52,157 +61,357 @@
   --warn: var(--dos-lightred);
   --font-ui: "ansiapps VGA", ui-monospace, monospace;
   --font-mono: "ansiapps VGA", ui-monospace, monospace;
-  --dos-shadow: 16px 16px 0 var(--dos-black);
-  --dos-shadow-small: 8px 8px 0 var(--dos-black);
+  /* Frame and title colors, per box (textmode.ts layers read these) */
+  --tm-frame: var(--line);
+  --tm-title: var(--dos-white);
 }
 
-/* One size and weight: a bitmap font is only crisp at its native 16px, and
-   has no bold (synthesized bold smears it). */
+/* The grid: one size, one weight, one row height. A bitmap font is only
+   crisp at its native 16px, has no bold (synthesized bold smears it),
+   and box characters only join when rows are exactly 16px tall. No CSS
+   borders, shadows or rounded corners: the text layers draw those. */
 :root[data-theme="ansiapps"] body,
 :root[data-theme="ansiapps"] body * {
   font-size: 16px !important;
+  line-height: 16px !important;
   font-weight: 400 !important;
   font-style: normal !important;
   letter-spacing: 0 !important;
   font-synthesis: none;
+  font-kerning: none;
+  font-variant-ligatures: none;
   border-radius: 0 !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+  backdrop-filter: none !important;
+  text-shadow: none !important;
+  transition: none !important;
   -webkit-font-smoothing: none;
   -moz-osx-font-smoothing: auto;
 }
-:root[data-theme="ansiapps"] body { line-height: 1.25; }
+:root[data-theme="ansiapps"] body * { border-style: none !important; outline: none; }
 :root[data-theme="ansiapps"] strong { color: var(--dos-yellow); }
 :root[data-theme="ansiapps"] ::selection { background: var(--dos-cyan); color: var(--dos-black); }
 
+/* Icons: CP437 glyphs instead of SVG, one cell each */
+:root[data-theme="ansiapps"] .icon-svg { display: none !important; }
+:root[data-theme="ansiapps"] .icon-glyph { display: inline-block; width: 1ch; text-align: center; }
+
+/* Focus: reverse video, as text mode showed it */
 :root[data-theme="ansiapps"] input:focus,
 :root[data-theme="ansiapps"] textarea:focus,
 :root[data-theme="ansiapps"] select:focus,
 :root[data-theme="ansiapps"] button:focus-visible,
 :root[data-theme="ansiapps"] a:focus-visible {
-  outline: 2px dashed var(--dos-white) !important;
-  outline-offset: 1px;
+  background: var(--dos-white) !important;
+  color: var(--dos-black) !important;
+  outline: none !important;
 }
 
-/* Scrollbars: a cyan track and a solid thumb, like a Turbo Vision scroller */
-:root[data-theme="ansiapps"] ::-webkit-scrollbar { width: 16px; height: 16px; background: var(--dos-cyan); }
-:root[data-theme="ansiapps"] ::-webkit-scrollbar-thumb { background: var(--dos-blue); border: 3px solid var(--dos-cyan); }
+/* Scrollbars: the platform draws these; kept to text-mode colors */
+:root[data-theme="ansiapps"] ::-webkit-scrollbar { width: 8px; height: 16px; background: var(--dos-cyan); }
+:root[data-theme="ansiapps"] ::-webkit-scrollbar-thumb { background: var(--dos-blue); }
 
-/* Header */
-:root[data-theme="ansiapps"] header.top h1 { color: var(--dos-white); }
-:root[data-theme="ansiapps"] .version-tag { color: var(--dos-lightcyan); }
-:root[data-theme="ansiapps"] .status-pill { border-color: var(--dos-lightgray); color: var(--dos-lightgray); }
-:root[data-theme="ansiapps"] .status-pill.warn { border-color: var(--dos-lightred); color: var(--dos-lightred); }
-:root[data-theme="ansiapps"] .status-pill.running { border-color: var(--dos-lightgreen); color: var(--dos-lightgreen); }
+/* ── Frames (drawn by lib/textmode.ts) ─────────────────────────────── */
 
-/* Buttons: light-gray bars with a hard shadow that "press" into it */
-:root[data-theme="ansiapps"] button {
-  background: var(--dos-lightgray);
-  color: var(--dos-black);
-  border: none;
-  padding: 4px 12px;
-  box-shadow: var(--dos-shadow-small);
-  transition: none;
-}
-:root[data-theme="ansiapps"] button.small { padding: 2px 10px; }
-:root[data-theme="ansiapps"] button:hover { background: var(--dos-white); }
-:root[data-theme="ansiapps"] button:active:not(:disabled) { transform: translate(8px, 8px); box-shadow: none; }
-:root[data-theme="ansiapps"] button.primary { background: var(--dos-lightgreen); color: var(--dos-black); }
-:root[data-theme="ansiapps"] button.primary:hover { background: var(--dos-white); }
-:root[data-theme="ansiapps"] button.danger { color: var(--dos-red); }
-:root[data-theme="ansiapps"] button:disabled { opacity: 1; color: var(--dos-darkgray); box-shadow: var(--dos-shadow-small); }
-/* Rows and tiles are buttons too, but flat */
-:root[data-theme="ansiapps"] .menu-item,
-:root[data-theme="ansiapps"] .app-row,
-:root[data-theme="ansiapps"] .guest-tile {
-  box-shadow: none;
-}
-
-/* Panels: double-line frames with the title set into the top border */
-:root[data-theme="ansiapps"] .panel {
-  position: relative;
-  border: 3px double var(--line);
-  padding: 20px 16px 16px;
-  margin-top: 10px;
-}
-:root[data-theme="ansiapps"] .panel h2 {
+/* A framed box: its border is one cell all round, then one cell of air. */
+/* (The gear menu is absolute already, which positions its frame too.) */
+:root[data-theme="ansiapps"] .tm-framed:not(.gear-menu) { position: relative; }
+:root[data-theme="ansiapps"] .tm-frame {
   position: absolute;
-  top: -11px;
-  left: 50%;
-  transform: translateX(-50%);
-  margin: 0;
-  padding: 0 8px;
-  background: var(--panel);
-  color: var(--dos-white);
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  color: var(--tm-frame);
+  font-family: var(--font-mono);
+  white-space: pre;
+}
+:root[data-theme="ansiapps"] .tm-row {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 16px;
+  display: flex;
+  overflow: hidden;
+}
+:root[data-theme="ansiapps"] .tm-top { top: 0; }
+:root[data-theme="ansiapps"] .tm-bottom { bottom: 0; }
+:root[data-theme="ansiapps"] .tm-corner,
+:root[data-theme="ansiapps"] .tm-title { flex: none; }
+:root[data-theme="ansiapps"] .tm-fill { flex: 1 1 0; min-width: 0; overflow: hidden; }
+:root[data-theme="ansiapps"] .tm-title { color: var(--tm-title); max-width: calc(100% - 4ch); overflow: hidden; }
+:root[data-theme="ansiapps"] .tm-side { position: absolute; top: 16px; bottom: 16px; width: 1ch; overflow: hidden; }
+:root[data-theme="ansiapps"] .tm-left { left: 0; }
+:root[data-theme="ansiapps"] .tm-right { right: 0; }
+/* Turbo Vision's shadow: dark cells two columns right, one row down */
+:root[data-theme="ansiapps"] .tm-shadow { position: absolute; overflow: hidden; color: var(--dos-black); }
+:root[data-theme="ansiapps"] .tm-shadow-right { left: 100%; top: 16px; bottom: -16px; width: 2ch; }
+:root[data-theme="ansiapps"] .tm-shadow-bottom { top: 100%; left: 2ch; right: -2ch; height: 16px; }
+
+/* The real headings stay for screen readers; the frame shows the title. */
+:root[data-theme="ansiapps"] .panel > h2,
+:root[data-theme="ansiapps"] .dialog-box > h2,
+:root[data-theme="ansiapps"] .system-setup > h3 {
+  position: absolute !important;
+  width: 1px;
+  height: 1px;
+  margin: 0 !important;
+  padding: 0 !important;
+  overflow: hidden;
+  clip-path: inset(50%);
   white-space: nowrap;
 }
-:root[data-theme="ansiapps"] .panel h2 .section-icon { color: var(--dos-yellow); }
-:root[data-theme="ansiapps"] .panel .desc { color: var(--muted); }
 
-:root[data-theme="ansiapps"] .error { background: var(--dos-red); color: var(--dos-white); border: none; box-shadow: var(--dos-shadow-small); }
-:root[data-theme="ansiapps"] .status-message { background: var(--dos-green); color: var(--dos-black); border: none; box-shadow: var(--dos-shadow-small); }
+/* Boxes that get a frame: one cell of border plus one of air, in whole cells */
+:root[data-theme="ansiapps"] .panel,
+:root[data-theme="ansiapps"] .system-setup,
+:root[data-theme="ansiapps"] .session-report,
+:root[data-theme="ansiapps"] .setup-drop,
+:root[data-theme="ansiapps"] .dialog-box,
+:root[data-theme="ansiapps"] .drop-box,
+:root[data-theme="ansiapps"] .guest-tile {
+  padding: 32px 16px !important;
+}
+:root[data-theme="ansiapps"] .guest-tile,
+:root[data-theme="ansiapps"] .setup-drop,
+:root[data-theme="ansiapps"] .session-report { padding: 16px 16px !important; }
+:root[data-theme="ansiapps"] .panel { margin-top: 16px; }
+:root[data-theme="ansiapps"] .panel .desc { color: var(--muted); margin: 0 0 16px; }
+:root[data-theme="ansiapps"] .system-setup { --tm-frame: var(--dos-lightgray); gap: 16px; margin-bottom: 16px; }
+:root[data-theme="ansiapps"] .session-report { --tm-frame: var(--dos-lightgreen); }
+:root[data-theme="ansiapps"] .setup-drop { --tm-frame: var(--dos-lightgreen); }
+:root[data-theme="ansiapps"] .media-offer { --tm-frame: var(--dos-lightcyan); }
+:root[data-theme="ansiapps"] .running-offer { --tm-frame: var(--dos-yellow); }
+/* Panels sit a row apart (their margin), columns two cells apart */
+:root[data-theme="ansiapps"] .layout { gap: 0 2ch; }
+/* Whole-cell columns. A box edge on a half pixel draws each 2px stroke of
+   its ║ 3px wide in WebKitGTK, so the double line fills in. */
+@media (min-width: 721px) {
+  :root[data-theme="ansiapps"] .layout {
+    grid-template-columns: 40ch minmax(0, 1fr);
+    grid-template-columns: round(down, 43%, 1ch) minmax(0, 1fr);
+  }
+}
+:root[data-theme="ansiapps"] .layout-column { gap: 0; }
+:root[data-theme="ansiapps"] .docs-panel > .detail-actions { margin-top: 16px; }
 
-/* Text fields and pickers: black strips, the DOS command-line look */
+/* Horizontal rules inside boxes: a row of ─ */
+:root[data-theme="ansiapps"] .setup-sources,
+:root[data-theme="ansiapps"] .verify-row { padding-top: 0; }
+:root[data-theme="ansiapps"] .setup-sources::before,
+:root[data-theme="ansiapps"] .verify-row::before {
+  content: "────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────" / "";
+  display: block;
+  height: 16px;
+  overflow: hidden;
+  white-space: pre;
+  color: var(--dos-lightgray);
+}
+:root[data-theme="ansiapps"] .verify-row { flex-wrap: wrap; }
+:root[data-theme="ansiapps"] .verify-row::before { flex: 0 0 100%; }
+
+/* ── Header ────────────────────────────────────────────────────────── */
+
+:root[data-theme="ansiapps"] header.top h1 { color: var(--dos-white); }
+:root[data-theme="ansiapps"] .app-mark { color: var(--dos-lightgreen); }
+:root[data-theme="ansiapps"] .version-tag { color: var(--dos-lightcyan); }
+:root[data-theme="ansiapps"] .version-tag.ai-version { margin-left: 1ch; color: var(--dos-yellow); }
+/* Status pills as bracketed text: [Basilisk II] */
+:root[data-theme="ansiapps"] .status-pill { padding: 0; color: var(--dos-lightgray); }
+:root[data-theme="ansiapps"] .status-pill::before { content: "[" / ""; }
+:root[data-theme="ansiapps"] .status-pill::after { content: "]" / ""; }
+:root[data-theme="ansiapps"] .status-pill.warn { color: var(--dos-lightred); }
+:root[data-theme="ansiapps"] .status-pill.running { color: var(--dos-lightgreen); }
+
+/* ── Buttons: Turbo Vision's green bar with a ▄ and ▀▀▀ shadow ─────── */
+
+:root[data-theme="ansiapps"] button {
+  position: relative;
+  background: var(--dos-green);
+  color: var(--dos-black);
+  padding: 0 1ch !important;
+  min-height: 16px !important;
+  height: auto;
+  margin: 0 1ch 16px 0;
+  gap: 1ch;
+}
+:root[data-theme="ansiapps"] button::after {
+  content: "▄" / "";
+  position: absolute;
+  left: 100%;
+  top: 0;
+  width: 1ch;
+  color: var(--dos-black);
+  pointer-events: none;
+}
+:root[data-theme="ansiapps"] button::before {
+  content: "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀" / "";
+  position: absolute;
+  top: 100%;
+  left: 1ch;
+  right: -1ch;
+  height: 16px;
+  overflow: hidden;
+  white-space: pre;
+  color: var(--dos-black);
+  pointer-events: none;
+}
+/* Pressed: the face moves into its shadow, which disappears */
+:root[data-theme="ansiapps"] button:active:not(:disabled) { transform: translateX(1ch); }
+:root[data-theme="ansiapps"] button:active:not(:disabled)::before,
+:root[data-theme="ansiapps"] button:active:not(:disabled)::after { content: none; }
+:root[data-theme="ansiapps"] button:hover:not(:disabled) { background: var(--dos-lightgreen); }
+:root[data-theme="ansiapps"] button.primary { background: var(--dos-lightgreen); color: var(--dos-black); }
+:root[data-theme="ansiapps"] button.primary:hover:not(:disabled) { background: var(--dos-white); }
+:root[data-theme="ansiapps"] button.danger { background: var(--dos-red); color: var(--dos-white); }
+:root[data-theme="ansiapps"] button:disabled { opacity: 1; background: var(--dos-lightgray); color: var(--dos-darkgray); }
+
+/* Rows, tiles and menu items are buttons too, but flat, with no shadow */
+:root[data-theme="ansiapps"] .menu-item,
+:root[data-theme="ansiapps"] .app-row,
+:root[data-theme="ansiapps"] .guest-tile { margin: 0; }
+:root[data-theme="ansiapps"] .menu-item::before,
+:root[data-theme="ansiapps"] .menu-item::after,
+:root[data-theme="ansiapps"] .app-row::before,
+:root[data-theme="ansiapps"] .app-row::after,
+:root[data-theme="ansiapps"] .guest-tile::before,
+:root[data-theme="ansiapps"] .guest-tile::after { content: none; }
+:root[data-theme="ansiapps"] .menu-item:active,
+:root[data-theme="ansiapps"] .app-row:active,
+:root[data-theme="ansiapps"] .guest-tile:active { transform: none !important; }
+
+/* ── Messages ──────────────────────────────────────────────────────── */
+
+:root[data-theme="ansiapps"] .error { background: var(--dos-red); color: var(--dos-white); padding: 0 1ch; margin-right: 2ch; margin-bottom: 32px; }
+:root[data-theme="ansiapps"] .status-message { background: var(--dos-green); color: var(--dos-black); padding: 0 1ch; margin-right: 2ch; margin-bottom: 32px; }
+
+/* ── Text fields and pickers: black strips, the DOS command-line look ─ */
+
+:root[data-theme="ansiapps"] .field { gap: 0; }
 :root[data-theme="ansiapps"] .field input,
 :root[data-theme="ansiapps"] .field select,
 :root[data-theme="ansiapps"] .field textarea,
 :root[data-theme="ansiapps"] .system-row select,
 :root[data-theme="ansiapps"] .verify-row input {
-  background: var(--dos-black);
+  background-color: var(--dos-black);
   color: var(--dos-lightgray);
-  border: none;
+  padding: 0 1ch;
   caret-color: var(--dos-white);
+  min-height: 16px;
 }
+:root[data-theme="ansiapps"] .field textarea { min-height: 48px; resize: none; }
+/* Dropdowns: no drawn caret, a ▼ cell over the strip's right end
+   (lib/textmode.ts adds it after each select) */
+:root[data-theme="ansiapps"] select {
+  background-image: none !important;
+  padding-right: 4ch !important;
+}
+:root[data-theme="ansiapps"] .tm-arrow {
+  width: 3ch;
+  text-align: center;
+  color: var(--dos-lightgreen);
+  background: var(--dos-green);
+  pointer-events: none;
+}
+:root[data-theme="ansiapps"] .field > .tm-arrow { align-self: flex-end; margin-top: -16px; }
+:root[data-theme="ansiapps"] .system-row > .tm-arrow { margin-left: calc(-3ch - 8px); color: var(--dos-black); }
 :root[data-theme="ansiapps"] .field-label { color: var(--dos-lightcyan); }
 /* On a gray dialog, labels are blue like its other text accents */
 :root[data-theme="ansiapps"] .dialog-box .field-label { color: var(--dos-blue); }
+:root[data-theme="ansiapps"] .dialog-box .field + .field { margin-top: 16px; }
 
-/* Progress: a black track with a solid block fill */
-:root[data-theme="ansiapps"] .progress-bar { height: 16px; background: var(--dos-black); border: none; }
+/* Checkboxes: [ ] and [X], the real input underneath */
+:root[data-theme="ansiapps"] input[type="checkbox"] {
+  appearance: none;
+  -webkit-appearance: none;
+  width: auto !important;
+  height: auto !important;
+  margin: 0;
+  font-family: var(--font-mono);
+  color: inherit;
+  background: none;
+}
+:root[data-theme="ansiapps"] input[type="checkbox"]::before { content: "[ ]" / ""; }
+:root[data-theme="ansiapps"] input[type="checkbox"]:checked::before { content: "[X]" / ""; }
+/* Radio buttons: ( ) and (•), as Turbo Vision drew them */
+:root[data-theme="ansiapps"] input[type="radio"] {
+  appearance: none;
+  -webkit-appearance: none;
+  width: auto !important;
+  height: auto !important;
+  margin: 0;
+  font-family: var(--font-mono);
+  color: inherit;
+  background: none;
+}
+:root[data-theme="ansiapps"] input[type="radio"]::before { content: "( )" / ""; }
+:root[data-theme="ansiapps"] input[type="radio"]:checked::before { content: "(•)" / ""; }
+:root[data-theme="ansiapps"] .drop-options { gap: 16px; margin: 16px 0; }
+:root[data-theme="ansiapps"] .drop-option { gap: 1ch; }
+:root[data-theme="ansiapps"] .drop-option-label { color: var(--dos-white); }
+
+/* ── Progress: █ over ░, whole cells ───────────────────────────────── */
+
+:root[data-theme="ansiapps"] .progress-bar { height: 16px; background: none; overflow: hidden; }
+:root[data-theme="ansiapps"] .progress-bar::before {
+  content: "░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░" / "";
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  white-space: pre;
+  color: var(--dos-lightgray);
+}
 :root[data-theme="ansiapps"] .progress-bar-fill {
-  background: repeating-linear-gradient(90deg, var(--dos-lightgreen) 0 7px, var(--dos-green) 7px 8px);
+  background: none !important;
+  overflow: hidden;
+  white-space: pre;
+  color: var(--accent);
+}
+:root[data-theme="ansiapps"] .progress-bar-fill::before {
+  content: "████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████" / "";
 }
 
-/* Guest tiles: single-line boxes; the chosen guest is the cyan bar */
-:root[data-theme="ansiapps"] .guest-tile { border: 1px solid var(--dos-lightgray); background: var(--dos-blue); }
-:root[data-theme="ansiapps"] .guest-tile:hover { border-color: var(--dos-white); background: var(--dos-black); }
+/* ── Guest tiles: single-line boxes; the chosen guest is the cyan bar ─ */
+
+:root[data-theme="ansiapps"] .guest-tiles { gap: 16px 2ch; margin-bottom: 16px; }
+:root[data-theme="ansiapps"] .guest-tile { background: var(--dos-blue); --tm-frame: var(--dos-lightgray); }
+:root[data-theme="ansiapps"] .guest-tile:hover { background: var(--dos-black); }
 :root[data-theme="ansiapps"] .guest-tile.selected,
 :root[data-theme="ansiapps"] .guest-tile.selected:hover {
   --text: var(--dos-black);
   --muted: var(--dos-black);
   --accent: var(--dos-black);
   --warn: var(--dos-red);
+  --tm-frame: var(--dos-black);
   background: var(--dos-cyan);
-  border-color: var(--dos-cyan);
 }
 
-/* App and document lists: borderless lines with a cyan selection bar, as
-   in a file panel */
+/* ── App and document lists: lines with a cyan selection bar ───────── */
+
 :root[data-theme="ansiapps"] .app-list { gap: 0; }
-:root[data-theme="ansiapps"] .app-row {
-  background: transparent;
-  border: 1px solid transparent;
-  padding: 2px 8px;
-}
-:root[data-theme="ansiapps"] .app-row:hover { background: transparent; border-color: var(--dos-cyan); }
+:root[data-theme="ansiapps"] .app-row { background: transparent; color: var(--text); padding: 0 1ch; }
+:root[data-theme="ansiapps"] .app-row:hover:not(:disabled) { background: var(--dos-black); }
+:root[data-theme="ansiapps"] .app-row.selected:hover:not(:disabled) { background: var(--dos-cyan); }
 :root[data-theme="ansiapps"] .app-row.selected {
   --text: var(--dos-black);
   --muted: var(--dos-black);
   --accent: var(--dos-black);
   background: var(--dos-cyan);
-  border-color: var(--dos-cyan);
 }
 
-/* Boxes inside panels (setup files, the setup strip, a session's saved
-   files): single-line frames */
-:root[data-theme="ansiapps"] .system-setup,
-:root[data-theme="ansiapps"] .session-report { border: 1px solid var(--dos-lightgray); }
-:root[data-theme="ansiapps"] .setup-drop { border: 1px dashed var(--dos-lightgreen); }
-:root[data-theme="ansiapps"] .media-offer { border-style: solid; }
-:root[data-theme="ansiapps"] .system-setup h3 .section-icon,
-:root[data-theme="ansiapps"] .list-heading .section-icon { color: var(--dos-yellow); }
-:root[data-theme="ansiapps"] .verify-row { border-top-color: var(--dos-lightgray); }
+/* ── Setup boxes ───────────────────────────────────────────────────── */
 
-/* Menus and dialogs: light-gray Turbo Vision windows with black text.
-   Re-pointing the tokens inside them recolors everything they contain. */
+:root[data-theme="ansiapps"] .system-setup .section-icon,
+:root[data-theme="ansiapps"] .list-heading .section-icon { color: var(--dos-yellow); }
+/* Free/Paid/From yours as bracketed text */
+:root[data-theme="ansiapps"] .source-kind { padding: 0; color: var(--dos-lightgray); }
+:root[data-theme="ansiapps"] .source-kind::before { content: "[" / ""; }
+:root[data-theme="ansiapps"] .source-kind::after { content: "]" / ""; }
+:root[data-theme="ansiapps"] .source-kind.free { color: var(--dos-lightgreen); }
+
+/* ── Menus and dialogs: light-gray Turbo Vision windows ────────────── */
+
+/* Re-pointing the tokens inside them recolors everything they contain. */
 :root[data-theme="ansiapps"] .gear-menu,
 :root[data-theme="ansiapps"] .dialog-box {
   --panel: var(--dos-lightgray);
@@ -213,70 +422,60 @@
   --accent: var(--dos-blue);
   --accent-dim: var(--dos-blue);
   --warn: var(--dos-red);
+  --tm-frame: var(--dos-black);
+  --tm-title: var(--dos-black);
   background: var(--dos-lightgray);
   color: var(--dos-black);
-  box-shadow: var(--dos-shadow);
 }
-:root[data-theme="ansiapps"] .gear-menu {
-  border: 2px solid var(--dos-black);
-  outline: 6px solid var(--dos-lightgray);
-  padding: 0;
-  gap: 0;
-  top: calc(100% + 14px);
-}
-:root[data-theme="ansiapps"] .menu-item { min-height: 0; padding: 2px 10px; background: none; color: var(--dos-black); }
+/* The menu: a single frame, items inside it with a cell of air each side */
+:root[data-theme="ansiapps"] .gear-menu { padding: 16px 1ch; gap: 0; top: calc(100% + 16px); }
+:root[data-theme="ansiapps"] .menu-item { min-height: 0; padding: 0 1ch; background: none; color: var(--dos-black); }
 :root[data-theme="ansiapps"] .gear-menu .menu-item:hover:not(:disabled),
-:root[data-theme="ansiapps"] .gear-menu .menu-item:focus-visible { background: var(--dos-green); }
+:root[data-theme="ansiapps"] .gear-menu .menu-item:focus-visible { background: var(--dos-green) !important; color: var(--dos-black) !important; }
 :root[data-theme="ansiapps"] .gear-menu .menu-item:disabled { opacity: 1; color: var(--dos-darkgray); }
 :root[data-theme="ansiapps"] .gear-menu .menu-item svg { color: currentColor; }
-:root[data-theme="ansiapps"] .gear-menu .menu-sep { background: var(--dos-black); margin: 3px 0; }
-:root[data-theme="ansiapps"] .gear-menu .menu-note { color: var(--dos-blue); padding: 2px 10px; }
-:root[data-theme="ansiapps"] .gear-menu .menu-item-checkbox { gap: 10px; cursor: pointer; }
-
-/* Checkboxes drawn as [X] */
-:root[data-theme="ansiapps"] input[type="checkbox"] {
-  appearance: none;
-  -webkit-appearance: none;
-  width: auto !important;
-  height: auto !important;
-  margin: 0;
-  font-family: var(--font-mono);
-  color: inherit;
+/* Separators join the frame: ├────┤ */
+:root[data-theme="ansiapps"] .gear-menu .menu-sep {
+  position: relative;
+  height: 16px;
+  margin: 0 -1ch;
+  background: none;
+  overflow: hidden;
+  white-space: pre;
+  color: var(--dos-black);
 }
-:root[data-theme="ansiapps"] input[type="checkbox"]::before { content: "[ ]"; }
-:root[data-theme="ansiapps"] input[type="checkbox"]:checked::before { content: "[X]"; }
+:root[data-theme="ansiapps"] .gear-menu .menu-sep::before {
+  content: "├──────────────────────────────────────────────────────────────────────────────────────────────────" / "";
+}
+:root[data-theme="ansiapps"] .gear-menu .menu-sep::after {
+  content: "┤" / "";
+  position: absolute;
+  right: 0;
+  top: 0;
+  background: var(--dos-lightgray);
+}
+:root[data-theme="ansiapps"] .gear-menu .menu-note { color: var(--dos-blue); padding: 0 1ch; }
+:root[data-theme="ansiapps"] .gear-menu .menu-item-checkbox { gap: 1ch; cursor: pointer; }
 
-:root[data-theme="ansiapps"] .dialog-overlay { background: rgba(0, 0, 0, 0.35); backdrop-filter: none; transition: none; }
+/* Dialogs: a double frame with the title in it, and a shadow. The
+   overlay scrolls a tall dialog, so the box never clips its shadow. */
+:root[data-theme="ansiapps"] .dialog-overlay { background: rgba(0, 0, 0, 0.35); overflow-y: auto; align-items: safe center; }
 :root[data-theme="ansiapps"] .dialog-box {
-  border: 3px double var(--dos-white);
-  outline: 8px solid var(--dos-lightgray);
-  padding: 12px 16px;
+  overflow: visible;
+  max-height: none;
   transform: none;
-  transition: none;
+  margin-right: 2ch;
+  margin-bottom: 16px;
 }
-/* The title sits on a double rule: ═══ About Floppy ═══ */
-:root[data-theme="ansiapps"] .dialog-box h2 {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--dos-white);
-  background: var(--dos-blue);
-  margin: -12px -16px 12px;
-  padding: 0 8px;
-}
-:root[data-theme="ansiapps"] .dialog-box h2::before,
-:root[data-theme="ansiapps"] .dialog-box h2::after { content: ""; flex: 1; border-top: 3px double var(--dos-white); }
-:root[data-theme="ansiapps"] .dialog-box p { color: var(--dos-black); line-height: 1.25; }
-:root[data-theme="ansiapps"] .dialog-box button { background: var(--dos-green); color: var(--dos-black); }
-:root[data-theme="ansiapps"] .dialog-box button:hover { background: var(--dos-lightgreen); }
-:root[data-theme="ansiapps"] .dialog-box button.primary { color: var(--dos-white); }
-:root[data-theme="ansiapps"] .dialog-box button.danger { color: var(--dos-red); }
-:root[data-theme="ansiapps"] .dialog-actions button { min-height: 0; }
+:root[data-theme="ansiapps"] .dialog-box p { color: var(--dos-black); margin: 0 0 16px; }
+:root[data-theme="ansiapps"] .dialog-actions { gap: 0 1ch; margin-top: 16px; }
+:root[data-theme="ansiapps"] .dialog-actions button { min-height: 16px !important; }
 :root[data-theme="ansiapps"] .about-section-title { color: var(--dos-blue); }
 
-/* Drop overlay */
+/* ── Drop overlay ──────────────────────────────────────────────────── */
+
 :root[data-theme="ansiapps"] .drop-overlay { background: rgba(0, 0, 170, 0.9); }
-:root[data-theme="ansiapps"] .drop-box { border: 3px double var(--dos-white); color: var(--dos-white); background: var(--dos-cyan); box-shadow: var(--dos-shadow); transition: none; }
+:root[data-theme="ansiapps"] .drop-box { --tm-frame: var(--dos-white); color: var(--dos-white); background: var(--dos-cyan); }
 :root[data-theme="ansiapps"] .drop-box small { color: var(--dos-black); }
 :root[data-theme="ansiapps"] .drop-overlay.split .drop-box { opacity: 1; background: var(--dos-blue); color: var(--dos-lightgray); }
 :root[data-theme="ansiapps"] .drop-overlay.split .drop-box small { color: var(--dos-lightgray); }

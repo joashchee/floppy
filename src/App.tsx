@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useRef, useState, type ReactElement } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState, type ReactElement } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import { revealItemInDir } from "@tauri-apps/plugin-opener";
+import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { Dialog } from "./components/Dialog";
 import { applyTheme, loadTheme, type Theme } from "./lib/theme";
 import { isLinux, SHOW_IN_FILES } from "./lib/platform";
@@ -37,15 +37,27 @@ import {
   identityLabel,
   type LibraryApp,
   type CdImport,
-  dosPath,
+  docPath,
+  docTypeFolder,
+  DOCS_DIR,
+  guestFilePath,
   type ImportedItem,
   type LibraryDoc,
   type Opener,
   type FindingsSummary,
+  type DropChoice,
+  type DropClassification,
+  type LearnSummary,
+  type KnowledgeSummary,
+  type AiInfo,
   type SessionReport,
   type MediaProgress,
   type OldMedia,
   type SetupTracking,
+  type BackupMade,
+  type BackupStatus,
+  type SetupReportKind,
+  type SetupSource,
   type StartupImport,
 } from "./lib/types";
 import "./App.css";
@@ -60,6 +72,7 @@ const GUEST_UI: Record<
     dropHint: string;
     libraryDesc: string;
     emptyHint: string;
+    docsDesc: string;
     bootOnlyLabel: string;
     bootOnlyTitle: string;
   }
@@ -72,6 +85,7 @@ const GUEST_UI: Record<
     libraryDesc: "Everything here is on drive C: in DOSBox, so apps can reach each other's files.",
     emptyHint:
       "Drop a DOS program's folder, a zip, or an .EXE onto this window, or use the Import buttons. Drop an old document (a .WP5, .WK1, .DBF…) to open it in an app that made it.",
+    docsDesc: "Files in C:\\DOCS, in a folder per file type (C:\\DOCS\\WP5). What an app saves there is sorted when DOSBox quits.",
     bootOnlyLabel: "DOS Prompt",
     bootOnlyTitle: "Boot DOSBox at a prompt in this app's folder",
   },
@@ -79,11 +93,13 @@ const GUEST_UI: Record<
     icon: () => <MacAppIcon />,
     importFilter: null,
     importFileLabel: "Import File…",
-    dropHint: "A Mac app's folder, a zip made on a Mac, MacBinary (.bin), StuffIt/BinHex, or a disk image",
+    dropHint: "A Mac app's folder, a zip made on a Mac, MacBinary (.bin), StuffIt/BinHex, a disk image, or a document",
     libraryDesc:
       "Everything here is on the Unix volume on the Mac's desktop. Resource forks are kept, so apps copied from a Mac disk still open.",
     emptyHint:
       "Drop a Mac app's folder, a zip made on a Mac, a MacBinary (.bin) file, a StuffIt or BinHex archive, or a disk image onto this window.",
+    docsDesc:
+      "Files in the Documents folder on the Unix volume, in a folder per file type (Documents:TEXT). What an app saves there is sorted when the Mac quits.",
     bootOnlyLabel: "Start Mac OS",
     bootOnlyTitle: "Start Mac OS without mounting this app's disk image",
   },
@@ -91,13 +107,28 @@ const GUEST_UI: Record<
     icon: () => <AmigaAppIcon />,
     importFilter: null,
     importFileLabel: "Import Disk or File…",
-    dropHint: "An Amiga program's folder, a zip, or a disk image (.adf, .adz, .dms, .hdf)",
+    dropHint: "An Amiga program's folder, a zip, a disk image (.adf, .adz, .dms, .hdf), or a document",
     libraryDesc: "Everything here is on the Floppy: drive in the Amiga, so apps can reach each other's files.",
     emptyHint: "Drop an .adf disk image, a zip, or an Amiga program's folder onto this window.",
+    docsDesc:
+      "Files in Floppy:Documents, in a folder per file type (Documents/ILBM). What an app saves there is sorted when the Amiga quits.",
     bootOnlyLabel: "Start Workbench",
     bootOnlyTitle: "Boot your Workbench without this app's disk",
   },
 };
+
+/** Each guest's emulator, as the Quit button names it. */
+const EMULATOR_LABEL: Record<GuestOs, string> = { dos: "DOSBox", "mac-classic": "Basilisk II", amiga: "FS-UAE" };
+
+/** What quitting a running guest takes, before and after Floppy has asked it to quit. */
+function quitHint(os: GuestOs, asked: boolean): string {
+  if (os === "mac-classic") {
+    return asked
+      ? "The Mac was asked to shut down: answer it in Basilisk II's window. If it can't, Force Quit stops it at once, like switching a real Mac off, so anything unsaved in the Mac is lost."
+      : "To quit, choose Shut Down from the Mac's Special menu, or press Ctrl-Esc in its window. Closing the window only asks the Mac to shut down.";
+  }
+  return asked ? "Still running? Force Quit stops it at once." : "Save your work in the app before quitting.";
+}
 
 function baseName(path: string): string {
   return path.split(/[\\/]/).filter(Boolean).pop() ?? path;
@@ -111,6 +142,15 @@ function emulatorLabel(s: GuestStatus | undefined): string {
   if (s.source === "chosen") return `${s.emulator} (located)`;
   return s.emulator;
 }
+
+/** How each kind of setup source reads on the setup screen. */
+const SOURCE_KIND_LABEL: Record<SetupSource["kind"], string> = { free: "Free", paid: "Paid", own: "From yours" };
+
+const REPORT_KIND_LABEL: Record<SetupReportKind, string> = {
+  "source-broken": "A source stopped working",
+  "didnt-work": "My file didn't work",
+  "better-source": "I found a better source",
+};
 
 /** The Locate Basilisk II… tooltip: which copy starts the Mac now. */
 function basiliskTitle(s: GuestStatus | undefined): string {
@@ -133,7 +173,7 @@ function basiliskTitle(s: GuestStatus | undefined): string {
 }
 
 function findingsTotal(f: FindingsSummary): number {
-  return f.handlerTests + f.identities + f.fileTypes + f.systemFiles + f.appErrors;
+  return f.handlerTests + f.identities + f.fileTypes + f.systemFiles + f.appErrors + f.setupReports + f.dropChoices;
 }
 
 /** "3 test results, 1 app version": what a findings export holds. */
@@ -146,10 +186,35 @@ function describeFindings(f: FindingsSummary): string {
       part(f.fileTypes, "file type you added", "file types you added"),
       part(f.systemFiles, "unlisted setup file", "unlisted setup files"),
       part(f.appErrors, "app's errors", "apps' errors"),
+      part(f.setupReports, "setup report", "setup reports"),
+      part(f.dropChoices, "drop choice", "drop choices"),
     ]
       .filter(Boolean)
       .join(", ") || "nothing yet"
   );
+}
+
+/** "2 app versions, 1 file type": what learning from findings added. */
+function describeLearned(l: LearnSummary | KnowledgeSummary): string {
+  const part = (n: number, one: string, many: string) => (n ? `${n} ${n === 1 ? one : many}` : "");
+  const drops = "dropChoices" in l ? l.dropChoices : l.dropRules;
+  return (
+    [
+      part(l.versions, "app version", "app versions"),
+      part(l.fileTypes, "file type", "file types"),
+      part(l.tests, "test result", "test results"),
+      part(l.systemFiles, "setup file", "setup files"),
+      part(drops, "drop choice", "drop choices"),
+    ]
+      .filter(Boolean)
+      .join(", ") || "nothing new"
+  );
+}
+
+/** Where a drop was decided to go, for the message after it. */
+function describeChoice(c: DropChoice): string {
+  const guest = GUEST_LABEL[c.os];
+  return c.to === "app" ? `a ${guest} app` : c.to === "document" ? `a ${guest} document` : `a ${guest} setup file`;
 }
 
 /** " Last exported 27 Sep 2026.", or nothing before the first export. */
@@ -196,7 +261,8 @@ function describeImport(r: CdImport): string {
   const gone = r.disc?.notOnDrives.length
     ? ` Your drives have no usable ${r.disc.notOnDrives.join(" or ")}, so the next list stops asking for ${r.disc.notOnDrives.length === 1 ? "it" : "them"}.`
     : "";
-  return from + added + missing + unusable + gone;
+  const kept = r.kept?.length ? ` Kept what was set up already: ${r.kept.join(", ")}.` : "";
+  return from + added + kept + missing + unusable + gone;
 }
 
 /** request.rs `RequestSummary`: what asking Diskette would ask for. */
@@ -232,8 +298,13 @@ function App() {
   const [guest, setGuest] = useState<GuestOs>("dos");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [running, setRunning] = useState<Set<string>>(new Set());
+  // Apps Floppy has asked to quit: their Quit button forces it next.
+  const [quitAsked, setQuitAsked] = useState<Set<string>>(new Set());
   const [statuses, setStatuses] = useState<GuestStatus[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
+  // For listeners set up once: whether something is already in progress.
+  const busyRef = useRef(busy);
+  busyRef.current = busy;
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
@@ -252,6 +323,15 @@ function App() {
   const [identifyVersion, setIdentifyVersion] = useState("");
   // What Export Findings would share, counted when the gear menu opens.
   const [findings, setFindings] = useState<FindingsSummary | null>(null);
+  // What Floppy learned from findings dropped on it (learned.rs).
+  const [knowledge, setKnowledge] = useState<KnowledgeSummary | null>(null);
+  // Floppy AI's version (ai.rs), shown next to the app's.
+  const [ai, setAi] = useState<AiInfo | null>(null);
+  // Drops with no clear winner, asked about one at a time (drops.rs).
+  const [askDrops, setAskDrops] = useState<DropClassification[]>([]);
+  const [dropPick, setDropPick] = useState(0);
+  const [dropRemember, setDropRemember] = useState(true);
+  const [confirmForget, setConfirmForget] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState<LibraryApp | null>(null);
   const [gearOpen, setGearOpen] = useState(false);
   const [disketteRunning, setDisketteRunning] = useState(false);
@@ -259,6 +339,19 @@ function App() {
   // "Not Now" on the Ask Diskette strip, until Floppy is reopened.
   const [askDismissed, setAskDismissed] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
+  // Where to get each setup file (docs/legal-setupfiles.md, read at build time).
+  const [sources, setSources] = useState<SetupSource[]>([]);
+  // Set once the user opens a source: Floppy then checks Downloads whenever
+  // the window comes back to the front, until setup is done.
+  const [watchDownloads, setWatchDownloads] = useState(false);
+  // The Report a Setup Problem dialog: which slot, or null when closed.
+  const [reportSlot, setReportSlot] = useState<string | null>(null);
+  const [reportKind, setReportKind] = useState<SetupReportKind>("source-broken");
+  const [reportSource, setReportSource] = useState("");
+  const [reportNote, setReportNote] = useState("");
+  // The system backup: whether to offer Burn A CD, and the gear menu's dialog.
+  const [backup, setBackup] = useState<BackupStatus | null>(null);
+  const [backupOpen, setBackupOpen] = useState(false);
   const [theme, setTheme] = useState<Theme>(loadTheme);
   const gearRef = useRef<HTMLDivElement>(null);
   const [nameDraft, setNameDraft] = useState("");
@@ -273,6 +366,18 @@ function App() {
   const guestDocs = useMemo(
     () => documents.filter((d) => d.os === guest).sort((a, b) => a.name.localeCompare(b.name)),
     [documents, guest],
+  );
+  // The documents folder's type folders, in order, each with its files.
+  const docGroups = useMemo(
+    () => {
+      const groups = new Map<string, LibraryDoc[]>();
+      for (const d of guestDocs) {
+        const folder = docTypeFolder(d);
+        groups.set(folder, [...(groups.get(folder) ?? []), d]);
+      }
+      return [...groups.entries()].sort(([a], [b]) => a.localeCompare(b));
+    },
+    [guestDocs],
   );
   const selectedDoc = guestDocs.find((d) => d.id === selectedDocId) ?? null;
   const guestRunning = apps.some((a) => a.os === guest && running.has(a.id));
@@ -296,6 +401,49 @@ function App() {
       clearInterval(timer);
     };
   }, []);
+
+  useEffect(() => {
+    invoke<SetupSource[]>("setup_sources").then(setSources, () => {});
+  }, []);
+
+  // Any guest still missing setup files: while one is, a finished download
+  // is worth looking for.
+  const anySetupMissing = statuses.some((s) => s.os !== "dos" && (!s.system.rom || !s.system.boot));
+
+  // Whether the system is complete and not yet backed up, kept current as setup changes.
+  useEffect(() => {
+    invoke<BackupStatus>("backup_status").then(setBackup, () => {});
+  }, [statuses]);
+
+  // However a real Kickstart arrived (dropped, Downloads, a files disc,
+  // Choose…), say that it now replaces AROS.
+  const amigaStatus = statuses.find((s) => s.os === "amiga");
+  const wasOnAros = useRef(false);
+  useEffect(() => {
+    if (!amigaStatus) return;
+    const onAros = amigaStatus.system.aros && !amigaStatus.system.rom;
+    if (wasOnAros.current && amigaStatus.system.rom) {
+      const which = amigaStatus.romNote ?? amigaStatus.system.rom;
+      setMessage(`Floppy found a real Kickstart (${which}) and now starts the Amiga with it instead of AROS.`);
+    }
+    wasOnAros.current = onAros;
+  }, [amigaStatus]);
+
+  // After the user opened a source in the browser, look in Downloads each
+  // time Floppy comes back to the front, quietly unless something's found.
+  useEffect(() => {
+    if (!watchDownloads || !anySetupMissing) return;
+    const onFront = () => {
+      if (document.visibilityState === "visible" && !busyRef.current) void lookInDownloads(true);
+    };
+    window.addEventListener("focus", onFront);
+    document.addEventListener("visibilitychange", onFront);
+    return () => {
+      window.removeEventListener("focus", onFront);
+      document.removeEventListener("visibilitychange", onFront);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [watchDownloads, anySetupMissing]);
 
   // What a request would ask for, kept current as setup and the library change.
   useEffect(() => {
@@ -326,6 +474,7 @@ function App() {
 
   useEffect(() => {
     if (gearOpen) invoke<FindingsSummary>("findings_summary").then(setFindings, () => setFindings(null));
+    if (gearOpen) invoke<KnowledgeSummary>("knowledge_summary").then(setKnowledge, () => setKnowledge(null));
   }, [gearOpen]);
 
   /** Runs a gear-menu item, closing the menu first. */
@@ -339,6 +488,7 @@ function App() {
   }, [selected?.id, selected?.name]);
 
   async function refresh(): Promise<LibraryApp[]> {
+    invoke<AiInfo>("ai_info").then(setAi, () => {});
     const list = await invoke<LibraryApp[]>("list_apps");
     setApps(list);
     setDocuments(await invoke<LibraryDoc[]>("list_documents"));
@@ -373,7 +523,21 @@ function App() {
   }
 
   async function refreshRunning() {
-    setRunning(new Set(await invoke<string[]>("running_apps")));
+    const now = new Set(await invoke<string[]>("running_apps"));
+    setRunning(now);
+    setQuitAsked((asked) => new Set([...asked].filter((id) => now.has(id))));
+  }
+
+  /** Asks an app's emulator to quit, and forces it the second time (commands.rs `quit_app`). */
+  async function quitApp(app: LibraryApp) {
+    const force = quitAsked.has(app.id);
+    setError(null);
+    try {
+      await invoke("quit_app", { id: app.id, force });
+      if (!force) setQuitAsked((asked) => new Set(asked).add(app.id));
+    } catch (e) {
+      fail(e);
+    }
   }
 
   function fail(e: unknown) {
@@ -416,7 +580,7 @@ function App() {
         } else if (startup?.document) {
           await refresh();
           selectDoc(startup.document);
-          setMessage(`Added ${startup.document.name} as ${dosPath(startup.document)}. Choose an app to open it with.`);
+          setMessage(`Added ${startup.document.name} as ${docPath(startup.document)}.`);
         } else if (startup?.error) {
           setError(startup.error);
         }
@@ -425,6 +589,8 @@ function App() {
       }
     })();
     const unlisten = listen("running-changed", () => void refreshRunning());
+    // What a guest saved into its documents folder, sorted once it quit.
+    const unlistenDocs = listen("documents-changed", () => void refresh());
     // Files opened with Floppy (a disc Diskette sends back, request.rs).
     // Taken once here too, for files that arrived before the window.
     const unlistenOpened = listen("files-opened", () => void openedRef.current());
@@ -440,6 +606,7 @@ function App() {
     });
     return () => {
       unlisten.then((f) => f());
+      unlistenDocs.then((f) => f());
       unlistenSession.then((f) => f());
       unlistenOpened.then((f) => f());
       unlistenMedia.then((f) => f());
@@ -481,11 +648,157 @@ function App() {
   async function routeDrop(zone: DropZone, paths: string[]) {
     const discs: string[] = [];
     const rest: string[] = [];
-    for (const p of paths) (await invoke<boolean>("is_burn_disc", { path: p }) ? discs : rest).push(p);
+    const backups: string[] = [];
+    for (const p of paths) {
+      if (await invoke<boolean>("is_backup_disc", { path: p })) backups.push(p);
+      else (await invoke<boolean>("is_burn_disc", { path: p }) ? discs : rest).push(p);
+    }
+    // A system backup restores wherever it's dropped (backup.rs, via cd.rs).
+    if (backups.length) await addSetupFiles(backups);
     for (const d of discs) await importDisc(d);
     if (!rest.length) return;
-    if (zone === "setup") await addSetupFiles(rest);
-    else await importPaths(rest);
+    if (zone === "setup") return addSetupFiles(rest);
+    // Findings teach Floppy (learned.rs); everything else finds its place.
+    const others: string[] = [];
+    for (const p of rest) {
+      if (await invoke<boolean>("is_findings", { path: p })) await learnFindings(p);
+      else others.push(p);
+    }
+    if (others.length) await placePaths(others);
+  }
+
+  /**
+   * Puts each dropped item where it belongs (drops.rs): straight away when
+   * there's a clear winner or an answer for its kind, else it's queued for
+   * the "Where does this go?" dialog.
+   */
+  async function placePaths(paths: string[]) {
+    setError(null);
+    setMessage(null);
+    const ask: DropClassification[] = [];
+    const failures: string[] = [];
+    const done: string[] = [];
+    let last: ImportedItem | null = null;
+    for (const path of paths) {
+      setBusy(`Looking at ${baseName(path)}`);
+      try {
+        const c = await invoke<DropClassification>("classify_drop", { os: guest, path });
+        if (!c.decided) {
+          ask.push(c);
+          continue;
+        }
+        if (c.decided.to === "setup") {
+          setBusy(null);
+          await addSetupFiles([path]);
+          continue;
+        }
+        setBusy(`Adding ${c.name}`);
+        last = await invoke<ImportedItem>("import_as", { path, choice: c.decided });
+        const by = c.decidedBy && c.decidedBy !== "its contents" && c.decidedBy !== "nothing else fits" ? ` (going by ${c.decidedBy})` : "";
+        done.push(`${c.name} as ${describeChoice(c.decided)}${by}`);
+      } catch (e) {
+        failures.push(String(e));
+      }
+    }
+    setBusy(null);
+    await refresh();
+    if (last?.app) select(last.app);
+    else if (last?.document) selectDoc(last.document);
+    if (done.length) setMessage(`Added ${done.join("; ")}.`);
+    if (failures.length) setError(failures.join("\n"));
+    if (ask.length) {
+      setDropPick(0);
+      setDropRemember(true);
+      setAskDrops((queue) => [...queue, ...ask]);
+    }
+  }
+
+  /** The user's answer for the first queued drop: kept (and remembered, if ticked), then carried out. */
+  async function answerDrop(skip: boolean) {
+    const c = askDrops[0];
+    if (!c) return;
+    setAskDrops((queue) => queue.slice(1));
+    setDropPick(0);
+    setDropRemember(true);
+    if (skip) return;
+    const option = c.options[dropPick];
+    if (!option) return;
+    try {
+      await invoke("record_drop_choice", {
+        signature: c.signature,
+        choice: option.choice,
+        offered: c.options.map((o) => o.choice),
+        remember: dropRemember,
+      });
+      if (option.choice.to === "setup") {
+        await addSetupFiles([c.path]);
+        return;
+      }
+      setBusy(`Adding ${c.name}`);
+      const item = await invoke<ImportedItem>("import_as", { path: c.path, choice: option.choice });
+      setBusy(null);
+      await refresh();
+      if (item.app) select(item.app);
+      else if (item.document) selectDoc(item.document);
+      setMessage(`Added ${c.name} as ${describeChoice(option.choice)}.`);
+    } catch (e) {
+      setBusy(null);
+      fail(e);
+    }
+  }
+
+  /** Learns from another Floppy's findings (learned.rs). */
+  async function learnFindings(path: string) {
+    setError(null);
+    setBusy(`Learning from ${baseName(path)}`);
+    try {
+      const l = await invoke<LearnSummary>("learn_findings", { path });
+      await refresh();
+      if (l.own) setMessage(`${baseName(path)} is this Floppy's own findings: nothing to learn from it.`);
+      else if (l.already) setMessage(`Floppy already learned from ${baseName(path)}.`);
+      else {
+        const people = l.forMaintainers
+          ? ` ${l.forMaintainers} note${l.forMaintainers === 1 ? "" : "s"} for Floppy's maintainers (errors, setup reports) stay in the file.`
+          : "";
+        const pack = l.aiVersion
+          ? ` Floppy AI is now version ${l.aiVersion}.`
+          : l.unsignedPack
+            ? " It calls itself a Floppy AI pack but isn't signed by Floppy's maintainers, so it was learned from like anyone's findings: the AI version and where Floppy points you for setup files stay as they were."
+            : "";
+        const sources = l.setupSources ? ` ${l.setupSources} setup source${l.setupSources === 1 ? "" : "s"} updated.` : "";
+        const kept = l.materials ? ` ${l.materials} material${l.materials === 1 ? "" : "s"} kept to read (About Floppy).` : "";
+        setMessage(`Learned from ${baseName(path)}: ${describeLearned(l)}.${pack}${sources}${kept}${people}`);
+      }
+      if (l.skipped.length) setError(`Left out:\n${l.skipped.join("\n")}`);
+    } catch (e) {
+      fail(e);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function revealLearned() {
+    try {
+      await revealItemInDir(await invoke<string>("learned_folder"));
+    } catch (e) {
+      fail(e);
+    }
+  }
+
+  async function pickFindings() {
+    const picked = await open({ multiple: true, title: "Learn from Floppy findings", filters: [{ name: "Findings", extensions: ["zip", "json"] }] });
+    if (Array.isArray(picked)) for (const p of picked) await learnFindings(p);
+  }
+
+  async function forgetLearned() {
+    setConfirmForget(false);
+    try {
+      await invoke("forget_learned");
+      await refresh();
+      setMessage("Forgot everything learned from findings. Your own answers and test results are kept.");
+    } catch (e) {
+      fail(e);
+    }
   }
 
   /** Files opened with Floppy: a disc from Diskette, or anything Open With sent. */
@@ -545,7 +858,7 @@ function App() {
     for (const path of paths) {
       setBusy(`Importing ${baseName(path)}`);
       try {
-        // A DOS document goes to C:\DOCS; anything else is an app.
+        // An app, or else a document for the guest's documents folder.
         last = await invoke<ImportedItem>("import_item", { os: guest, path });
       } catch (e) {
         failures.push(String(e));
@@ -562,7 +875,7 @@ function App() {
       selectDoc(last.document);
       setMessage(
         paths.length === 1
-          ? `Added ${last.document.name} as ${dosPath(last.document)}.`
+          ? `Added ${last.document.name} as ${docPath(last.document)}.`
           : `Imported ${paths.length - failures.length} of ${paths.length}.`,
       );
     }
@@ -583,9 +896,29 @@ function App() {
     if (Array.isArray(picked) && picked.length) await importPaths(picked);
   }
 
+  /** Adds files as documents, whatever they are (a zip too), sorted by type. */
   async function pickDocuments() {
-    const picked = await open({ multiple: true, title: "Add documents to open in a DOS app" });
-    if (Array.isArray(picked) && picked.length) await importPaths(picked);
+    const picked = await open({ multiple: true, title: `Add documents to ${guestFilePath(guest, DOCS_DIR[guest])}` });
+    if (!Array.isArray(picked) || !picked.length) return;
+    setError(null);
+    setMessage(null);
+    let last: LibraryDoc | null = null;
+    const failures: string[] = [];
+    for (const path of picked) {
+      setBusy(`Adding ${baseName(path)}`);
+      try {
+        last = await invoke<LibraryDoc>("add_document", { os: guest, path });
+      } catch (e) {
+        failures.push(String(e));
+      }
+    }
+    setBusy(null);
+    await refresh();
+    if (last) {
+      selectDoc(last);
+      setMessage(picked.length === 1 ? `Added ${last.name} as ${docPath(last)}.` : `Added ${picked.length - failures.length} of ${picked.length}.`);
+    }
+    if (failures.length) setError(failures.join("\n"));
   }
 
   /** Opens a document in the chosen app; what it saves is listed when DOSBox quits. */
@@ -713,18 +1046,120 @@ function App() {
     }
   }
 
-  /** Points Floppy at a Basilisk II that isn't in /Applications or ~/Applications (or on PATH). */
-  async function locateBasilisk() {
+  /** Points Floppy at an emulator that isn't where it looks (bundled, /Applications, ~/Applications or PATH). */
+  async function locateEmulator(os: GuestOs) {
+    const name = statuses.find((s) => s.os === os)?.emulator ?? "the emulator";
     // Linux programs have no extension to filter on.
     const filters = isLinux ? [] : [{ name: "Application", extensions: ["app"] }];
-    const path = await open({ title: "Locate Basilisk II", filters });
+    const path = await open({ title: `Locate ${name}`, filters });
     if (typeof path !== "string") return;
     setError(null);
     setMessage(null);
     try {
-      await invoke<GuestStatus>("locate_emulator", { os: "mac-classic", path });
+      await invoke<GuestStatus>("locate_emulator", { os, path });
       await refreshStatuses();
-      setMessage(`Floppy will start the Mac with ${baseName(path)}.`);
+      setMessage(`Floppy will start ${GUEST_LABEL[os]} apps with ${baseName(path)}.`);
+    } catch (e) {
+      fail(e);
+    }
+  }
+
+  /** Opens where to get a setup file in the browser, then watches Downloads for it. */
+  async function openSource(src: SetupSource) {
+    setError(null);
+    try {
+      await openUrl(src.url);
+      setWatchDownloads(true);
+      setMessage(
+        `Opened ${src.name} in your browser. When the download has finished, come back here: Floppy looks in your Downloads folder and adds it by itself.`,
+      );
+    } catch (e) {
+      fail(e);
+    }
+  }
+
+  /** Fills missing setup files from the Downloads folder (cd.rs `import_from_downloads`). */
+  async function lookInDownloads(quiet: boolean) {
+    if (!quiet) {
+      setError(null);
+      setMessage(null);
+      setBusy("Looking in Downloads");
+    }
+    try {
+      const r = await invoke<CdImport>("import_from_downloads");
+      if (r.added.length) {
+        await refreshStatuses();
+        setMessage(describeImport(r));
+      } else if (!quiet) {
+        setMessage(
+          "Nothing in your Downloads folder fills a missing setup file yet. If a download is still going, Floppy checks again when you come back to this window.",
+        );
+        setWatchDownloads(true);
+      }
+    } catch (e) {
+      if (!quiet) fail(e);
+    } finally {
+      if (!quiet) setBusy(null);
+    }
+  }
+
+  /** Burn A CD: a compressed disc image of the system's setup files and settings (backup.rs). */
+  async function burnBackup() {
+    setBackupOpen(false);
+    const day = new Date().toISOString().slice(0, 10);
+    const path = await save({
+      title: "Burn A CD: back up Floppy's system",
+      defaultPath: `Floppy System Backup ${day}.iso`,
+      filters: [{ name: "Disc image", extensions: ["iso"] }],
+    });
+    if (!path) return;
+    setError(null);
+    setMessage(null);
+    setBusy("Burning a CD");
+    try {
+      const r = await invoke<BackupMade>("make_backup", { path });
+      setBackup(await invoke<BackupStatus>("backup_status"));
+      setMessage(
+        `Burned ${baseName(path)}: ${r.slots.join(", ")}, ${formatBytes(r.originalBytes)} compressed to ${formatBytes(r.discBytes)}. Keep it somewhere safe. To restore, open it with Floppy or drop it on this window.`,
+      );
+    } catch (e) {
+      fail(e);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function declineBackup() {
+    try {
+      await invoke("decline_backup");
+      setBackup(await invoke<BackupStatus>("backup_status"));
+    } catch (e) {
+      fail(e);
+    }
+  }
+
+  /** Opens Report a Setup Problem for `slot`, guessing the likely kind. */
+  function startReport(slot: string, filled: boolean) {
+    setReportSlot(slot);
+    setReportKind(filled ? "didnt-work" : "source-broken");
+    setReportSource("");
+    setReportNote("");
+  }
+
+  /** Keeps the report for the next Export Findings (findings.rs `add_setup_report`). */
+  async function sendReport() {
+    if (!reportSlot) return;
+    try {
+      await invoke("add_setup_report", {
+        slot: reportSlot,
+        kind: reportKind,
+        source: reportSource.trim() || null,
+        note: reportNote.trim(),
+      });
+      setReportSlot(null);
+      setMessage(
+        "Thanks. The report goes out with your next Export Findings… (gear menu), so Floppy's list of sources can be fixed for everyone. Nothing is sent until you export and share it.",
+      );
     } catch (e) {
       fail(e);
     }
@@ -802,7 +1237,7 @@ function App() {
     try {
       const n = await invoke<FindingsSummary>("export_findings", { path });
       setMessage(
-        `Saved ${baseName(path)}: ${describeFindings(n)}. It holds no documents, files or file names. Send it to Floppy's maintainers so the next release knows it too.`,
+        `Saved ${baseName(path)}: ${describeFindings(n)}. It holds no documents, files or file names. Drop it on another Floppy to teach it, or send it to Floppy's maintainers so every Floppy learns it from the next release.`,
       );
     } catch (e) {
       fail(e);
@@ -924,6 +1359,22 @@ function App() {
     }
   }
 
+  /** Turns the Amiga's built-in AROS replacement Kickstart on or off (commands.rs `set_aros`). */
+  async function useAros(on: boolean) {
+    setError(null);
+    try {
+      await invoke<GuestStatus>("set_aros", { on });
+      await refreshStatuses();
+      setMessage(
+        on
+          ? "The Amiga starts with the free AROS Kickstart for now. When Floppy finds a real Kickstart ROM (dropped here, in Downloads, or on a files disc) it switches to it by itself."
+          : "Stopped using AROS. Add a Kickstart ROM to start the Amiga.",
+      );
+    } catch (e) {
+      fail(e);
+    }
+  }
+
   async function launch(app: LibraryApp, promptOnly: boolean) {
     setError(null);
     try {
@@ -1012,6 +1463,19 @@ function App() {
               <AppMarkIcon />
             </span>{" "}
             Floppy <span className="version-tag">v{__APP_VERSION__}</span>
+            {ai && (
+              <span
+                className="version-tag ai-version"
+                title={
+                  ai.fromPack
+                    ? `Floppy AI ${ai.version} (${ai.date}), learned from a knowledge pack. This build knows AI ${ai.builtin}.`
+                    : `Floppy AI ${ai.version}${ai.date ? ` (${ai.date})` : ""}: what Floppy knows about old files, apps and setup.${ai.learnedFrom ? ` Plus what it learned from ${ai.learnedFrom} findings file${ai.learnedFrom === 1 ? "" : "s"}.` : ""}`
+                }
+              >
+                AI {ai.version}
+                {ai.fromPack || ai.learnedFrom ? "+" : ""}
+              </span>
+            )}
           </h1>
           <p>Run the old apps your files need, in the OS they were made for.</p>
         </div>
@@ -1045,7 +1509,7 @@ function App() {
                 className="menu-item"
                 disabled={!!busy}
                 title={basiliskTitle(basiliskStatus)}
-                onClick={() => fromGear(() => void locateBasilisk())}
+                onClick={() => fromGear(() => void locateEmulator("mac-classic"))}
               >
                 <FolderIcon />
                 <span>Locate Basilisk II…</span>
@@ -1087,7 +1551,7 @@ function App() {
                 disabled={!findings || findingsTotal(findings) === 0}
                 title={
                   findings && findingsTotal(findings) > 0
-                    ? `New since the last export: ${describeFindings(findings)}, as a zip for Floppy's maintainers. No documents, files or file names.${lastExported(findings)}`
+                    ? `New since the last export: ${describeFindings(findings)}, as a zip to teach another Floppy or Floppy's maintainers. No documents, files or file names.${lastExported(findings)}`
                     : findings?.lastExported
                       ? `Nothing new since the last export.${lastExported(findings)}`
                       : "Nothing to share yet: test results, apps you identified, file types you added, unlisted ROMs and apps' errors show up here."
@@ -1096,6 +1560,47 @@ function App() {
               >
                 <ExportIcon />
                 <span>Export Findings{findings && findingsTotal(findings) > 0 ? ` (${findingsTotal(findings)})` : ""}…</span>
+              </button>
+              <button
+                type="button"
+                className="menu-item"
+                disabled={!!busy}
+                title={
+                  knowledge?.sources
+                    ? `Learned from ${knowledge.sources} findings file${knowledge.sources === 1 ? "" : "s"} so far: ${describeLearned(knowledge)}. Add another's, or drop one on the window.`
+                    : "Teach this Floppy what another Floppy learned: pick its Export Findings zip, or drop it on the window."
+                }
+                onClick={() => fromGear(() => void pickFindings())}
+              >
+                <FolderIcon />
+                <span>Learn from Findings…</span>
+              </button>
+              {!!knowledge?.sources && (
+                <button
+                  type="button"
+                  className="menu-item"
+                  title={`Forget ${describeLearned(knowledge)}, learned from ${knowledge.sources} findings file${knowledge.sources === 1 ? "" : "s"}.`}
+                  onClick={() => fromGear(() => setConfirmForget(true))}
+                >
+                  <TrashIcon />
+                  <span>Forget What Was Learned…</span>
+                </button>
+              )}
+              <div className="menu-sep" />
+              <div className="menu-note">Your setup files</div>
+              <button
+                type="button"
+                className="menu-item"
+                disabled={!!busy || !backup?.slots.length}
+                title={
+                  backup?.slots.length
+                    ? "Burn A CD: one compressed disc image of your setup files and settings, to restore Floppy in one step."
+                    : "Nothing to back up yet: add a Mac or Amiga setup file first."
+                }
+                onClick={() => fromGear(() => setBackupOpen(true))}
+              >
+                <DiscIcon />
+                <span>Backup Floppy System…</span>
               </button>
               <div className="menu-sep" />
               <button type="button" className="menu-item" onClick={() => fromGear(() => setAboutOpen(true))}>
@@ -1205,14 +1710,6 @@ function App() {
           </span>
           {ui.importFileLabel}
         </button>
-        {guest === "dos" && (
-          <button type="button" className="icontext-btn" onClick={() => void pickDocuments()} disabled={!!busy}>
-            <span className="btn-icon">
-              <FileIcon />
-            </span>
-            Import Document…
-          </button>
-        )}
         {setupNeeded && (
           <button
             type="button"
@@ -1229,15 +1726,58 @@ function App() {
         )}
       </div>
 
+      {backup?.offer && (
+        <div className="setup-drop media-offer">
+          <span className="setup-drop-icon">
+            <DiscIcon />
+          </span>
+          <p className="setup-drop-text">
+            <strong>Floppy's system is complete.</strong> Burn A CD to back it up: one compressed disc image of your{" "}
+            {backup.slots.join(", ")} and their settings, so a new computer or a reinstall is set up again in one step.
+          </p>
+          <button type="button" className="small primary" onClick={() => void burnBackup()} disabled={!!busy}>
+            Burn A CD…
+          </button>
+          <button type="button" className="small" onClick={() => void declineBackup()} disabled={!!busy}>
+            Not Now
+          </button>
+        </div>
+      )}
+
+      {status && !status.found && (
+        <div className="setup-drop">
+          <span className="setup-drop-icon">
+            <ChipIcon />
+          </span>
+          <p className="setup-drop-text">
+            <strong>{GUEST_LABEL[guest]} apps can't start yet.</strong> {status.blocker} If you have a copy somewhere
+            else, point Floppy at it.
+          </p>
+          <button type="button" className="small primary" onClick={() => void locateEmulator(guest)} disabled={!!busy}>
+            Locate {status.emulator}…
+          </button>
+        </div>
+      )}
+
       {setupNeeded && (
         <div className="setup-drop">
           <span className="setup-drop-icon">
             <ChipIcon />
           </span>
           <p className="setup-drop-text">
+            {guest === "amiga" && status?.system.aros && !status.system.rom && (
+              <>
+                <strong>Running on the free AROS Kickstart for now.</strong> A real Kickstart ROM runs far more Amiga
+                software, and Floppy switches to one by itself as soon as it finds it.{" "}
+              </>
+            )}
             <strong>Setup files needed:</strong> {missingSetup.join(", ")}. Drop them onto this window as files, folders,
-            zips or disc images. Floppy recognizes each one by its contents, whatever it's called.
+            zips or disc images, or download them (see where below) and Floppy picks them up from your Downloads
+            folder. It recognizes each one by its contents, whatever it's called.
           </p>
+          <button type="button" className="small" onClick={() => void lookInDownloads(false)} disabled={!!busy || systemInUse}>
+            Look in Downloads
+          </button>
           <button type="button" className="small" onClick={() => void pickSetupFiles()} disabled={!!busy || systemInUse}>
             Choose Files…
           </button>
@@ -1286,6 +1826,20 @@ function App() {
         </div>
       ))}
 
+      {apps
+        .filter((a) => running.has(a.id))
+        .map((a) => (
+          <div className="setup-drop running-offer" key={`running-${a.id}`}>
+            <span className="setup-drop-icon">{GUEST_UI[a.os].icon()}</span>
+            <p className="setup-drop-text">
+              <strong>{a.name}</strong> is running in {EMULATOR_LABEL[a.os]}. {quitHint(a.os, quitAsked.has(a.id))}
+            </p>
+            <button type="button" className={`small${quitAsked.has(a.id) ? " danger" : ""}`} onClick={() => void quitApp(a)}>
+              {quitAsked.has(a.id) ? "Force Quit" : `Quit ${EMULATOR_LABEL[a.os]}`}
+            </button>
+          </div>
+        ))}
+
       {busy && (
         <div className="scan-status-row">
           <span className="scan-status-label">
@@ -1303,6 +1857,7 @@ function App() {
       )}
 
       <div className="layout">
+        <div className="layout-column">
         <section className="panel">
           <h2>
             <span className="section-icon">{ui.icon()}</span>
@@ -1320,6 +1875,10 @@ function App() {
               tracking={tracking}
               onForgetIgnored={() => void forgetIgnored()}
               onAskAgain={(slot) => void askAgain(slot)}
+              sources={sources}
+              onOpenSource={(src) => void openSource(src)}
+              onReport={startReport}
+              onAros={(on) => void useAros(on)}
             />
           )}
 
@@ -1355,36 +1914,65 @@ function App() {
             </ul>
           )}
 
-          {guest === "dos" && guestDocs.length > 0 && (
-            <>
-              <h3 className="list-heading">
-                <span className="section-icon">
-                  <FileIcon />
-                </span>
-                Documents <span className="list-heading-meta">C:\DOCS</span>
-              </h3>
-              <ul className="app-list">
-                {guestDocs.map((doc) => (
-                  <li key={doc.id}>
-                    <button
-                      type="button"
-                      className={`app-row${doc.id === selectedDocId ? " selected" : ""}`}
-                      onClick={() => selectDoc(doc)}
-                    >
-                      <span className="row-icon">
-                        <FileIcon />
-                      </span>
-                      <span className="row-main">
-                        <span className="row-name">{doc.name}</span>
-                        <span className="row-meta">{dosPath(doc)}</span>
-                      </span>
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            </>
-          )}
         </section>
+
+        <section className="panel docs-panel">
+          <h2>
+            <span className="section-icon">
+              <FileIcon />
+            </span>
+            {GUEST_LABEL[guest]} Docs
+          </h2>
+          <p className="desc">{ui.docsDesc}</p>
+          {docGroups.length === 0 ? (
+            <p className="empty">
+              No documents yet. Add old files here, or drop them on this window, and Floppy sorts them by type.
+            </p>
+          ) : (
+            docGroups.map(([folder, docs]) => (
+              <Fragment key={folder}>
+                <h3 className="list-heading">
+                  <span className="section-icon">
+                    <FolderIcon />
+                  </span>
+                  {folder}{" "}
+                  <span className="list-heading-meta">
+                    {guestFilePath(guest, `${DOCS_DIR[guest]}/${folder}`)} · {docs.length}
+                  </span>
+                </h3>
+                <ul className="app-list">
+                  {docs.map((doc) => (
+                    <li key={doc.id}>
+                      <button
+                        type="button"
+                        className={`app-row${doc.id === selectedDocId ? " selected" : ""}`}
+                        onClick={() => selectDoc(doc)}
+                      >
+                        <span className="row-icon">
+                          <FileIcon />
+                        </span>
+                        <span className="row-main">
+                          <span className="row-name">{doc.name}</span>
+                          {/* Its name in the guest, when that isn't the name it came with. */}
+                          {baseName(doc.file) !== doc.name && <span className="row-meta">{baseName(doc.file)}</span>}
+                        </span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </Fragment>
+            ))
+          )}
+          <div className="detail-actions">
+            <button type="button" className="icontext-btn" onClick={() => void pickDocuments()} disabled={!!busy}>
+              <span className="btn-icon">
+                <FileIcon />
+              </span>
+              Add Documents…
+            </button>
+          </div>
+        </section>
+        </div>
 
         <section className="panel">
           {selectedDoc ? (
@@ -1396,12 +1984,15 @@ function App() {
               onReveal={() => void revealLibraryFile(selectedDoc.os, selectedDoc.file)}
               onExport={() => void exportLibraryFile(selectedDoc.os, selectedDoc.file)}
               onRemove={() => void removeDocument(selectedDoc)}
+              startApp={guestApps.find((a) => a.favorite) ?? guestApps[0] ?? null}
+              startBlocked={launchBlocked || guestRunning}
+              onStart={(a) => void launch(a, true)}
             />
           ) : !selected ? (
             <p className="empty">
               {guest === "dos"
                 ? "Select an app to launch it or change what it opens, or a document to open it in its app."
-                : "Select an app to launch it or change what it opens."}
+                : "Select an app to launch it, or a document to see where it is in the guest."}
             </p>
           ) : (
             <div className="app-details">
@@ -1539,11 +2130,80 @@ function App() {
                   Remove
                 </button>
               </div>
-              <LaunchHint app={selected} blocker={blocker} guestRunning={guest !== "dos" && guestRunning} />
+              <LaunchHint
+                app={selected}
+                blocker={blocker}
+                guestRunning={guest !== "dos" && guestRunning}
+                onAros={guest === "amiga" && !!status?.system.aros && !status.system.rom}
+              />
             </div>
           )}
         </section>
       </div>
+
+      <Dialog
+        open={!!askDrops[0]}
+        onClose={() => void answerDrop(true)}
+        title={askDrops[0] ? `Where does ${askDrops[0].name} go?` : "Where does this go?"}
+        actions={
+          <>
+            <button type="button" onClick={() => void answerDrop(true)}>
+              Skip
+            </button>
+            <button type="button" className="primary" onClick={() => void answerDrop(false)}>
+              Add
+            </button>
+          </>
+        }
+      >
+        {askDrops[0] && (
+          <>
+            <p>
+              Floppy can't tell for sure, so you decide.
+              {askDrops.length > 1 ? ` ${askDrops.length - 1} more after this one.` : ""}
+            </p>
+            <div className="drop-options" role="radiogroup" aria-label="Where it goes">
+              {askDrops[0].options.map((o, i) => (
+                <label key={`${o.choice.to}-${o.choice.os}`} className="drop-option">
+                  <input type="radio" name="drop-choice" checked={dropPick === i} onChange={() => setDropPick(i)} />
+                  <span>
+                    <span className="drop-option-label">{o.label}</span>
+                    <span className="drop-option-why">{o.why}</span>
+                  </span>
+                </label>
+              ))}
+            </div>
+            <label className="field-check drop-remember">
+              <input type="checkbox" checked={dropRemember} onChange={(e) => setDropRemember(e.target.checked)} />
+              <span>Do the same for other {askDrops[0].sameFor} without asking</span>
+            </label>
+            <p className="system-note">
+              Your answer also goes in your next Export Findings, so Floppy learns where these go.
+            </p>
+          </>
+        )}
+      </Dialog>
+
+      <Dialog
+        open={confirmForget}
+        onClose={() => setConfirmForget(false)}
+        title="Forget what was learned?"
+        actions={
+          <>
+            <button type="button" onClick={() => setConfirmForget(false)}>
+              Cancel
+            </button>
+            <button type="button" className="danger" onClick={() => void forgetLearned()}>
+              Forget
+            </button>
+          </>
+        }
+      >
+        <p>
+          Floppy forgets {knowledge ? describeLearned(knowledge) : "what it learned"} from findings dropped on it. What it was
+          built knowing, your own answers and your test results stay. Drop the findings again to relearn them.
+        </p>
+      </Dialog>
 
       <Dialog
         open={!!session?.identify}
@@ -1601,6 +2261,116 @@ function App() {
         )}
       </Dialog>
 
+      <Dialog
+        open={!!reportSlot}
+        onClose={() => setReportSlot(null)}
+        title="Report a setup problem"
+        actions={
+          <>
+            <button type="button" onClick={() => setReportSlot(null)}>
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="primary"
+              disabled={!reportNote.trim() && !reportSource.trim()}
+              onClick={() => void sendReport()}
+            >
+              Keep for Export
+            </button>
+          </>
+        }
+      >
+        <p>
+          Floppy keeps this until you choose Export Findings… in the gear menu, and never sends it by itself. It holds what
+          you write here and, for a file that didn't work, what Floppy recognized the file as (its type, size and
+          fingerprint), never its name or where it is.
+        </p>
+        <label className="field">
+          <span className="field-label">About</span>
+          <select value={reportSlot ?? ""} onChange={(e) => setReportSlot(e.target.value)}>
+            {(guest === "amiga" ? ["Kickstart ROM", "Workbench disk"] : ["Mac ROM", "Mac startup disk"]).map((slot) => (
+              <option key={slot} value={slot}>
+                {slot}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="field">
+          <span className="field-label">What happened</span>
+          <select value={reportKind} onChange={(e) => setReportKind(e.target.value as SetupReportKind)}>
+            {(Object.keys(REPORT_KIND_LABEL) as SetupReportKind[]).map((k) => (
+              <option key={k} value={k}>
+                {REPORT_KIND_LABEL[k]}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="field">
+          <span className="field-label">{reportKind === "better-source" ? "Where it is (a link)" : "Which source (optional)"}</span>
+          <input
+            type="text"
+            list="report-sources"
+            placeholder="https://…"
+            value={reportSource}
+            onChange={(e) => setReportSource(e.target.value)}
+          />
+          <datalist id="report-sources">
+            {sources
+              .filter((src) => src.slot === reportSlot)
+              .map((src) => (
+                <option key={src.url} value={src.url} />
+              ))}
+          </datalist>
+        </label>
+        <label className="field">
+          <span className="field-label">Details</span>
+          <textarea
+            rows={3}
+            placeholder={
+              reportKind === "didnt-work"
+                ? "e.g. the Mac shows a flashing question mark"
+                : reportKind === "better-source"
+                  ? "e.g. free, and includes every version"
+                  : "e.g. the page says the item was removed"
+            }
+            value={reportNote}
+            onChange={(e) => setReportNote(e.target.value)}
+          />
+        </label>
+      </Dialog>
+
+      <Dialog
+        open={backupOpen}
+        onClose={() => setBackupOpen(false)}
+        title="Backup Floppy System"
+        actions={
+          <>
+            <button type="button" onClick={() => setBackupOpen(false)}>
+              Cancel
+            </button>
+            <button type="button" className="primary" disabled={!!busy} onClick={() => void burnBackup()}>
+              Burn A CD…
+            </button>
+          </>
+        }
+      >
+        <p>
+          Burns a CD: one compressed disc image (.iso) of everything that makes Floppy work, the same backup Floppy offers
+          when its system is complete. It holds your {backup?.slots.length ? backup.slots.join(", ") : "setup files"}
+          {backup?.slots.includes("Kickstart ROM") ? ", and settings such as the Amiga model" : ""}. Your apps and documents
+          aren't included.
+        </p>
+        <p>
+          To restore, on this computer or a new one, open the disc image with Floppy or drop it on its window. Floppy
+          checks every file and fills in whatever isn't set up yet, and never replaces what is.
+          {backup?.lastBackup
+            ? ` Last backed up ${new Date(backup.lastBackup * 1000).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" })}.`
+            : ""}
+        </p>
+        <p>These are your own copies of copyrighted system software: keep the disc for yourself.</p>
+      </Dialog>
+
       <Dialog open={aboutOpen} onClose={() => setAboutOpen(false)} title={`About Floppy v${__APP_VERSION__}`}>
         <p>Run the old apps your files need, in the OS they were made for.</p>
         <ul className="about-emulators">
@@ -1612,10 +2382,29 @@ function App() {
           ))}
         </ul>
         <p>
-          Free software under the GNU GPL, version 2 or later. The emulators run as separate programs under their own
+          Floppy is free, always, and published only at ansiapps.com. It's free software under the GNU GPL, version 2 or
+          later. The emulators run as separate programs under their own
           licenses. Floppy works offline: no network, no telemetry, no accounts. It never includes ROMs, operating
           systems or apps; you bring your own.
         </p>
+        <h3 className="about-section-title">Floppy AI {ai?.version ?? ""}</h3>
+        <p>
+          What Floppy knows about old files, apps and setup{ai?.date ? `, as of ${ai.date}` : ""}
+          {ai?.fromPack ? `, from a knowledge pack (this build knows AI ${ai.builtin})` : ""}. It grows from findings: drop
+          a knowledge pack from ansiapps.com, or anyone's Export Findings zip, on this window to update it without a new
+          release.
+          {ai?.learnedFrom ? ` Learned from ${ai.learnedFrom} findings file${ai.learnedFrom === 1 ? "" : "s"} so far.` : ""}
+        </p>
+        {!!knowledge?.materials && (
+          <div className="detail-actions">
+            <button type="button" className="icontext-btn" onClick={() => void revealLearned()}>
+              <span className="btn-icon">
+                <FolderIcon />
+              </span>
+              Show Materials ({knowledge.materials})
+            </button>
+          </div>
+        )}
         <h3 className="about-section-title">Credits</h3>
         <p data-testid="about-credits">
           The ANSIapps theme's font is IBM VGA 8x16 from The Ultimate Oldschool PC Font Pack by VileR
@@ -1691,6 +2480,8 @@ function IdentityFields({
       : null
     : id.by === "hash"
       ? "Recognized: one of its programs matches a known version exactly."
+      : id.by === "learned"
+        ? "Going by findings someone shared: one of its programs matches a version they identified. Floppy hasn't checked it itself, so correct it here if it's wrong."
       : !handler
         ? "Not one of the known apps, so it opens only the file types in Also opens."
         : null;
@@ -1765,8 +2556,26 @@ function IdentityFields({
 }
 
 /** What pressing Launch will do, when it isn't simply "run this program". */
-function LaunchHint({ app, blocker, guestRunning }: { app: LibraryApp; blocker: string | null; guestRunning: boolean }) {
+function LaunchHint({
+  app,
+  blocker,
+  guestRunning,
+  onAros,
+}: {
+  app: LibraryApp;
+  blocker: string | null;
+  guestRunning: boolean;
+  onAros: boolean;
+}) {
   if (blocker) return <p className="system-note warn">{blocker}</p>;
+  if (onAros && !guestRunning) {
+    return (
+      <p className="launch-hint">
+        Runs on the free AROS Kickstart. If {app.name} crashes or won't start, a real Kickstart ROM most likely fixes it:
+        see the Amiga system box for where to get one.
+      </p>
+    );
+  }
   if (guestRunning) {
     return (
       <p className="launch-hint">
@@ -1799,6 +2608,9 @@ function DocumentDetails({
   onReveal,
   onExport,
   onRemove,
+  startApp,
+  startBlocked,
+  onStart,
 }: {
   doc: LibraryDoc;
   apps: LibraryApp[];
@@ -1807,6 +2619,10 @@ function DocumentDetails({
   onReveal: () => void;
   onExport: () => void;
   onRemove: () => void;
+  /** Mac and Amiga: an app of the guest's to start it with, so the user can open the document there. */
+  startApp: LibraryApp | null;
+  startBlocked: boolean;
+  onStart: (app: LibraryApp) => void;
 }) {
   const [openers, setOpeners] = useState<Opener[]>([]);
   const [choice, setChoice] = useState(0);
@@ -1825,7 +2641,14 @@ function DocumentDetails({
   return (
     <div className="app-details">
       <h3 className="doc-title">{doc.name}</h3>
-      {openers.length > 0 ? (
+      {doc.os !== "dos" ? (
+        <p className="system-note">
+          Floppy can't open {GUEST_LABEL[doc.os]} documents in their app by itself yet.{" "}
+          {startApp
+            ? `Start ${doc.os === "mac-classic" ? "Mac OS" : "Workbench"}, then open ${docPath(doc)} there.`
+            : `Import a ${GUEST_LABEL[doc.os]} app that opens it, then start it and open ${docPath(doc)} there.`}
+        </p>
+      ) : openers.length > 0 ? (
         <label className="field">
           <span className="field-label">Open with</span>
           <select value={choice} onChange={(e) => setChoice(Number(e.target.value))}>
@@ -1845,18 +2668,34 @@ function DocumentDetails({
         </p>
       )}
       <dl className="details-grid">
-        <dt>In DOS</dt>
-        <dd className="details-path">{dosPath(doc)}</dd>
+        <dt>In {GUEST_LABEL[doc.os]}</dt>
+        <dd className="details-path">{docPath(doc)}</dd>
+        <dt>Type</dt>
+        <dd>{docTypeFolder(doc) || "Unsorted"}</dd>
         <dt>Added</dt>
         <dd>{new Date(doc.added * 1000).toLocaleString()}</dd>
       </dl>
       <div className="detail-actions">
-        <button type="button" className="primary icontext-btn" disabled={busy || !opener} onClick={() => opener && onOpen(opener)}>
-          <span className="btn-icon">
-            <PlayIcon />
-          </span>
-          Open
-        </button>
+        {doc.os === "dos" ? (
+          <button type="button" className="primary icontext-btn" disabled={busy || !opener} onClick={() => opener && onOpen(opener)}>
+            <span className="btn-icon">
+              <PlayIcon />
+            </span>
+            Open
+          </button>
+        ) : (
+          <button
+            type="button"
+            className="primary icontext-btn"
+            disabled={busy || !startApp || startBlocked}
+            onClick={() => startApp && onStart(startApp)}
+          >
+            <span className="btn-icon">
+              <PlayIcon />
+            </span>
+            {doc.os === "mac-classic" ? "Start Mac OS" : "Start Workbench"}
+          </button>
+        )}
         <button type="button" className="icontext-btn" onClick={onReveal}>
           <span className="btn-icon">
             <FolderIcon />
@@ -1891,6 +2730,10 @@ function SystemSetup({
   tracking,
   onForgetIgnored,
   onAskAgain,
+  sources,
+  onOpenSource,
+  onReport,
+  onAros,
 }: {
   status: GuestStatus;
   disabled: boolean;
@@ -1901,9 +2744,14 @@ function SystemSetup({
   tracking: SetupTracking;
   onForgetIgnored: () => void;
   onAskAgain: (slot: string) => void;
+  sources: SetupSource[];
+  onOpenSource: (src: SetupSource) => void;
+  onReport: (slot: string, filled: boolean) => void;
+  onAros: (on: boolean) => void;
 }) {
   const amiga = status.os === "amiga";
-  const { rom, boot, model } = status.system;
+  const { rom, boot, model, aros } = status.system;
+  const runningAros = amiga && aros && !rom;
   // cd.rs slot labels, which the list and discs.rs use.
   const romSlot = amiga ? "Kickstart ROM" : "Mac ROM";
   const bootSlot = amiga ? "Workbench disk" : "Mac startup disk";
@@ -1929,12 +2777,17 @@ function SystemSetup({
       </h3>
       <div className="system-row">
         <span className="system-label">{amiga ? "Kickstart ROM" : "Mac ROM"}</span>
-        <span className={`system-value${rom ? "" : " missing"}`}>
-          {rom ? `${rom}${status.romNote ? ` · ${status.romNote}` : ""}` : "Not added"}
+        <span className={`system-value${rom || runningAros ? "" : " missing"}`}>
+          {rom ? `${rom}${status.romNote ? ` · ${status.romNote}` : ""}` : runningAros ? "AROS (free replacement, built in)" : "Not added"}
         </span>
         <button type="button" className="small" disabled={disabled} onClick={() => onChoose("rom", false)}>
           Choose…
         </button>
+        {runningAros && (
+          <button type="button" className="small" disabled={disabled} onClick={() => onAros(false)}>
+            Stop Using AROS
+          </button>
+        )}
         {!rom && notOnDrives(romSlot)}
       </div>
       <div className="system-row">
@@ -1961,6 +2814,43 @@ function SystemSetup({
             ))}
           </select>
         </div>
+      )}
+      {!rom && (
+        <SetupSources
+          slot={romSlot}
+          note={runningAros ? "runs far more software than AROS" : undefined}
+          sources={sources}
+          disabled={disabled}
+          onOpen={onOpenSource}
+        />
+      )}
+      {amiga && !rom && !aros && (
+        <div className="setup-sources">
+          <h4>Or start now with the free AROS Kickstart</h4>
+          <div className="setup-source">
+            <span className="setup-source-name">
+              <span className="source-kind free">Free</span> <strong>AROS replacement Kickstart (built in)</strong>
+            </span>
+            <button type="button" className="small primary" disabled={disabled} onClick={() => onAros(true)}>
+              Use AROS for Now
+            </button>
+            <span className="system-note setup-source-note">
+              An open-source stand-in for Commodore's ROM that comes with FS-UAE, so there's nothing to download. It runs
+              some games and demos on bootable disks, but many programs crash or refuse to start on it, and it doesn't boot
+              Commodore's Workbench, so apps that need Workbench won't run. When Floppy finds a real Kickstart ROM, it
+              switches to it by itself.
+            </span>
+          </div>
+        </div>
+      )}
+      {!boot && (
+        <SetupSources
+          slot={bootSlot}
+          optional={amiga}
+          sources={sources}
+          disabled={disabled}
+          onOpen={onOpenSource}
+        />
       )}
       <p className="system-note">
         {amiga
@@ -1992,6 +2882,55 @@ function SystemSetup({
           </span>
         </div>
       )}
+      <div className="system-row">
+        <span className="system-note">Something not working, or found a better source?</span>
+        <button type="button" className="small" onClick={() => onReport(!rom ? romSlot : !boot ? bootSlot : romSlot, !!rom && !!boot)}>
+          Report a Setup Problem…
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** Where to get one missing setup file: the rows of "Where Floppy points you" (docs/legal-setupfiles.md). */
+function SetupSources({
+  slot,
+  optional,
+  note,
+  sources,
+  disabled,
+  onOpen,
+}: {
+  slot: string;
+  optional?: boolean;
+  /** Why it's worth getting, shown after the heading. */
+  note?: string;
+  sources: SetupSource[];
+  disabled: boolean;
+  onOpen: (src: SetupSource) => void;
+}) {
+  const rows = sources.filter((s) => s.slot === slot);
+  if (!rows.length) return null;
+  return (
+    <div className="setup-sources">
+      <h4>
+        Where to get a {slot}
+        {optional ? " (optional)" : ""}
+        {note ? ` (${note})` : ""}
+      </h4>
+      <ul>
+        {rows.map((src) => (
+          <li key={src.url + src.name} className="setup-source">
+            <span className="setup-source-name">
+              <span className={`source-kind ${src.kind}`}>{SOURCE_KIND_LABEL[src.kind]}</span> <strong>{src.name}</strong>
+            </span>
+            <button type="button" className="small" disabled={disabled} onClick={() => onOpen(src)} title={src.url}>
+              Open Page
+            </button>
+            <span className="system-note setup-source-note">{src.note}</span>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

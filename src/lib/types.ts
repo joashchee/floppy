@@ -37,8 +37,9 @@ export interface LibraryApp {
 export interface AppIdentity {
   handler: string | null;
   version: string | null;
-  /** "hash": a program matched a known version; "user": the user said. */
-  by: "hash" | "user";
+  /** "hash": a program matched a known version; "user": the user said;
+   *  "learned": it matched a version learned from someone else's findings. */
+  by: "hash" | "user" | "learned";
 }
 
 /** handlers.rs `HandlerInfo`: a known app that opens old files. */
@@ -129,6 +130,9 @@ export interface FindingsSummary {
   fileTypes: number;
   systemFiles: number;
   appErrors: number;
+  setupReports: number;
+  /** Where you said dropped files go (drops.rs). */
+  dropChoices: number;
   /** Unix seconds of the last export, if any. */
   lastExported: number | null;
 }
@@ -162,8 +166,30 @@ export interface IdentifyAsk {
 }
 
 /** A document's path as DOS sees it. */
-export function dosPath(doc: LibraryDoc): string {
-  return `C:\\${doc.file.replace(/\//g, "\\")}`;
+/** A library-relative path as its guest writes it: `C:\\DOCS\\WP5\\LETTER.WP5`, `Unix:Documents:TEXT:Letter`, `Floppy:Documents/ILBM/Sunset.iff`. */
+export function guestFilePath(os: GuestOs, file: string): string {
+  switch (os) {
+    case "dos":
+      return `C:\\${file.replace(/\//g, "\\")}`;
+    case "mac-classic":
+      return `Unix:${file.replace(/\//g, ":")}`;
+    case "amiga":
+      return `Floppy:${file}`;
+  }
+}
+
+/** Where a document is inside its guest. */
+export function docPath(doc: LibraryDoc): string {
+  return guestFilePath(doc.os, doc.file);
+}
+
+/** documents.rs `docs_dir`: each guest's documents folder. */
+export const DOCS_DIR: Record<GuestOs, string> = { dos: "DOCS", "mac-classic": "Documents", amiga: "Documents" };
+
+/** The type folder a document is sorted into (documents.rs `type_folder`): `WP5`, `TEXT`, `ILBM`. */
+export function docTypeFolder(doc: LibraryDoc): string {
+  const parts = doc.file.split("/");
+  return parts.length >= 3 ? parts[1] : "";
 }
 
 /** library.rs `GuestSystem`: user-supplied files under library/system/<os>/. */
@@ -171,6 +197,8 @@ export interface GuestSystem {
   rom: string | null;
   boot: string | null;
   model: string | null;
+  /** Amiga only: FS-UAE's built-in AROS Kickstart stands in while `rom` is empty. */
+  aros: boolean;
 }
 
 /** commands.rs `GuestStatus`. */
@@ -202,6 +230,8 @@ export interface CdImport {
   unusable: string[];
   /** What the disc's manifest told Floppy (discs.rs), when it had one. */
   disc: DiscReport | null;
+  /** Slots a system backup had a file for, kept because they were set up already (backup.rs). */
+  kept: string[];
 }
 
 /** discs.rs `DiscReport`. */
@@ -269,4 +299,110 @@ export function guestPath(app: LibraryApp, program?: string | null): string {
     case "amiga":
       return `Floppy:${app.dir}${program ? `/${program}` : ""}`;
   }
+}
+
+/** cd.rs `SetupSource`: where to get a setup file ("Where Floppy points you" in docs/legal-setupfiles.md). */
+export interface SetupSource {
+  /** A slot label: "Mac ROM", "Mac startup disk", "Kickstart ROM", "Workbench disk". */
+  slot: string;
+  kind: "free" | "paid" | "own";
+  name: string;
+  url: string;
+  note: string;
+}
+
+/** findings.rs `SETUP_REPORT_KINDS`. */
+export type SetupReportKind = "source-broken" | "didnt-work" | "better-source";
+
+/** backup.rs `Status`: whether to offer a system backup, and what it would hold. */
+export interface BackupStatus {
+  slots: string[];
+  complete: boolean;
+  offer: boolean;
+  /** Unix seconds. */
+  lastBackup: number | null;
+}
+
+/** backup.rs `Made`: what a backup disc held. */
+export interface BackupMade {
+  slots: string[];
+  originalBytes: number;
+  discBytes: number;
+}
+
+/** drops.rs `Choice`: where a dropped item goes. */
+export interface DropChoice {
+  to: "app" | "document" | "setup";
+  os: GuestOs;
+}
+
+/** drops.rs `Signature`: what kind of item was dropped, never its name. */
+export interface DropSignature {
+  kind: "file" | "folder" | "zip";
+  ext: string;
+  content: string;
+}
+
+/** drops.rs `DropOption`: one place a dropped item could go. */
+export interface DropOption {
+  choice: DropChoice;
+  /** "Document, DOS". */
+  label: string;
+  /** 1 to 3: it could, its name says so, its contents say so. */
+  score: number;
+  why: string;
+}
+
+/** drops.rs `Classification`: what Floppy made of a dropped item. */
+export interface DropClassification {
+  path: string;
+  name: string;
+  signature: DropSignature;
+  /** Best first. */
+  options: DropOption[];
+  /** Set when there's no need to ask. */
+  decided: DropChoice | null;
+  decidedBy: string | null;
+  /** ".wp5 files like this". */
+  sameFor: string;
+}
+
+/** learned.rs `LearnSummary`: what learning from one findings file did. */
+export interface LearnSummary {
+  already: boolean;
+  own: boolean;
+  versions: number;
+  fileTypes: number;
+  tests: number;
+  systemFiles: number;
+  dropChoices: number;
+  setupSources: number;
+  materials: number;
+  /** A signed knowledge pack's Floppy AI version. */
+  aiVersion: number | null;
+  /** It called itself a knowledge pack without the maintainers' signature. */
+  unsignedPack: boolean;
+  forMaintainers: number;
+  skipped: string[];
+}
+
+/** learned.rs `KnowledgeSummary`: what Floppy has learned from findings. */
+export interface KnowledgeSummary {
+  sources: number;
+  versions: number;
+  fileTypes: number;
+  tests: number;
+  systemFiles: number;
+  dropRules: number;
+  materials: number;
+}
+
+/** ai.rs `AiInfo`: Floppy AI's version (docs/floppy-ai.md). */
+export interface AiInfo {
+  /** This Floppy's: the build's, or a newer knowledge pack's. */
+  version: number;
+  date: string;
+  builtin: number;
+  fromPack: boolean;
+  learnedFrom: number;
 }

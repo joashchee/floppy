@@ -1,16 +1,21 @@
+mod ai;
 mod amiga;
+mod backup;
 mod cd;
 mod cli;
 mod commands;
 mod discs;
 mod documents;
+mod drops;
 mod dos;
 #[cfg(test)]
 mod e2e;
 mod emulator;
 mod findings;
 mod handlers;
+mod iso;
 mod known_files;
+mod learned;
 mod library;
 mod media;
 mod request;
@@ -38,6 +43,7 @@ pub fn run() {
         .setup(|app| {
             let app_data_dir = app.path().app_data_dir().expect("failed to resolve app data dir");
             let library = Library::new(app_data_dir.join("library"));
+            learned::load(&library);
             let args: Vec<String> = std::env::args().skip(1).collect();
             let startup = match cli::parse(&args) {
                 cli::Cli::None => None,
@@ -65,6 +71,7 @@ pub fn run() {
             app.manage(AppState {
                 library,
                 running: Arc::new(Mutex::new(HashMap::new())),
+                children: Arc::new(Mutex::new(HashMap::new())),
                 startup: Mutex::new(startup),
             });
             Ok(())
@@ -82,6 +89,14 @@ pub fn run() {
             commands::locate_emulator,
             commands::write_missing_list,
             commands::import_setup_files,
+            commands::setup_sources,
+            commands::backup_status,
+            commands::decline_backup,
+            commands::make_backup,
+            commands::is_backup_disc,
+            commands::set_aros,
+            commands::add_setup_report,
+            commands::import_from_downloads,
             commands::import_files_disc,
             commands::record_verification,
             commands::handler_tests,
@@ -96,6 +111,17 @@ pub fn run() {
             commands::forget_ignored_files,
             commands::ask_again,
             commands::running_apps,
+            commands::quit_app,
+            commands::add_document,
+            commands::classify_drop,
+            commands::import_as,
+            commands::record_drop_choice,
+            commands::is_findings,
+            commands::learn_findings,
+            commands::knowledge_summary,
+            commands::forget_learned,
+            commands::ai_info,
+            commands::learned_folder,
             commands::take_startup_import,
             commands::launch_app,
             commands::open_document,

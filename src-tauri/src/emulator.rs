@@ -81,26 +81,20 @@ impl Emulator {
         }
     }
 
-    /// What the user sees when the emulator is missing.
-    pub fn missing_message(self) -> &'static str {
-        match self {
-            Emulator::DosboxStaging if cfg!(target_os = "linux") => {
-                "DOSBox Staging wasn't found. Run scripts/fetch-dosbox.sh, or install dosbox-staging."
-            }
-            Emulator::DosboxStaging => {
-                "DOSBox Staging wasn't found. Run scripts/fetch-dosbox.sh, or install it in /Applications."
-            }
-            Emulator::FsUae if cfg!(target_os = "linux") => {
-                "FS-UAE wasn't found. Run scripts/fetch-fs-uae.sh, or install fs-uae."
-            }
-            Emulator::FsUae => "FS-UAE wasn't found. Run scripts/fetch-fs-uae.sh, or install it in /Applications.",
-            Emulator::BasiliskII if cfg!(target_os = "linux") => {
-                "Basilisk II wasn't found. Run scripts/fetch-basilisk.sh, install BasiliskII so it's on your PATH, or use Locate Basilisk II… in the gear menu."
-            }
-            Emulator::BasiliskII => {
-                "Basilisk II wasn't found. Run scripts/fetch-basilisk.sh, install BasiliskII.app in /Applications (or ~/Applications), or use Locate Basilisk II… in the gear menu."
-            }
-        }
+    /// What the user sees when the emulator is missing. A release build
+    /// bundles all three, so there the fix is reinstalling Floppy; a
+    /// development build needs the fetch script.
+    pub fn missing_message(self) -> String {
+        let (script, install) = match self {
+            Emulator::DosboxStaging => ("fetch-dosbox.sh", if cfg!(target_os = "linux") { "install dosbox-staging" } else { "install it in /Applications" }),
+            Emulator::FsUae => ("fetch-fs-uae.sh", if cfg!(target_os = "linux") { "install fs-uae" } else { "install it in /Applications" }),
+            Emulator::BasiliskII => (
+                "fetch-basilisk.sh",
+                if cfg!(target_os = "linux") { "install BasiliskII so it's on your PATH" } else { "install BasiliskII.app in /Applications" },
+            ),
+        };
+        let bundled = if cfg!(debug_assertions) { format!("Run scripts/{script}") } else { "Reinstall Floppy (it includes one)".into() };
+        format!("{} wasn't found. {bundled}, {install}, or use Locate {}….", self.name(), self.name())
     }
 
     /// Where the emulator is, checked in this order: the environment
@@ -152,6 +146,23 @@ impl Emulator {
             }
         }
         cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn()
+    }
+}
+
+/// Asks an emulator to quit (SIGTERM), or with `force` makes it (SIGKILL).
+/// DOSBox Staging and FS-UAE quit when asked. Basilisk II's SDL turns the
+/// request into its window's close button, which presses the Mac's power
+/// key: the Mac asks whether to shut down, and Basilisk II quits once it
+/// has. Only `force` stops a Mac that can't answer.
+pub fn stop(child: &mut Child, force: bool) -> std::io::Result<()> {
+    if force {
+        return child.kill();
+    }
+    let status = Command::new("kill").arg("-TERM").arg(child.id().to_string()).stdin(Stdio::null()).status()?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(std::io::Error::other(format!("kill exited with {status}")))
     }
 }
 
@@ -336,6 +347,31 @@ mod tests {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(path, b"#!/bin/sh\n").unwrap();
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    #[test]
+    fn quit_asks_and_force_quit_makes() {
+        let wait_gone = |c: &mut Child| {
+            for _ in 0..40 {
+                if c.try_wait().unwrap().is_some() {
+                    return true;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            false
+        };
+        // An emulator that quits when asked.
+        let mut c = Command::new("sleep").arg("30").spawn().unwrap();
+        stop(&mut c, false).unwrap();
+        assert!(wait_gone(&mut c));
+        // One that only asks its guest (Basilisk II and the Mac's power
+        // key): still running until forced.
+        let mut c = Command::new("sh").arg("-c").arg("trap '' TERM; sleep 30").spawn().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        stop(&mut c, false).unwrap();
+        assert!(!wait_gone(&mut c), "ignored the request, as a Mac that can't answer does");
+        stop(&mut c, true).unwrap();
+        assert!(wait_gone(&mut c));
     }
 
     #[test]

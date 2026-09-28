@@ -175,8 +175,11 @@ impl Slot {
 
 /// Whether a copy with this SHA-1 is already known for `slot`: published
 /// or reported by users.
+/// Copies learned from findings dropped on Floppy (learned.rs) count too.
 pub fn is_known(slot: Slot, sha1: &str) -> bool {
-    slot.known().iter().any(|f| f.sha1.eq_ignore_ascii_case(sha1)) || slot.reported().any(|r| r.sha1.eq_ignore_ascii_case(sha1))
+    slot.known().iter().any(|f| f.sha1.eq_ignore_ascii_case(sha1))
+        || slot.reported().any(|r| r.sha1.eq_ignore_ascii_case(sha1))
+        || crate::learned::current().system_files.iter().any(|f| f.slot == slot.label() && f.sha1.eq_ignore_ascii_case(sha1))
 }
 
 /// A setup file users reported, by size and SHA-1.
@@ -194,7 +197,7 @@ fn reported_files() -> &'static [ReportedFile] {
 }
 
 /// `| Slot | What | Size | SHA-1 | Reports | Last reported |`.
-fn parse_reported_files(doc: &str) -> Result<Vec<ReportedFile>, String> {
+pub(crate) fn parse_reported_files(doc: &str) -> Result<Vec<ReportedFile>, String> {
     crate::handlers::table_rows(doc, "reported")?
         .into_iter()
         .map(|cells| {
@@ -210,6 +213,49 @@ fn parse_reported_files(doc: &str) -> Result<Vec<ReportedFile>, String> {
                 size: size.replace(',', "").parse().map_err(|_| format!("not a size: {size}"))?,
                 sha1: sha1.to_ascii_lowercase(),
             })
+        })
+        .collect()
+}
+
+/// Where to get a setup file: a row of "Where Floppy points you" in
+/// `docs/legal-setupfiles.md`, read when Floppy is built. The setup screen
+/// shows a missing slot's rows, and opens `url` in the user's browser.
+#[derive(Serialize, serde::Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SetupSource {
+    /// A slot label ("Mac startup disk").
+    pub slot: String,
+    /// `free`, `paid` or `own`.
+    pub kind: String,
+    pub name: String,
+    pub url: String,
+    pub note: String,
+}
+
+pub fn setup_sources() -> &'static [SetupSource] {
+    static SOURCES: std::sync::OnceLock<Vec<SetupSource>> = std::sync::OnceLock::new();
+    SOURCES.get_or_init(|| parse_setup_sources(include_str!("../../docs/legal-setupfiles.md")).unwrap_or_default())
+}
+
+/// `| Slot | Kind | Source | Link | Note |`.
+pub(crate) fn parse_setup_sources(doc: &str) -> Result<Vec<SetupSource>, String> {
+    crate::handlers::table_rows(doc, "sources")?
+        .into_iter()
+        .map(|cells| {
+            let [slot, kind, name, url, note] = &cells[..] else {
+                return Err(format!("a setup source needs 5 cells: {cells:?}"));
+            };
+            Slot::from_label(slot).ok_or(format!("unknown slot {slot:?}"))?;
+            if !["free", "paid", "own"].contains(&kind.as_str()) {
+                return Err(format!("{name}: kind must be free, paid or own, not {kind:?}"));
+            }
+            if !url.starts_with("https://") || url.contains(char::is_whitespace) {
+                return Err(format!("{name}: the link must be one https:// address"));
+            }
+            if name.is_empty() || note.is_empty() {
+                return Err(format!("a setup source needs a name and a note: {cells:?}"));
+            }
+            Ok(SetupSource { slot: slot.clone(), kind: kind.clone(), name: name.clone(), url: url.clone(), note: note.clone() })
         })
         .collect()
 }
@@ -393,6 +439,56 @@ fn classify(path: &Path, len: u64, keys: &[PathBuf]) -> Option<Candidate> {
     None
 }
 
+/// The setup file `path` is, judged by its contents (drops.rs). An
+/// encrypted Amiga Forever ROM counts as a Kickstart before its `rom.key`
+/// turns up, and a `rom.key` counts too.
+pub fn setup_slot(path: &Path) -> Option<Slot> {
+    if file_name(path).eq_ignore_ascii_case("rom.key") {
+        return Some(Slot::Kickstart);
+    }
+    let len = std::fs::metadata(path).ok()?.len();
+    let head = crate::library::read_head(path, 16).ok()?;
+    if amiga::identify_kickstart(&head, len) == Some(amiga::Kickstart::Encrypted) {
+        return Some(Slot::Kickstart);
+    }
+    classify(path, len, &[]).map(|c| c.slot)
+}
+
+/// The setup files in a folder, by content, looking at no more than
+/// `limit` files (a big folder is an app, not a setup bundle).
+pub fn setup_slots_in(root: &Path, limit: usize) -> Vec<Slot> {
+    // Counted as it walks, so a huge folder stops early.
+    let files: Vec<(PathBuf, u64)> = WalkDir::new(root)
+        .min_depth(1)
+        .into_iter()
+        .filter_map(Result::ok)
+        .filter(|e| e.file_type().is_file() && !e.file_name().to_string_lossy().starts_with('.'))
+        .take(limit + 1)
+        .filter_map(|e| Some((e.path().to_path_buf(), e.metadata().ok()?.len())))
+        .collect();
+    if files.len() > limit {
+        return Vec::new();
+    }
+    let mut out: Vec<Slot> = candidates_in(&files).into_iter().map(|c| c.slot).collect();
+    out.dedup();
+    out
+}
+
+/// The setup files a list of names (a zip's entries) looks like, by the
+/// names they're commonly stored under.
+pub fn setup_slots_named<'a>(names: impl IntoIterator<Item = &'a str>) -> Vec<Slot> {
+    let mut out = Vec::new();
+    for name in names {
+        let base = name.rsplit('/').next().unwrap_or(name);
+        for slot in SLOTS {
+            if !out.contains(&slot) && slot.names().iter().any(|n| n.eq_ignore_ascii_case(base)) {
+                out.push(slot);
+            }
+        }
+    }
+    out
+}
+
 /// Every file under `root`, with its size. No depth limit: two copies
 /// from the same volume keep their whole volume-relative path under that
 /// volume's folder, however deep, and a files disc holds only matched
@@ -438,6 +534,9 @@ pub struct CdImport {
     pub unusable: Vec<String>,
     /// What the disc's manifest told Floppy, when it had one.
     pub disc: Option<DiscReport>,
+    /// Slots a system backup had a file for, left as they were because
+    /// they're set up already (backup.rs).
+    pub kept: Vec<String>,
 }
 
 /// Fills every empty slot from the files under `root`. When `root` has a
@@ -609,6 +708,7 @@ pub fn import_dropped(library: &Library, paths: &[PathBuf]) -> Result<CdImport, 
     let mut mounts: Vec<Mount> = Vec::new();
     let mut files: Vec<(PathBuf, u64)> = Vec::new();
     let mut skipped = Vec::new();
+    let mut restored = CdImport::default();
     // Folders and discs that came with a manifest (discs.rs).
     let mut tracked: Vec<(PathBuf, discs::Manifest)> = Vec::new();
     for (i, path) in paths.iter().enumerate() {
@@ -626,6 +726,18 @@ pub fn import_dropped(library: &Library, paths: &[PathBuf]) -> Result<CdImport, 
             match crate::library::extract_zip(path, &dest, false) {
                 Ok(()) => files.extend(files_under(&dest)),
                 Err(e) => skipped.push(format!("Couldn't unpack {}: {e}", file_name(path))),
+            }
+            continue;
+        }
+        // Floppy's own backup disc is read directly (backup.rs).
+        if crate::backup::is_backup(path) {
+            match crate::backup::restore(library, path) {
+                Ok(r) => {
+                    restored.added.extend(r.added);
+                    restored.kept.extend(r.kept);
+                    skipped.extend(r.skipped);
+                }
+                Err(e) => skipped.push(e),
             }
             continue;
         }
@@ -657,15 +769,80 @@ pub fn import_dropped(library: &Library, paths: &[PathBuf]) -> Result<CdImport, 
     let filled = fill_slots(library, &candidates)?;
     let mut report = filled.report.clone();
     report.skipped = skipped;
+    report.added.splice(0..0, restored.added);
+    report.kept = restored.kept;
     for (root, manifest) in &tracked {
         track_disc(library, root, manifest, &files, &candidates, &filled, &mut report)?;
     }
     Ok(report)
 }
 
+/// The largest file looked at in Downloads: a startup disk is tens of MB,
+/// a roomy hard-disk image a few GB.
+const DOWNLOADS_MAX_FILE: u64 = 4 << 30;
+/// Zips bigger than this aren't unpacked to look inside.
+const DOWNLOADS_MAX_ZIP: u64 = 64 << 20;
+/// Stop after this many entries: a Downloads folder can be huge.
+const DOWNLOADS_MAX_ENTRIES: usize = 5000;
+
+/// Files a browser is still writing: Chrome's, Firefox's, Safari's.
+fn is_partial_download(name: &str) -> bool {
+    let lower = name.to_lowercase();
+    [".crdownload", ".part", ".partial", ".download", ".opdownload"].iter().any(|e| lower.ends_with(e))
+}
+
+/// Fills empty slots from the user's Downloads folder, for after they
+/// fetched a setup file in the browser. Only the folder and the folders
+/// directly in it are looked at, hidden entries and unfinished downloads
+/// are skipped, and nothing is ever mounted: a disc image there counts
+/// only when it's a setup file itself or a system backup (read directly). Zips up to `DOWNLOADS_MAX_ZIP` are
+/// unpacked to look inside. What isn't a setup file isn't reported.
+pub fn import_from_downloads(library: &Library, dir: &Path) -> Result<CdImport, String> {
+    if missing_slots(library)?.is_empty() || !dir.is_dir() {
+        return Ok(CdImport::default());
+    }
+    let mut paths = Vec::new();
+    let walker = WalkDir::new(dir).min_depth(1).max_depth(2).into_iter().filter_entry(|e| {
+        let name = e.file_name().to_string_lossy();
+        !name.starts_with('.') && !is_partial_download(&name)
+    });
+    for entry in walker.filter_map(Result::ok).take(DOWNLOADS_MAX_ENTRIES) {
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        let Ok(meta) = entry.metadata() else { continue };
+        let path = entry.path().to_path_buf();
+        let ext = path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
+        if ext == "zip" {
+            if meta.len() <= DOWNLOADS_MAX_ZIP {
+                paths.push(path);
+            }
+            continue;
+        }
+        if meta.len() == 0 || meta.len() > DOWNLOADS_MAX_FILE {
+            continue;
+        }
+        let this = (path.clone(), meta.len());
+        // A system backup (backup.rs) restores from here too.
+        if DISC_IMAGE_EXTS.contains(&ext.as_str())
+            && !crate::backup::is_backup(&path)
+            && candidates_in(std::slice::from_ref(&this)).is_empty()
+        {
+            continue;
+        }
+        paths.push(path);
+    }
+    let mut report = import_dropped(library, &paths)?;
+    report.skipped.clear();
+    Ok(report)
+}
+
 /// Reads a files disc: a disc image (mounted read-only for the
 /// duration), or a folder (a mounted disc, or its copied contents).
 pub fn import_cd(library: &Library, path: &Path) -> Result<CdImport, String> {
+    if crate::backup::is_backup(path) {
+        return crate::backup::restore(library, path);
+    }
     if path.is_dir() {
         return import_from_dir(library, path);
     }
@@ -869,6 +1046,53 @@ mod tests {
     }
 
     #[test]
+    fn setup_sources_parse_and_cover_every_slot() {
+        let doc = include_str!("../../docs/legal-setupfiles.md");
+        let sources = parse_setup_sources(doc).expect("docs/legal-setupfiles.md's Where Floppy points you table");
+        for slot in SLOTS {
+            assert!(sources.iter().any(|s| s.slot == slot.label()), "no source for {}", slot.label());
+        }
+        assert_eq!(setup_sources(), &sources[..]);
+        let sample = "<!-- sources:start -->
+| Slot | Kind | Source | Link | Note |
+|---|---|---|---|---|
+| Mac ROM | own | A guide | https://example.org/rom | Copy yours. |
+<!-- sources:end -->";
+        assert_eq!(parse_setup_sources(sample).unwrap()[0].kind, "own");
+        assert!(parse_setup_sources(&sample.replace("| own |", "| cheap |")).is_err());
+        assert!(parse_setup_sources(&sample.replace("https://", "http://")).is_err());
+        assert!(parse_setup_sources(&sample.replace("Mac ROM |", "Toaster |")).is_err());
+        assert!(parse_setup_sources(&sample.replace("Copy yours.", "")).is_err());
+    }
+
+    #[test]
+    fn downloads_fill_slots_without_mounting_or_reporting_clutter() {
+        let t = TempDir::new();
+        let lib = Library::new(t.path().join("lib"));
+        let dl = t.path().join("Downloads");
+        fs::create_dir_all(dl.join("stuff")).unwrap();
+        // The startup disk, one folder down under a name nobody would guess.
+        fs::write(dl.join("stuff/System7_5_3.img"), mac_boot_disk()).unwrap();
+        // An installer disc image that isn't a setup file: never mounted.
+        fs::write(dl.join("Some App.dmg"), vec![1u8; 4096]).unwrap();
+        // A download still in progress, and unrelated files.
+        fs::write(dl.join("kick.rom.crdownload"), kickstart(40, true)).unwrap();
+        fs::write(dl.join("notes.txt"), b"hello").unwrap();
+        let r = import_from_downloads(&lib, &dl).unwrap();
+        assert_eq!(r.added, vec!["Mac startup disk: System7_5_3.img"]);
+        assert!(r.skipped.is_empty(), "{:?}", r.skipped);
+        assert!(lib.system_file(GuestOs::MacClassic, SystemFile::Boot).unwrap().is_some());
+        assert!(lib.system_file(GuestOs::Amiga, SystemFile::Rom).unwrap().is_none(), "took an unfinished download");
+
+        // Once it's finished, the Kickstart comes in too.
+        fs::rename(dl.join("kick.rom.crdownload"), dl.join("kick.rom")).unwrap();
+        let r = import_from_downloads(&lib, &dl).unwrap();
+        assert_eq!(r.added, vec!["Kickstart ROM: kick.rom"]);
+        // A missing folder, or nothing left to fill, is no error.
+        assert_eq!(import_from_downloads(&lib, &t.path().join("nope")).unwrap(), CdImport::default());
+    }
+
+    #[test]
     fn list_names_only_missing_slots() {
         assert!(missing_list(&[], &[]).is_none());
         let list = missing_list(&[Slot::Kickstart], &[]).unwrap().text;
@@ -949,6 +1173,7 @@ mod tests {
                 skipped: vec![],
                 unusable: vec![],
                 disc: None,
+                kept: vec![],
             }
         );
         // The undamaged 3.1 copy won, and set the matching model.

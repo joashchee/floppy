@@ -40,7 +40,7 @@ pub fn is_disk_image(name: &str) -> bool {
     is_floppy_image(name) || is_hard_disk_image(name)
 }
 
-fn is_executable(path: &Path) -> bool {
+pub fn is_executable(path: &Path) -> bool {
     use std::io::Read;
     let mut magic = [0u8; 4];
     std::fs::File::open(path).and_then(|mut f| f.read_exact(&mut magic)).is_ok() && magic == HUNK_HEADER
@@ -214,7 +214,9 @@ pub struct Launch<'a> {
     /// so it never writes to ~/Documents/FS-UAE.
     pub base_dir: &'a Path,
     pub model: &'a str,
-    pub kickstart: &'a Path,
+    /// The user's Kickstart, or `None` for FS-UAE's built-in AROS
+    /// replacement (`kickstart_file = internal`).
+    pub kickstart: Option<&'a Path>,
     /// The user's Workbench: a floppy image, a hard-disk file, or a
     /// folder holding an installed Workbench.
     pub workbench: Option<&'a Path>,
@@ -250,7 +252,12 @@ pub fn fsuae_conf(l: &Launch) -> Result<String, String> {
     let mut s = String::from("# Written by Floppy for each launch. Changes here are overwritten.\n[fs-uae]\n");
     s += &format!("base_dir = {}\n", conf_path(l.base_dir)?);
     s += &format!("amiga_model = {}\n", l.model);
-    s += &format!("kickstart_file = {}\n", conf_path(l.kickstart)?);
+    match l.kickstart {
+        Some(k) => s += &format!("kickstart_file = {}\n", conf_path(k)?),
+        // FS-UAE then loads no ROM file and doesn't scan for one: it
+        // boots the AROS ROM in its own fs-uae.dat.
+        None => s += "kickstart_file = internal\n",
+    }
 
     // DF0: boots first (floppies have a higher boot priority than hard
     // drives). The app's first disk if it's a floppy, else Workbench's.
@@ -381,7 +388,7 @@ mod tests {
         let conf = fsuae_conf(&Launch {
             base_dir: Path::new("/lib/run/fs-uae"),
             model: "A500",
-            kickstart: Path::new("/lib/system/amiga/kick13.rom"),
+            kickstart: Some(Path::new("/lib/system/amiga/kick13.rom")),
             workbench: Some(&wb),
             shared: Path::new("/lib/amiga"),
             app_disks: vec![PathBuf::from("/lib/amiga/Game/Disk1.adf"), PathBuf::from("/lib/amiga/Game/Disk2.adf")],
@@ -402,7 +409,7 @@ mod tests {
         let launch = |workbench| Launch {
             base_dir: Path::new("/b"),
             model: "A1200",
-            kickstart: Path::new("/k.rom"),
+            kickstart: Some(Path::new("/k.rom")),
             workbench,
             shared: Path::new("/lib/amiga"),
             app_disks: vec![],
@@ -419,7 +426,7 @@ mod tests {
         let conf = fsuae_conf(&Launch {
             base_dir: Path::new("/b"),
             model: "A1200",
-            kickstart: Path::new("/k.rom"),
+            kickstart: Some(Path::new("/k.rom")),
             workbench: None,
             shared: Path::new("/lib/amiga"),
             app_disks: vec![PathBuf::from("/lib/amiga/Demo/demo.hdf")],
@@ -427,5 +434,19 @@ mod tests {
         .unwrap();
         assert!(conf.contains("hard_drive_0 = /lib/amiga/Demo/demo.hdf\nhard_drive_0_priority = 10\n"));
         assert!(conf.contains("hard_drive_1 = /lib/amiga\n"));
+    }
+
+    #[test]
+    fn no_kickstart_means_fs_uaes_built_in_aros() {
+        let conf = fsuae_conf(&Launch {
+            base_dir: Path::new("/lib/run/fs-uae"),
+            model: "A1200",
+            kickstart: None,
+            workbench: None,
+            shared: Path::new("/lib/amiga"),
+            app_disks: vec![PathBuf::from("/lib/amiga/Game/game.adf")],
+        })
+        .unwrap();
+        assert!(conf.contains("kickstart_file = internal\n"), "{conf}");
     }
 }

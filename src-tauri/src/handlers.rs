@@ -30,7 +30,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
 
 use crate::library::{GuestOs, IdentifiedBy, Identity, Library, LibraryApp, ProgramId};
@@ -152,13 +152,16 @@ pub fn opens_ext(h: &Handler, ext: &str) -> bool {
 }
 
 /// Whether users reported that the handler `app` opens `.ext` documents.
+/// Learned file types (findings dropped on Floppy, learned.rs) count too.
 pub fn reported_ext(os: GuestOs, app: &str, ext: &str) -> bool {
-    reported_file_types().iter().any(|r| r.os == os && r.app == app && r.ext.eq_ignore_ascii_case(ext))
+    let matches = |r: &ReportedFileType| r.os == os && r.app == app && r.ext.eq_ignore_ascii_case(ext);
+    reported_file_types().iter().any(matches) || crate::learned::current().file_types.iter().any(matches)
 }
 
 /// A document extension users said a handler opens, from the "Reported
 /// file types" table in `docs/app-handlers.md` (merged findings).
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct ReportedFileType {
     pub os: GuestOs,
     pub app: String,
@@ -194,7 +197,7 @@ pub fn guest_from_label(label: &str) -> Option<GuestOs> {
 }
 
 /// `| Guest | App | Extension | Reports | Last reported |`.
-fn parse_reported_file_types(doc: &str) -> Result<Vec<ReportedFileType>, String> {
+pub(crate) fn parse_reported_file_types(doc: &str) -> Result<Vec<ReportedFileType>, String> {
     table_rows(doc, "filetypes")?
         .into_iter()
         .map(|cells| {
@@ -214,7 +217,7 @@ fn parse_reported_file_types(doc: &str) -> Result<Vec<ReportedFileType>, String>
 /// A version of a handler, known by its program's fingerprint. From the
 /// "Known versions" table in `docs/app-handlers.md`, which test reports
 /// fill (findings.rs, `scripts/merge-findings.py`).
-#[derive(Serialize, Clone, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct KnownVersion {
     pub os: GuestOs,
@@ -229,8 +232,16 @@ pub struct KnownVersion {
     pub failed: u32,
 }
 
+/// The known versions: Floppy's own, then any learned from findings
+/// dropped on it (learned.rs), which never contradict Floppy's own.
+pub fn known_versions() -> Vec<KnownVersion> {
+    let mut all = builtin_known_versions().to_vec();
+    all.extend(crate::learned::current().versions.iter().cloned());
+    all
+}
+
 /// The known versions, read once from `docs/app-handlers.md`.
-pub fn known_versions() -> &'static [KnownVersion] {
+pub fn builtin_known_versions() -> &'static [KnownVersion] {
     static KNOWN: OnceLock<Vec<KnownVersion>> = OnceLock::new();
     KNOWN.get_or_init(|| parse_known_versions(include_str!("../../docs/app-handlers.md")).unwrap_or_default())
 }
@@ -239,7 +250,7 @@ pub fn known_versions() -> &'static [KnownVersion] {
 /// `| Guest | App | Version | Program | Size | SHA-256 | Worked | Failed |
 /// Last tested |`. A row that doesn't parse is an error, so a bad merge
 /// fails the tests rather than quietly dropping a version.
-fn parse_known_versions(doc: &str) -> Result<Vec<KnownVersion>, String> {
+pub(crate) fn parse_known_versions(doc: &str) -> Result<Vec<KnownVersion>, String> {
     let mut out = Vec::new();
     for cells in table_rows(doc, "versions")? {
         let line = cells.join(" | ");
@@ -265,13 +276,20 @@ fn parse_known_versions(doc: &str) -> Result<Vec<KnownVersion>, String> {
     Ok(out)
 }
 
-/// What an app is, when one of its programs matches a known version.
-pub fn identify(os: GuestOs, ids: &BTreeMap<String, ProgramId>, known: &[KnownVersion]) -> Option<Identity> {
+/// What an app is, when one of its programs matches a known version:
+/// Floppy's own first (`Hash`), then ones learned from findings
+/// (`Learned`), which never contradict Floppy's own.
+pub fn identify(os: GuestOs, ids: &BTreeMap<String, ProgramId>) -> Option<Identity> {
+    identify_in(os, ids, builtin_known_versions(), IdentifiedBy::Hash)
+        .or_else(|| identify_in(os, ids, &crate::learned::current().versions, IdentifiedBy::Learned))
+}
+
+fn identify_in(os: GuestOs, ids: &BTreeMap<String, ProgramId>, known: &[KnownVersion], by: IdentifiedBy) -> Option<Identity> {
     ids.values().find_map(|id| {
         known.iter().find(|k| k.os == os && k.size == id.size && k.sha256.eq_ignore_ascii_case(&id.sha256)).map(|k| Identity {
             handler: Some(k.app.clone()),
             version: Some(k.version.clone()),
-            by: IdentifiedBy::Hash,
+            by,
         })
     })
 }
@@ -534,10 +552,10 @@ mod tests {
         assert_eq!(known.len(), 1);
         assert_eq!((known[0].size, known[0].sha256.as_str(), known[0].worked), (1234, "ab".repeat(32).as_str(), 3));
         let ids = |size, sha: &str| BTreeMap::from([("WP.EXE".to_string(), ProgramId { size, sha256: sha.into() })]);
-        let id = identify(GuestOs::Dos, &ids(1234, &"ab".repeat(32)), &known).unwrap();
+        let id = identify_in(GuestOs::Dos, &ids(1234, &"ab".repeat(32)), &known, IdentifiedBy::Hash).unwrap();
         assert_eq!((id.handler.as_deref(), id.version.as_deref(), id.by), (Some("WordPerfect"), Some("5.1"), IdentifiedBy::Hash));
         // Same name, different bytes: not identified.
-        assert!(identify(GuestOs::Dos, &ids(1234, &"cd".repeat(32)), &known).is_none());
+        assert!(identify_in(GuestOs::Dos, &ids(1234, &"cd".repeat(32)), &known, IdentifiedBy::Hash).is_none());
         // A bad row fails loudly.
         assert!(parse_known_versions(&SAMPLE.replace("| 3 |", "| x |")).is_err());
         assert!(parse_known_versions(&SAMPLE.replace("ABAB", "ZZ")).is_err());

@@ -1,13 +1,21 @@
 //! Documents: old files opened in the app that made them. A document is
-//! imported into the guest's documents folder (`C:\DOCS` for DOS), matched
-//! to apps already in the library that can open it, and launched with the
-//! app and the document together. What the app saved is listed when the
-//! emulator quits.
+//! imported into its guest's documents folder, matched to apps already in
+//! the library that can open it, and launched with the app and the
+//! document together. What the app saved is listed when the emulator
+//! quits.
+//!
+//! Each guest keeps its documents in one folder of its library folder
+//! (`C:\DOCS` for DOS, `Documents` on the Mac's Unix volume and the
+//! Amiga's `Floppy:` drive), sorted into a folder per file type named the
+//! way that guest names things: `C:\DOCS\WP5\LETTER.WP5`,
+//! `Unix:Documents:TEXT:Letter`, `Floppy:Documents/ILBM/Picture.iff`.
+//! `Library::tidy_documents` keeps it that way, whoever saved the file.
 //!
 //! Matching uses only the user's own apps: the public table of well-known
 //! programs and the file types they open (handlers.rs,
 //! `docs/app-handlers.md`), plus extensions the user says an app opens.
-//! Nothing is looked up or downloaded.
+//! Nothing is looked up or downloaded. Only DOS documents open in their
+//! app so far.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -16,11 +24,82 @@ use serde::Serialize;
 use walkdir::WalkDir;
 
 use crate::handlers;
+use crate::library::{self, GuestOs, LibraryApp, LibraryDoc};
 use crate::verify::{self, Tally};
-use crate::library::{GuestOs, LibraryApp, LibraryDoc};
+use crate::{amiga, dos, mac};
 
 /// The documents folder in the DOS guest's drive C:.
 pub const DOS_DOCS_DIR: &str = "DOCS";
+
+/// Where a sort puts files on their way to their type folder, inside the
+/// documents folder. A sort cut short leaves them here, and the next
+/// one finishes it.
+pub const SORTING_DIR: &str = ".sorting";
+
+/// Each guest's documents folder, in its library folder. No app folder
+/// ever takes this name.
+pub fn docs_dir(os: GuestOs) -> &'static str {
+    match os {
+        GuestOs::Dos => DOS_DOCS_DIR,
+        GuestOs::MacClassic | GuestOs::Amiga => "Documents",
+    }
+}
+
+/// The folder a document goes in, named for its file type the way its
+/// guest names things:
+/// - DOS: the extension, which is already a valid 8.3 name (`WP5`), or
+///   `OTHER` for a file without one (five letters, so never an extension).
+/// - Mac: the Finder type code (`TEXT`, `WDBN`), else the extension in
+///   capitals, else `Other`.
+/// - Amiga: the IFF type (`ILBM`, `8SVX`, `FTXT`), else the extension in
+///   capitals, else `Other`.
+pub fn type_folder(os: GuestOs, path: &Path) -> String {
+    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let ext = ext_of(&name);
+    match os {
+        GuestOs::Dos => Some(ext).filter(|e| !e.is_empty() && dos::is_valid_83(e)).unwrap_or_else(|| "OTHER".into()),
+        GuestOs::MacClassic => mac::file_type(path)
+            .and_then(|t| type_code(&t))
+            .or_else(|| Some(ext).filter(|e| !e.is_empty()))
+            .map(|t| mac::sanitize_name(&t, mac::MAX_NAME, "Other"))
+            .unwrap_or_else(|| "Other".into()),
+        GuestOs::Amiga => library::read_head(path, 12)
+            .ok()
+            .filter(|h| h.len() == 12 && &h[..4] == b"FORM")
+            .and_then(|h| type_code(&[h[8], h[9], h[10], h[11]]))
+            .or_else(|| Some(ext).filter(|e| !e.is_empty()))
+            .map(|t| mac::sanitize_name(&t, amiga::MAX_NAME, "Other"))
+            .unwrap_or_else(|| "Other".into()),
+    }
+}
+
+/// A four-letter type code as a name: printable ASCII, trailing spaces
+/// trimmed. `????` and blanks say nothing about the type.
+fn type_code(code: &[u8; 4]) -> Option<String> {
+    let s = std::str::from_utf8(code).ok()?.trim_end();
+    (!s.is_empty() && s != "????" && s.chars().all(|c| c.is_ascii_graphic() || c == ' ')).then(|| s.to_string())
+}
+
+/// Whether a dropped or picked path is an app for `os` rather than a
+/// document to keep in its documents folder.
+pub fn is_app_source(os: GuestOs, path: &Path) -> bool {
+    if path.is_dir() {
+        return true;
+    }
+    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let ext = ext_of(&name).to_ascii_lowercase();
+    match os {
+        GuestOs::Dos => matches!(ext.as_str(), "zip" | "exe" | "com" | "bat"),
+        GuestOs::MacClassic => {
+            if mac::MACBINARY_EXTS.contains(&ext.as_str()) {
+                // A MacBinary file says what it is: only an app is an app.
+                return mac::read_macbinary(path).is_none_or(|m| &m.finder_info[..4] == b"APPL");
+            }
+            ext == "zip" || mac::is_disk_image(&name) || matches!(ext.as_str(), "sit" | "sitx" | "hqx" | "cpt" | "sea") || mac::file_type(path) == Some(*b"APPL")
+        }
+        GuestOs::Amiga => ext == "zip" || amiga::is_disk_image(&name) || amiga::is_executable(path),
+    }
+}
 
 /// An app in the library that can open a document, and the program to run.
 #[derive(Serialize, Clone, Debug, PartialEq)]
@@ -84,7 +163,11 @@ fn why(h: &handlers::Handler, ext: &str) -> String {
 /// Within each, the favorite version of a handler comes before its other
 /// versions, then apps that opened this type correctly. An app that has
 /// failed with it more often than it worked goes last whatever its rank.
-pub fn dos_openers(file: &str, remembered: Option<&str>, apps: &[LibraryApp], tests: &[Tally]) -> Vec<Opener> {
+///
+/// `tests` are the user's own answers; `community`, test results learned
+/// from other people's findings (learned.rs), only break ties that the
+/// user's own leave: they can never move an app to the end.
+pub fn dos_openers(file: &str, remembered: Option<&str>, apps: &[LibraryApp], tests: &[Tally], community: &[Tally]) -> Vec<Opener> {
     let ext = ext_of(file);
     if ext.is_empty() {
         return Vec::new();
@@ -98,7 +181,7 @@ pub fn dos_openers(file: &str, remembered: Option<&str>, apps: &[LibraryApp], te
             .and_then(|h| dos.iter().find(|a| a.favorite && a.handler() == Some(h)))
             .map_or(id, |f| f.id.as_str())
     });
-    let mut out: Vec<(u8, Opener)> = Vec::new();
+    let mut out: Vec<(u8, i64, Opener)> = Vec::new();
     for app in dos {
         let said = app.opens.iter().any(|e| e.eq_ignore_ascii_case(&ext));
         let chosen = if said {
@@ -109,6 +192,8 @@ pub fn dos_openers(file: &str, remembered: Option<&str>, apps: &[LibraryApp], te
         let Some((rank, program, why)) = chosen else { continue };
         let sha256 = app.program_ids.get(&program).map(|id| id.sha256.as_str());
         let (worked, failed) = verify::record_for(tests, GuestOs::Dos, &base_of(&program), sha256, &format!(".{ext}"));
+        let (cw, cf) = verify::record_for(community, GuestOs::Dos, &base_of(&program), sha256, &format!(".{ext}"));
+        let others = i64::from(cw) - i64::from(cf);
         let rank = if failed > worked {
             3
         } else if first == Some(app.id.as_str()) {
@@ -117,21 +202,16 @@ pub fn dos_openers(file: &str, remembered: Option<&str>, apps: &[LibraryApp], te
             rank
         };
         let version = app.identity.as_ref().and_then(|i| i.version.clone());
-        out.push((rank, Opener { app_id: app.id.clone(), app_name: app.name.clone(), program, version, favorite: app.favorite, why, worked, failed }));
+        out.push((rank, others, Opener { app_id: app.id.clone(), app_name: app.name.clone(), program, version, favorite: app.favorite, why, worked, failed }));
     }
     out.sort_by(|a, b| {
         a.0.cmp(&b.0)
-            .then_with(|| b.1.favorite.cmp(&a.1.favorite))
-            .then_with(|| b.1.worked.cmp(&a.1.worked))
-            .then_with(|| a.1.app_name.to_lowercase().cmp(&b.1.app_name.to_lowercase()))
+            .then_with(|| b.2.favorite.cmp(&a.2.favorite))
+            .then_with(|| b.2.worked.cmp(&a.2.worked))
+            .then_with(|| b.1.cmp(&a.1))
+            .then_with(|| a.2.app_name.to_lowercase().cmp(&b.2.app_name.to_lowercase()))
     });
-    out.into_iter().map(|(_, o)| o).collect()
-}
-
-/// Whether a dropped or picked path is a DOS app (a folder, a zip or a
-/// program) rather than a document to open in one.
-pub fn is_dos_app_source(path: &Path) -> bool {
-    path.is_dir() || matches!(ext_of(&path.to_string_lossy()).as_str(), "ZIP" | "EXE" | "COM" | "BAT")
+    out.into_iter().map(|(_, _, o)| o).collect()
 }
 
 /// A document's path inside DOS: `C:\DOCS\LETTER.WP5`.
@@ -216,7 +296,7 @@ mod tests {
             app("ed", "My Editor", &["BIN/ED.COM"], &["TXT", "doc"]),
             app("123", "1-2-3", &["123.EXE"], &[]),
         ];
-        let names = |file, remembered| dos_openers(file, remembered, &apps, &[]).into_iter().map(|o| o.app_id).collect::<Vec<_>>();
+        let names = |file, remembered| dos_openers(file, remembered, &apps, &[], &[]).into_iter().map(|o| o.app_id).collect::<Vec<_>>();
         // DOC: the user's own say-so first, then the table's, by name.
         assert_eq!(names("LETTER.DOC", None), ["ed", "word", "wp"]);
         // The app it last opened with comes first.
@@ -224,10 +304,10 @@ mod tests {
         assert_eq!(names("BUDGET.WK1", None), ["123"]);
         assert!(names("PHOTO.JPG", None).is_empty());
         assert!(names("README", None).is_empty());
-        let wp = &dos_openers("A.WP5", None, &apps, &[])[0];
+        let wp = &dos_openers("A.WP5", None, &apps, &[], &[])[0];
         assert_eq!(wp.program, "WP.EXE");
         assert!(wp.why.starts_with("WordPerfect opens .WP5 files. Floppy is going by the name WP.EXE"), "{}", wp.why);
-        assert_eq!(dos_openers("A.TXT", None, &apps, &[])[0].program, "BIN/ED.COM");
+        assert_eq!(dos_openers("A.TXT", None, &apps, &[], &[])[0].program, "BIN/ED.COM");
 
         // Test results: an app that worked with .DOC moves up; one that
         // failed more than it worked goes last, even if remembered.
@@ -247,9 +327,18 @@ mod tests {
             notes: vec![],
         };
         let tests = [tally("WP.EXE", 2, 0), tally("ED.COM", 0, 1)];
-        let ranked = dos_openers("LETTER.DOC", Some("ed"), &apps, &tests);
+        let ranked = dos_openers("LETTER.DOC", Some("ed"), &apps, &tests, &[]);
         assert_eq!(ranked.iter().map(|o| o.app_id.as_str()).collect::<Vec<_>>(), ["wp", "word", "ed"]);
         assert_eq!((ranked[0].worked, ranked[0].failed), (2, 0));
+
+        // Other people's results can't bury the user's app: a flood of
+        // "failed" for WordPerfect changes nothing the user's own decide.
+        let flood = [Tally { worked: 0, failed: 10_000, ..tally("WP.EXE", 0, 0) }];
+        let ranked = dos_openers("LETTER.DOC", Some("ed"), &apps, &tests, &flood);
+        assert_eq!(ranked.iter().map(|o| o.app_id.as_str()).collect::<Vec<_>>(), ["wp", "word", "ed"]);
+        // With no results of the user's own, they only break ties.
+        let ranked = dos_openers("LETTER.DOC", None, &apps, &[], &[Tally { worked: 5, ..tally("WP.EXE", 0, 0) }]);
+        assert_eq!(ranked.iter().map(|o| o.app_id.as_str()).collect::<Vec<_>>(), ["ed", "wp", "word"], "wp ahead of word, by others' results");
     }
 
     fn known(mut a: LibraryApp, handler: Option<&str>, version: &str, favorite: bool) -> LibraryApp {
@@ -265,13 +354,13 @@ mod tests {
             known(app("wp51", "WordPerfect 5.1", &["WP.EXE"], &[]), Some("WordPerfect"), "5.1", true),
             known(app("wp60", "WordPerfect 6.0", &["WPWIN/WP.EXE"], &[]), Some("WordPerfect"), "6.0", false),
         ];
-        let ids = |remembered| dos_openers("A.WP5", remembered, &apps, &[]).into_iter().map(|o| o.app_id).collect::<Vec<_>>();
+        let ids = |remembered| dos_openers("A.WP5", remembered, &apps, &[], &[]).into_iter().map(|o| o.app_id).collect::<Vec<_>>();
         assert_eq!(ids(None), ["wp51", "wp50", "wp60"]);
         // A document last opened in 5.0 opens in the favorite now.
         assert_eq!(ids(Some("wp50")), ["wp51", "wp50", "wp60"]);
-        let o = &dos_openers("A.WP5", None, &apps, &[])[0];
+        let o = &dos_openers("A.WP5", None, &apps, &[], &[])[0];
         assert_eq!((o.version.as_deref(), o.favorite, o.why.as_str()), (Some("5.1"), true, "WordPerfect opens .WP5 files."));
-        assert_eq!(dos_openers("A.WP5", None, &apps, &[])[2].program, "WPWIN/WP.EXE");
+        assert_eq!(dos_openers("A.WP5", None, &apps, &[], &[])[2].program, "WPWIN/WP.EXE");
     }
 
     #[test]
@@ -280,20 +369,61 @@ mod tests {
             known(app("word", "WORD (a game)", &["WORD.EXE"], &[]), None, "", false),
             known(app("msword", "Word 5.5", &["WORD.EXE"], &[]), Some("Microsoft Word (DOS)"), "5.5", false),
         ];
-        let ids: Vec<String> = dos_openers("LETTER.DOC", None, &apps, &[]).into_iter().map(|o| o.app_id).collect();
+        let ids: Vec<String> = dos_openers("LETTER.DOC", None, &apps, &[], &[]).into_iter().map(|o| o.app_id).collect();
         assert_eq!(ids, ["msword"]);
     }
 
     #[test]
     fn tells_apps_from_documents() {
         let t = TempDir::new();
-        assert!(is_dos_app_source(t.path()));
+        assert!(is_app_source(GuestOs::Dos, t.path()));
         for app in ["WP51.ZIP", "game.exe", "X.COM", "go.bat"] {
-            assert!(is_dos_app_source(Path::new(app)), "{app}");
+            assert!(is_app_source(GuestOs::Dos, Path::new(app)), "{app}");
         }
         for doc in ["LETTER.WP5", "budget.wk1", "README"] {
-            assert!(!is_dos_app_source(Path::new(doc)), "{doc}");
+            assert!(!is_app_source(GuestOs::Dos, Path::new(doc)), "{doc}");
         }
+        for app in ["System 7.dsk", "Stuff.sit", "MacWrite.zip"] {
+            assert!(is_app_source(GuestOs::MacClassic, Path::new(app)), "{app}");
+        }
+        assert!(!is_app_source(GuestOs::MacClassic, Path::new("Letter.txt")));
+        for app in ["Game.adf", "Work.hdf", "Tools.zip"] {
+            assert!(is_app_source(GuestOs::Amiga, Path::new(app)), "{app}");
+        }
+        let exe = t.path().join("Deluxe");
+        std::fs::write(&exe, [0, 0, 3, 0xF3, 0, 0]).unwrap();
+        assert!(is_app_source(GuestOs::Amiga, &exe));
+        let pic = t.path().join("Picture.iff");
+        std::fs::write(&pic, b"FORM\0\0\0\x04ILBM").unwrap();
+        assert!(!is_app_source(GuestOs::Amiga, &pic));
+    }
+
+    #[test]
+    fn documents_sort_by_type_the_way_each_guest_names_things() {
+        let t = TempDir::new();
+        let file = |name: &str, bytes: &[u8]| {
+            let p = t.path().join(name);
+            std::fs::write(&p, bytes).unwrap();
+            p
+        };
+        assert_eq!(type_folder(GuestOs::Dos, &file("LETTER.WP5", b"")), "WP5");
+        assert_eq!(type_folder(GuestOs::Dos, &file("README", b"")), "OTHER");
+        assert_eq!(type_folder(GuestOs::Dos, &file("LETTER.BK!", b"")), "BK!");
+        // Amiga: the IFF type inside, else the extension.
+        assert_eq!(type_folder(GuestOs::Amiga, &file("Picture.iff", b"FORM\0\0\0\x04ILBM")), "ILBM");
+        assert_eq!(type_folder(GuestOs::Amiga, &file("Song.mod", b"not IFF at all")), "MOD");
+        assert_eq!(type_folder(GuestOs::Amiga, &file("Notes", b"")), "Other");
+        // Mac: the Finder type code, else the extension.
+        let letter = file("Letter", b"hello");
+        assert_eq!(type_folder(GuestOs::MacClassic, &letter), "Other");
+        let mut info = [0u8; 32];
+        info[..8].copy_from_slice(b"TEXTttxt");
+        mac::write_finder_info(&letter, &info).unwrap();
+        assert_eq!(type_folder(GuestOs::MacClassic, &letter), "TEXT");
+        info[..4].copy_from_slice(b"????");
+        let q = file("Mystery.txt", b"");
+        mac::write_finder_info(&q, &info).unwrap();
+        assert_eq!(type_folder(GuestOs::MacClassic, &q), "TXT");
     }
 
     #[test]
