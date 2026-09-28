@@ -211,6 +211,8 @@ export interface GuestStatus {
   romNote: string | null;
   /** Why apps can't launch yet; null when they can. */
   blocker: string | null;
+  /** None of its setup files is missing (always so for DOS): it can be started on its own. */
+  complete: boolean;
 }
 
 /** commands.rs `StartupImport`: the result of a `floppy import …` launch. */

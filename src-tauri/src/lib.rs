@@ -121,6 +121,7 @@ pub fn run() {
             commands::knowledge_summary,
             commands::forget_learned,
             commands::ai_info,
+            commands::start_guest,
             commands::learned_folder,
             commands::take_startup_import,
             commands::launch_app,

@@ -8,6 +8,14 @@ against the day the change was made.
 
 ## Unreleased
 
+- **Start DOS, Start Classic Mac, Start Amiga** (2026-09-28): once a
+  guest has every setup file, a Start button boots it with no app. For
+  DOS it's at the top of the Library panel (a `C:\` prompt with the
+  whole library as C:), and for the Mac and Amiga just under the setup
+  files (the startup disk or Workbench, with the library as a drive). A
+  Mac or Amiga document's Start button no longer needs an app in the
+  library. A guest started this way gets the same Quit strip as an app.
+
 - The maintainers' first Floppy AI pack key is listed in
   `docs/floppy-ai.md` (2026-09-28): packs signed with it are official.
 

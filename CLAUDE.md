@@ -260,6 +260,14 @@ gitignored `CLAUDE.local.md`, never in committed files.
   Quit and the hint (Shut Down, or Ctrl-Esc, its emergency quit).
 - When an emulator quits, Floppy brings its window back to the front,
   then sorts that guest's documents folder (`documents-changed`).
+- **Start <guest>** boots a guest with no app (`start_guest`, a stand-in
+  entry whose running ID is `guest-<os>`): DOSBox at a `C:\` prompt with
+  the whole library as C:, the Mac from its startup disk with the Unix
+  volume, the Amiga from Workbench. It shows once none of that guest's
+  setup files is missing (`GuestStatus.complete`): at the top of the DOS
+  Library panel, and just under the setup-file rows in the Mac's and
+  Amiga's system box. A Mac or Amiga document's **Start** button uses it
+  too, so no app is needed to open one there.
 
 ## Handler apps (`handlers.rs`)
 
