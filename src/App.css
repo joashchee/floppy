@@ -45,6 +45,8 @@ header.top h1 span.accent { color: var(--accent); }
   color: var(--muted);
   vertical-align: middle;
 }
+/* Floppy AI's version, beside the app's */
+.version-tag.ai-version { margin-left: 6px; cursor: help; }
 header.top p {
   color: var(--muted);
   font-size: 13px;

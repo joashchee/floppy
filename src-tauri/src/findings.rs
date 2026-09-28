@@ -84,6 +84,15 @@ pub struct Findings {
     pub setup_reports: Vec<SetupReport>,
     #[serde(default)]
     pub drop_choices: Vec<DropChoiceFinding>,
+    /// The Floppy AI version (ai.rs) of the Floppy that exported them.
+    #[serde(default)]
+    pub ai_version: Option<u32>,
+    /// Set on a knowledge pack (`scripts/make-ai-pack.py`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pack: Option<PackInfo>,
+    /// Files under `materials/` in the zip (learned.rs).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub materials: Vec<Material>,
     /// How many test results `handler_tests` was totalled from, to mark
     /// them exported. Not shared.
     #[serde(skip)]
@@ -142,6 +151,33 @@ pub struct AppErrorsFinding {
     pub size: Option<u64>,
     pub sha256: Option<String>,
     pub errors: String,
+}
+
+/// What a knowledge pack is: the Floppy AI version its materials make.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PackInfo {
+    pub ai_version: u32,
+    /// `YYYY-MM-DD`.
+    pub date: String,
+    /// What changed in this version.
+    #[serde(default)]
+    pub what: String,
+}
+
+/// A file a findings zip carries under `materials/`: plain text that
+/// adds to what Floppy knows, legal to share on ansiapps.com.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Material {
+    /// Its file name under `materials/`: `.md` or `.txt`.
+    pub name: String,
+    /// The licence it's shared under ("GPL-2.0-or-later", "CC0-1.0").
+    pub license: String,
+    /// Where it came from: a repo path or a link.
+    pub source: String,
+    #[serde(default)]
+    pub note: String,
 }
 
 /// Where the user said a dropped item goes (drops.rs).
@@ -471,6 +507,9 @@ pub fn collect(library: &Library) -> Result<Findings, String> {
         app_errors,
         setup_reports,
         drop_choices,
+        ai_version: Some(crate::ai::info().version),
+        pack: None,
+        materials: Vec::new(),
         verifications_seen,
     })
 }

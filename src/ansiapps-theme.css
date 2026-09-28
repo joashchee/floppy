@@ -215,6 +215,7 @@
 :root[data-theme="ansiapps"] header.top h1 { color: var(--dos-white); }
 :root[data-theme="ansiapps"] .app-mark { color: var(--dos-lightgreen); }
 :root[data-theme="ansiapps"] .version-tag { color: var(--dos-lightcyan); }
+:root[data-theme="ansiapps"] .version-tag.ai-version { margin-left: 1ch; color: var(--dos-yellow); }
 /* Status pills as bracketed text: [Basilisk II] */
 :root[data-theme="ansiapps"] .status-pill { padding: 0; color: var(--dos-lightgray); }
 :root[data-theme="ansiapps"] .status-pill::before { content: "[" / ""; }

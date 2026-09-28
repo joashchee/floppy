@@ -494,7 +494,8 @@ pub fn add_setup_report(
 /// Where to get each setup file (`cd::setup_sources`), for the setup screen.
 #[tauri::command]
 pub fn setup_sources() -> Vec<cd::SetupSource> {
-    cd::setup_sources().to_vec()
+    // A newer knowledge pack's, where it has them (learned.rs).
+    learned::setup_sources()
 }
 
 /// Fills missing setup files from the user's Downloads folder, after they
@@ -878,6 +879,20 @@ pub async fn learn_findings(app: AppHandle, path: String) -> Result<learned::Lea
 #[tauri::command]
 pub fn knowledge_summary() -> learned::KnowledgeSummary {
     learned::summary()
+}
+
+/// Floppy AI's version (ai.rs), for the header and About.
+#[tauri::command]
+pub fn ai_info() -> crate::ai::AiInfo {
+    crate::ai::info()
+}
+
+/// The folder of materials findings brought, for Show in Finder.
+#[tauri::command]
+pub fn learned_folder(state: State<AppState>) -> Result<String, String> {
+    let dir = state.library.learned_dir();
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(dir.to_string_lossy().into_owned())
 }
 
 #[tauri::command]

@@ -49,6 +49,7 @@ import {
   type DropClassification,
   type LearnSummary,
   type KnowledgeSummary,
+  type AiInfo,
   type SessionReport,
   type MediaProgress,
   type OldMedia,
@@ -324,6 +325,8 @@ function App() {
   const [findings, setFindings] = useState<FindingsSummary | null>(null);
   // What Floppy learned from findings dropped on it (learned.rs).
   const [knowledge, setKnowledge] = useState<KnowledgeSummary | null>(null);
+  // Floppy AI's version (ai.rs), shown next to the app's.
+  const [ai, setAi] = useState<AiInfo | null>(null);
   // Drops with no clear winner, asked about one at a time (drops.rs).
   const [askDrops, setAskDrops] = useState<DropClassification[]>([]);
   const [dropPick, setDropPick] = useState(0);
@@ -485,6 +488,7 @@ function App() {
   }, [selected?.id, selected?.name]);
 
   async function refresh(): Promise<LibraryApp[]> {
+    invoke<AiInfo>("ai_info").then(setAi, () => {});
     const list = await invoke<LibraryApp[]>("list_apps");
     setApps(list);
     setDocuments(await invoke<LibraryDoc[]>("list_documents"));
@@ -756,13 +760,24 @@ function App() {
         const people = l.forMaintainers
           ? ` ${l.forMaintainers} note${l.forMaintainers === 1 ? "" : "s"} for Floppy's maintainers (errors, setup reports) stay in the file.`
           : "";
-        setMessage(`Learned from ${baseName(path)}: ${describeLearned(l)}.${people}`);
+        const pack = l.aiVersion ? ` Floppy AI is now version ${l.aiVersion}.` : "";
+        const sources = l.setupSources ? ` ${l.setupSources} setup source${l.setupSources === 1 ? "" : "s"} updated.` : "";
+        const kept = l.materials ? ` ${l.materials} material${l.materials === 1 ? "" : "s"} kept to read (About Floppy).` : "";
+        setMessage(`Learned from ${baseName(path)}: ${describeLearned(l)}.${pack}${sources}${kept}${people}`);
       }
       if (l.skipped.length) setError(`Left out:\n${l.skipped.join("\n")}`);
     } catch (e) {
       fail(e);
     } finally {
       setBusy(null);
+    }
+  }
+
+  async function revealLearned() {
+    try {
+      await revealItemInDir(await invoke<string>("learned_folder"));
+    } catch (e) {
+      fail(e);
     }
   }
 
@@ -1444,6 +1459,19 @@ function App() {
               <AppMarkIcon />
             </span>{" "}
             Floppy <span className="version-tag">v{__APP_VERSION__}</span>
+            {ai && (
+              <span
+                className="version-tag ai-version"
+                title={
+                  ai.fromPack
+                    ? `Floppy AI ${ai.version} (${ai.date}), learned from a knowledge pack. This build knows AI ${ai.builtin}.`
+                    : `Floppy AI ${ai.version}${ai.date ? ` (${ai.date})` : ""}: what Floppy knows about old files, apps and setup.${ai.learnedFrom ? ` Plus what it learned from ${ai.learnedFrom} findings file${ai.learnedFrom === 1 ? "" : "s"}.` : ""}`
+                }
+              >
+                AI {ai.version}
+                {ai.fromPack || ai.learnedFrom ? "+" : ""}
+              </span>
+            )}
           </h1>
           <p>Run the old apps your files need, in the OS they were made for.</p>
         </div>
@@ -2355,6 +2383,24 @@ function App() {
           licenses. Floppy works offline: no network, no telemetry, no accounts. It never includes ROMs, operating
           systems or apps; you bring your own.
         </p>
+        <h3 className="about-section-title">Floppy AI {ai?.version ?? ""}</h3>
+        <p>
+          What Floppy knows about old files, apps and setup{ai?.date ? `, as of ${ai.date}` : ""}
+          {ai?.fromPack ? `, from a knowledge pack (this build knows AI ${ai.builtin})` : ""}. It grows from findings: drop
+          a knowledge pack from ansiapps.com, or anyone's Export Findings zip, on this window to update it without a new
+          release.
+          {ai?.learnedFrom ? ` Learned from ${ai.learnedFrom} findings file${ai.learnedFrom === 1 ? "" : "s"} so far.` : ""}
+        </p>
+        {!!knowledge?.materials && (
+          <div className="detail-actions">
+            <button type="button" className="icontext-btn" onClick={() => void revealLearned()}>
+              <span className="btn-icon">
+                <FolderIcon />
+              </span>
+              Show Materials ({knowledge.materials})
+            </button>
+          </div>
+        )}
         <h3 className="about-section-title">Credits</h3>
         <p data-testid="about-credits">
           The ANSIapps theme's font is IBM VGA 8x16 from The Ultimate Oldschool PC Font Pack by VileR

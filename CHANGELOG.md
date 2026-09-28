@@ -8,6 +8,19 @@ against the day the change was made.
 
 ## Unreleased
 
+- **Floppy AI versions and knowledge packs** (2026-09-28): what Floppy
+  knows about old files, apps and setup now has its own version
+  (`docs/floppy-ai.md`, `ai.rs`), shown next to the app version
+  ("v0.3.0 · AI 1") and in About Floppy. `merge-findings.py` raises it
+  whenever a merge changes what Floppy knows, and
+  `scripts/make-ai-pack.py --site` builds that version's knowledge pack
+  for ansiapps.com: a findings zip whose materials are the living
+  documents. Dropped on Floppy, a pack teaches it everything in them
+  with the same parsers the build uses, raises its AI version when
+  newer, and updates where to get setup files (links to known sites
+  only). Any findings zip can carry plain-text materials with their
+  licence, kept to read under About Floppy → Show Materials.
+
 - **Drops that could go more than one way ask you** (2026-09-27): each
   dropped file, folder or zip is judged by its contents, then its name,
   then the tab it was dropped on (`drops.rs`). A clear winner is used

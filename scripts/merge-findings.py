@@ -40,7 +40,9 @@ What goes where:
                          Floppy follows the choice with most answers.
 
 Floppy reads the other five tables straight from the documents when it's
-built, so merging is all it takes. Each findings file is merged once
+built, so merging is all it takes. When a merge changes any of them, the
+script also raises Floppy AI's version (docs/floppy-ai.md) and says to
+build the knowledge pack for ansiapps.com (scripts/make-ai-pack.py). Each findings file is merged once
 (its ID is recorded in app-handlers.md), and both documents get a
 check-log row. A fingerprint already listed as a different app or
 version is reported and left alone: someone has to look. The script
@@ -131,6 +133,24 @@ def handler_exts(doc):
     return out
 
 
+def table_text(doc, name):
+    m = re.search(rf"<!-- {name}:start -->\n(.*?)<!-- {name}:end -->", doc, re.S)
+    return m.group(1) if m else ""
+
+
+def bump_ai(path, what):
+    """Adds a row to docs/floppy-ai.md's versions table; returns the new version."""
+    doc = open(path, encoding="utf-8").read()
+    m = re.search(r"(<!-- ai-versions:start -->\n\|[^\n]*\n\|[^\n]*\n)(\| *(\d+) *\|)?", doc)
+    if not m:
+        sys.exit("docs/floppy-ai.md has no ai-versions table.")
+    version = int(m.group(3) or 0) + 1
+    row = f"| {version} | {dt.date.today().isoformat()} | {cell(what)} |\n"
+    doc = doc[: m.end(1)] + row + doc[m.end(1):]
+    open(path, "w", encoding="utf-8").write(doc)
+    return version
+
+
 def add_log_row(doc, text):
     today = dt.date.today().isoformat()
     log = re.search(r"## Check log\n\n\| Date \| What was checked \| Result \|\n\|---\|---\|---\|\n", doc)
@@ -151,6 +171,8 @@ def main():
     hdoc = open(handlers_path, encoding="utf-8").read()
     sdoc = open(setup_path, encoding="utf-8").read()
     ddoc = open(drops_path, encoding="utf-8").read()
+    ai_path = os.path.join(root, "docs", "floppy-ai.md")
+    before = {n: table_text(d, n) for d, n in ((hdoc, "versions"), (hdoc, "filetypes"), (sdoc, "reported"), (ddoc, "drops"))}
     published = set(re.findall(r'sha1: "([0-9a-f]{40})"', open(known_rs, encoding="utf-8").read()))
 
     reg = re.search(r"<!-- merged-reports:(.*?)-->", hdoc)
@@ -365,10 +387,20 @@ def main():
     open(setup_path, "w", encoding="utf-8").write(sdoc)
     ddoc = add_log_row(ddoc, f"Merged {files} | {len(drops)} drop choices")
     open(drops_path, "w", encoding="utf-8").write(ddoc)
+    after = {n: table_text(d, n) for d, n in ((hdoc, "versions"), (hdoc, "filetypes"), (sdoc, "reported"), (ddoc, "drops"))}
+    changed = [n for n in before if before[n] != after[n]]
+    labels = {"versions": "known versions", "filetypes": "reported file types", "reported": "setup files reported by users",
+              "drops": "drop choices"}
+    new_ai = None
+    if changed:
+        new_ai = bump_ai(ai_path, f"Merged {files}: {', '.join(labels[n] for n in changed)} changed")
 
     print(f"Merged {files}{f', skipped {skipped}' if skipped else ''}: {len(tested)} tested combinations, "
           f"{len(versions)} known versions, {len(filetypes)} reported file types, {len(problems)} reported problems, "
           f"{len(reported)} reported setup files, {len(drops)} drop choices.")
+    if new_ai:
+        print(f"Floppy AI is now version {new_ai} (docs/floppy-ai.md). Build and publish its knowledge pack: "
+              "scripts/make-ai-pack.py --site <ansiapps-site checkout>, then commit both repos.")
     for r in new_problems:
         print(f"Problem reported with {r['app']} {r['version']}".rstrip() + f": {r['errors']}")
     for r in new_setup_notes:

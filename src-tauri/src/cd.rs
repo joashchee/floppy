@@ -197,7 +197,7 @@ fn reported_files() -> &'static [ReportedFile] {
 }
 
 /// `| Slot | What | Size | SHA-1 | Reports | Last reported |`.
-fn parse_reported_files(doc: &str) -> Result<Vec<ReportedFile>, String> {
+pub(crate) fn parse_reported_files(doc: &str) -> Result<Vec<ReportedFile>, String> {
     crate::handlers::table_rows(doc, "reported")?
         .into_iter()
         .map(|cells| {
@@ -220,7 +220,7 @@ fn parse_reported_files(doc: &str) -> Result<Vec<ReportedFile>, String> {
 /// Where to get a setup file: a row of "Where Floppy points you" in
 /// `docs/legal-setupfiles.md`, read when Floppy is built. The setup screen
 /// shows a missing slot's rows, and opens `url` in the user's browser.
-#[derive(Serialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, serde::Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct SetupSource {
     /// A slot label ("Mac startup disk").
@@ -238,7 +238,7 @@ pub fn setup_sources() -> &'static [SetupSource] {
 }
 
 /// `| Slot | Kind | Source | Link | Note |`.
-fn parse_setup_sources(doc: &str) -> Result<Vec<SetupSource>, String> {
+pub(crate) fn parse_setup_sources(doc: &str) -> Result<Vec<SetupSource>, String> {
     crate::handlers::table_rows(doc, "sources")?
         .into_iter()
         .map(|cells| {

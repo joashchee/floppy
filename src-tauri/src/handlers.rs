@@ -197,7 +197,7 @@ pub fn guest_from_label(label: &str) -> Option<GuestOs> {
 }
 
 /// `| Guest | App | Extension | Reports | Last reported |`.
-fn parse_reported_file_types(doc: &str) -> Result<Vec<ReportedFileType>, String> {
+pub(crate) fn parse_reported_file_types(doc: &str) -> Result<Vec<ReportedFileType>, String> {
     table_rows(doc, "filetypes")?
         .into_iter()
         .map(|cells| {
@@ -250,7 +250,7 @@ pub fn builtin_known_versions() -> &'static [KnownVersion] {
 /// `| Guest | App | Version | Program | Size | SHA-256 | Worked | Failed |
 /// Last tested |`. A row that doesn't parse is an error, so a bad merge
 /// fails the tests rather than quietly dropping a version.
-fn parse_known_versions(doc: &str) -> Result<Vec<KnownVersion>, String> {
+pub(crate) fn parse_known_versions(doc: &str) -> Result<Vec<KnownVersion>, String> {
     let mut out = Vec::new();
     for cells in table_rows(doc, "versions")? {
         let line = cells.join(" | ");

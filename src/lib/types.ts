@@ -375,6 +375,10 @@ export interface LearnSummary {
   tests: number;
   systemFiles: number;
   dropChoices: number;
+  setupSources: number;
+  materials: number;
+  /** A knowledge pack's Floppy AI version. */
+  aiVersion: number | null;
   forMaintainers: number;
   skipped: string[];
 }
@@ -387,4 +391,15 @@ export interface KnowledgeSummary {
   tests: number;
   systemFiles: number;
   dropRules: number;
+  materials: number;
+}
+
+/** ai.rs `AiInfo`: Floppy AI's version (docs/floppy-ai.md). */
+export interface AiInfo {
+  /** This Floppy's: the build's, or a newer knowledge pack's. */
+  version: number;
+  date: string;
+  builtin: number;
+  fromPack: boolean;
+  learnedFrom: number;
 }

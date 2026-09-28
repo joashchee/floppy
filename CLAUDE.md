@@ -9,7 +9,8 @@ and `docs/floppy-notes.md` is a condensed history of the work so far.
 the system files setup asks for. `docs/app-handlers.md` is a living list
 of old apps that open old formats (confidence and sources per entry),
 and `docs/file-handling.md` of where dropped files go ("Drop choices",
-read at build time, `drops.rs`).
+read at build time, `drops.rs`). `docs/floppy-ai.md` versions all of that
+knowledge as **Floppy AI** (below).
 Its code copy is `HANDLERS` in `handlers.rs`, and a test keeps the two in
 step. Its "Known versions" and "Reported file types" tables, and
 `legal-setupfiles.md`'s "Reported by users", have no code copy: Floppy
@@ -320,6 +321,32 @@ gitignored `CLAUDE.local.md`, never in committed files.
   record.
 - Test results leave only in an **Export Findings…** zip (below).
 
+## Floppy AI (`ai.rs`, `docs/floppy-ai.md`)
+
+- **Floppy AI** is what Floppy knows about old files, apps and setup
+  without being told: the living documents' tables, `HANDLERS`,
+  `known_files.rs` and how `drops.rs` judges items. Its version is
+  separate from the app's: the top row of `docs/floppy-ai.md`'s table,
+  read at build time and shown next to the app version ("v0.3.0 · AI 1",
+  with `+` once it learned from findings; About says more).
+- **Bump it whenever that knowledge changes**, app release or not.
+  `merge-findings.py` adds the row itself when a merge changes a table
+  Floppy reads; add one by hand for a changed "Where Floppy points you",
+  `HANDLERS`, `known_files.rs` or `drops.rs` judgement. A test fails if
+  the versions don't go down row by row.
+- **Then publish its knowledge pack:** `scripts/make-ai-pack.py --site
+  <ansiapps-site checkout>` builds `Floppy AI <N>.zip` (a findings zip
+  whose materials are the living documents, reproducible byte for byte)
+  into `public/downloads/floppy-ai/` and `src/data/floppy-ai.json`, which
+  Floppy's card on ansiapps.com offers. Commit both repos; the site's
+  `main` deploys it. A published version's zip is never replaced: bump
+  the version instead. `--material PATH=LICENCE=SOURCE` adds a plain
+  `.md`/`.txt` under a licence that allows sharing on ansiapps.com
+  (never guest software, ROMs or disk images: rule 3).
+- A pack newer than the build raises the Floppy's AI version when
+  learned (`learned.rs`), and its setup sources replace the build's for
+  links to sites the build already points to.
+
 ## Findings (`findings.rs`, `learned.rs`)
 
 - **Findings are Floppy's training data**, for how it handles obsolete
@@ -359,6 +386,12 @@ gitignored `CLAUDE.local.md`, never in committed files.
   ID, the library's own exports (`findings.json`'s `exportedIds`) not at
   all, and **Forget What Was Learned…** empties it. Learning only ever
   reads a file the user brings (rule 4).
+- **Materials:** any findings zip may carry plain `.md`/`.txt` files
+  under `materials/`, each listed in the JSON with its licence and
+  source. Floppy keeps them in `library/learned/<id>/` (About Floppy →
+  Show Materials) and learns from the living documents among them with
+  the build-time parsers. Knowledge packs are exactly that. Floppy's own
+  Export Findings adds no materials.
 - Each export holds only what's new: `library/findings.json` keeps the
   keys of what went, and test results are marked `exported`
   (`verify.rs`), since merging adds counts up. "Open with" still ranks

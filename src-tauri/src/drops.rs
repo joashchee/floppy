@@ -452,7 +452,7 @@ pub fn rules() -> &'static [DropRule] {
 }
 
 /// `| Kind | Extension | Contents | Goes to | Answers | Last answered |`.
-fn parse_rules(doc: &str) -> Result<Vec<DropRule>, String> {
+pub(crate) fn parse_rules(doc: &str) -> Result<Vec<DropRule>, String> {
     handlers::table_rows(doc, "drops")?
         .into_iter()
         .map(|cells| {

@@ -1,3 +1,4 @@
+mod ai;
 mod amiga;
 mod backup;
 mod cd;
@@ -119,6 +120,8 @@ pub fn run() {
             commands::learn_findings,
             commands::knowledge_summary,
             commands::forget_learned,
+            commands::ai_info,
+            commands::learned_folder,
             commands::take_startup_import,
             commands::launch_app,
             commands::open_document,

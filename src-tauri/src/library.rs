@@ -298,6 +298,11 @@ impl Library {
         self.root.join("learned.json")
     }
 
+    /// The materials findings brought, one folder per findings file.
+    pub fn learned_dir(&self) -> PathBuf {
+        self.root.join("learned")
+    }
+
     pub fn setup_reports_path(&self) -> PathBuf {
         self.root.join("setup-reports.json")
     }
