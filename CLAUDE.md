@@ -525,6 +525,13 @@ gitignored `CLAUDE.local.md`, never in committed files.
 - On Linux the build needs Tauri's system libraries (WebKitGTK 4.1,
   GTK 3, librsvg, libsoup 3; see Tauri's prerequisites) and the fetch
   scripts' Linux x86-64 pins. The e2e test runs there too.
+- If the build script fails with "Operation not permitted (os error 1)"
+  on a file inside `DOSBox Staging.app` (or another emulator bundle),
+  that's macOS's App Management protection: once a signed app bundle in
+  `src-tauri/target/debug/<emulator>/` has run, nothing may overwrite
+  its files, so Tauri can't copy the resources again. Delete that build
+  copy (`rm -rf src-tauri/target/debug/dosbox`) and rebuild; it happens
+  in and out of the sandbox alike.
 - `npx tsc --noEmit` for the frontend.
 - Run all three before calling a change done. A bug report becomes a
   failing test first, then the fix.
@@ -545,7 +552,9 @@ gitignored `CLAUDE.local.md`, never in committed files.
   builder's home folder and user name. The script remaps them with
   `--remap-path-prefix` and fails if `$HOME` is still in the built app.
   Arguments pass through to `tauri build` (`--bundles app` skips the DMG,
-  which needs `hdiutil`). It then downloads the bundled GPL emulators'
+  which needs `hdiutil`). **"Build the macOS app" means the `.app`
+  only** (`scripts/build-release.sh --bundles app`): build the DMG only
+  when asked for it (all ansiapps apps). It then downloads the bundled GPL emulators'
   source into `src-tauri/target/release/bundle/source/`, and writes
   `AROS-SOURCE.txt` there too: which AROS build FS-UAE's `fs-uae.dat`
   carries (read from the ROM itself), its licence and where its source
@@ -556,6 +565,32 @@ gitignored `CLAUDE.local.md`, never in committed files.
   Last, it copies the new `Floppy.app` into `~/Applications/`, replacing
   the old one, so the installed app is always the latest release build.
   Outside the sandbox only: `~/Applications` isn't writable in it.
+- **macOS signing (`scripts/sign-macos.sh`)**, run by
+  `build-release.sh`: it always restores the symlinks Tauri's resource
+  copy flattens (every symlink under `src-tauri/resources/`, today
+  BasiliskII.app's `SDL2.framework`) and rebuilds the DMG. With
+  `FLOPPY_SIGN_IDENTITY` (a Developer ID Application identity) it signs
+  every nested emulator inside-out with the hardened runtime and its
+  entitlements (`src-tauri/macos/*.entitlements`: DOSBox `allow-jit`,
+  FS-UAE and Basilisk II `allow-unsigned-executable-memory`), then
+  Floppy.app, and notarizes and staples both the app and the DMG
+  (notarytool keychain profile `FLOPPY_NOTARY_PROFILE`, default
+  `floppy-notary`), so they open offline. `FLOPPY_SIGN_IDENTITY=-` signs
+  ad hoc without the runtime, to test the script without an Apple
+  account (checked 2026-09-29: `codesign --verify --deep --strict`
+  passes and all three emulators start). Not yet run with a real
+  Developer ID. `hdiutil` doesn't work in the sandbox.
+- **Publish with `scripts/publish-release.sh`** after building, on each
+  platform (`docs/floppy-downloads.md` in the site repo is the plan). It
+  refuses a dirty tree and, on macOS, a DMG that isn't notarized
+  (`--allow-unsigned`), writes `SHA256SUMS-macOS`/`-Linux`, uploads to
+  the R2 bucket behind `downloads.ansiapps.com` under
+  `floppy/<version>/` (curl's own SigV4, credentials from the
+  environment or the keychain / secret service under `ansiapps-r2`,
+  never a repo) without ever replacing a file, adds the sources to the
+  `v<version>` GitHub release, and prints the site's `_redirects`
+  lines. `--dry-run` checks it all without uploading. The R2 upload is
+  untested until the bucket exists.
 - **Track platform parity** in `docs/platform-parity.md` whenever a
   feature uses a platform-specific mechanism. Build the macOS and Linux
   sides together where you can, and don't implement the Windows side
@@ -628,7 +663,14 @@ gitignored `CLAUDE.local.md`, never in committed files.
   progress and scroll bars from `░▒▓█`, checkboxes as `[X]`, all on the
   8×16 cell grid (16px font, 16px rows, sizes in whole cells). No CSS
   borders, box-shadows, rounded corners, SVG icons or images in that
-  theme. The how-to, with glyph tables, the exact 16-color palette and
+  theme, except the shared theme pack's rendered ANSI art once it
+  exists (drawn in Stylus on the same grid; `docs/ansiapps-theme.md`,
+  "ANSI art assets"). **Every text/background pair comes from the
+  ranked list in `docs/ansiapps-color-contrast.md`** (WCAG AA; only 32
+  of the palette's pairs pass), icons and frames need 3:1, and a warning
+  that can land on several backgrounds gets its own black cell. Motion
+  is whole-cell frames only: at most 3 flashes a second, a still frame
+  under reduced motion. The how-to, with glyph tables, the exact 16-color palette and
   Turbo Vision's component recipes, is `docs/ansiapps-textmode.md`;
   follow it and extend it. Every new UI element gets its text-mode form
   when it's built, and touched UI gets polished toward it. Floppy's
@@ -642,15 +684,11 @@ gitignored `CLAUDE.local.md`, never in committed files.
 - Single-instance handling: a second `floppy import …` while Floppy is
   running currently opens a second window.
 - Per-app DOSBox settings (cycles, machine type, sound).
-- Code signing: Developer ID signing and notarization must also sign the
-  nested `DOSBox Staging.app`, `FS-UAE.app` and `BasiliskII.app`. The fetch script's 7-Zip
-  fallback path loses DOSBox's original signature, and FS-UAE's tarball
-  signature doesn't verify as shipped. Tauri's resource copy also turns
-  symlinks into plain files (BasiliskII.app's `SDL2.framework`), so
-  `codesign --verify --deep` fails on all three nested apps in the built
-  Floppy.app today. They still run unsigned-style (checked 2026-09-27),
-  but signing must re-sign each one, or restore the framework symlinks
-  first.
+- Code signing: `scripts/sign-macos.sh` is built (above) but has never
+  run with a real Developer ID, so the first signed build must be
+  checked: that notarization accepts it, and that DOSBox, FS-UAE and
+  Basilisk II all launch from the signed app under the hardened runtime
+  (Basilisk II's entitlements are a guess, since upstream's is ad hoc).
 - Auto-opening a Mac app (alias in the startup disk's Startup Items) or
   an Amiga folder app (`user-startup`). Today the guest boots and the
   user opens the app.

@@ -14,6 +14,13 @@ The look draws on int10h.org's
 [Ultimate Oldschool PC Font Pack](https://int10h.org/oldschool-pc-fonts/fontlist/),
 Norton Commander's blue file panels, and Turbo Vision's gray dialogs.
 
+**Stylus** (decided 2026-09-29, not built yet) is the family's ANSI art
+and animation tool: open source (MIT), always free, built on icy_tools.
+It's where the theme's art will be drawn and shipped to every app as a
+shared **theme pack** (see "ANSI art assets" below). Stylus is the one
+ansiapps app that opens in the ANSIapps theme; Floppy keeps modern as
+its default.
+
 ## How it's built
 
 | Piece | Where | What |
@@ -60,8 +67,9 @@ palette, Turbo Vision recipes, web rendering); these are its rules:
 - **Art and headings:** ANSI-art technique (shade ramps, clean edges,
   one light source), but every drawn word also exists as real text.
 - **Accessibility:** the drawing is an `aria-hidden` layer over real
-  HTML controls and headings; colors pass WCAG AA (the reference lists
-  which classic pairs fail and their replacements).
+  HTML controls and headings; every text/background pair comes from the
+  ranked list in `docs/ansiapps-color-contrast.md` (WCAG AA or better,
+  only 32 of the palette's pairs pass), and icons and frames get 3:1.
 
 ### How Floppy draws it
 
@@ -99,6 +107,12 @@ dialog (a color, like an attribute change).
 - **Palette**: only the 16 CGA/VGA text-mode colors (`--dos-*`). No
   other colors, no gradients except a solid-block progress fill, no
   transparency except modal dimming.
+- **Contrast**: look every pair up in `docs/ansiapps-color-contrast.md`,
+  never eyeball it. On blue only white, yellow, light cyan, light green,
+  light gray and light magenta read; on light gray only black and blue;
+  on cyan and green only black. A colored mark that can land on several
+  backgrounds (a warning on a row that can be selected, or in a dialog)
+  gets its own black cell.
 - **Surfaces**: the desktop and panels are blue with light-cyan frames.
   Menus and dialogs are light-gray windows with black text.
 - **Type**: one bitmap font, IBM VGA 8x16, at 16px only, with no bold
@@ -116,15 +130,21 @@ dialog (a color, like an attribute change).
   `( )` / `(•)`, text fields and
   pickers are black strips with a `▼` cell, and focus is reverse video
   (black on white).
-- **No motion** beyond the indeterminate progress bar, which steps in
-  12 whole moves rather than gliding (see Shared UI conventions).
+- **No easing, but frame-by-frame animation is allowed**: no fades,
+  slides or easing, because a text-mode screen just redraws. Motion is
+  whole cells redrawn, the way an ANSImation plays: today only the
+  indeterminate progress bar, which steps in 12 whole moves (see Shared
+  UI conventions); spinners and animated splash art once the theme pack
+  has them. Nothing flashes more than 3 times a second, anything moving
+  longer than 5 seconds can be paused, and `prefers-reduced-motion`
+  gets one still frame.
 - **Buttons** are Turbo Vision green (black text), primary light green,
   danger red with white text, disabled dark gray on light gray.
 - **Floppy's own color keeps its meaning**: phosphor green becomes
   light green (`--accent`), used for primary buttons, section and row
   icons, and the progress fill.
-- Icons are still inline SVG in `currentColor` (to be replaced by
-  CP437 glyphs, see "Text only").
+- Icons are CP437 glyph twins today (`components/icons.tsx`); the
+  theme pack's ANSI icons replace them once it exists.
 
 ## Shared UI conventions (every ansiapps app)
 
@@ -152,8 +172,53 @@ both themes. `CLAUDE.md` has how Floppy does them.
   `src/lib/estimate.ts`), redone only at 20, 40, 60, 80 and 90% or every
   10 seconds so it holds steady. ANSIapps look: light-gray 16px text like
   other status lines. A determinate fill jumps to each new width, and the
-  indeterminate sweep moves in 12 whole steps: the one animation the "no
-  motion" rule allows, because a stopped bar would look like a hang.
+  indeterminate sweep moves in 12 whole steps, because a stopped bar
+  would look like a hang.
+
+## ANSI art assets (the theme pack, authored in Stylus)
+
+**Decided across the family 2026-09-29; the pack and its tooling aren't
+built yet.** Text mode doesn't mean no graphics: the theme's graphics
+(app marks, splash art, icons, empty states, spinners) and the drawn
+parts of its controls (button faces, dialog and panel frames, title
+bars, checkboxes, scroll bars, the progress fill) become **ANSI art and
+animation**, drawn in Stylus and shared by every app.
+
+- **The canvas:** the theme font (IBM VGA 8×16) at 8-px spacing, square
+  pixels, the 16 `--dos-*` colors only, iCE colors on; `.XB` sources
+  with SAUCE.
+- **Control parts** are 9-slices in whole cells, one frame per state
+  (normal, hover, pressed, focused, disabled). A `manifest.json` gives
+  every part's slices, frame timings, alt text (or `decorative`) and the
+  contrast role of its colored cells.
+- **Rendered at build time** by Stylus's command-line render tool into
+  PNGs (1× and 2×) and CSS (`border-image` 9-slices, `image-rendering:
+  pixelated`, integer scales, `steps()` animation, a reduced-motion rest
+  frame). Apps commit the generated files with the pack version and
+  never run Stylus code.
+- **Text stays text.** Every word is still HTML in the VGA font; the art
+  is the frame around it, never a picture of words (the app's name in
+  its logo art is the one exception, with alt text).
+- **Accessibility:** text cells use a pair from the ranked list; icons
+  and control borders 3:1 against their neighbors (both colors of a
+  `░▒▓` shade); decorative art is `aria-hidden`; color is never the only
+  cue; animations as in "Current rules".
+- **License:** the pack is MIT (ansiapps' own art, in the Stylus repo),
+  fine to ship beside Floppy's GPL code. Keep its MIT notice with the
+  rendered files and credit it in About. Rendered PNGs of the VGA font's
+  glyphs are fine to ship (VileR's readme exempts rendered images from
+  ShareAlike); a converted font file still isn't.
+
+**How it fits Floppy's text-only rule:** the pack's parts are drawn on
+the same 8×16 grid with the same font and palette, so they're text-mode
+art, and they're the one kind of image the ANSIapps theme may show.
+Until a part exists, Floppy's text layers (`textmode.ts` frames, CSS
+generated glyphs, CP437 icon twins) stay. When the pack lands:
+
+1. Render it for Floppy and commit the PNGs and generated CSS.
+2. Swap each text-drawn part for the pack's (frames, button faces,
+   icons, the splash mark `◙`) one at a time, checking both themes.
+3. Keep the About credit and the pack's MIT notice beside the files.
 
 ## Font licensing
 

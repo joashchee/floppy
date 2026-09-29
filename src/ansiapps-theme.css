@@ -221,8 +221,15 @@
 :root[data-theme="ansiapps"] .status-pill { padding: 0; color: var(--dos-lightgray); }
 :root[data-theme="ansiapps"] .status-pill::before { content: "[" / ""; }
 :root[data-theme="ansiapps"] .status-pill::after { content: "]" / ""; }
-:root[data-theme="ansiapps"] .status-pill.warn { color: var(--dos-lightred); }
 :root[data-theme="ansiapps"] .status-pill.running { color: var(--dos-lightgreen); }
+/* Warnings: light red on its own black cell (6.7:1), readable on the blue
+   desktop, a cyan selection bar and a gray dialog alike. Light red on blue
+   is 4.2:1 and red on light gray 3.3:1, both too faint for words
+   (docs/ansiapps-color-contrast.md). */
+:root[data-theme="ansiapps"] .status-pill.warn,
+:root[data-theme="ansiapps"] .guest-tile-meta.warn,
+:root[data-theme="ansiapps"] .system-note.warn,
+:root[data-theme="ansiapps"] .about-emulators li span.warn { color: var(--dos-lightred); background: var(--dos-black); }
 
 /* ── Buttons: Turbo Vision's green bar with a ▄ and ▀▀▀ shadow ─────── */
 
@@ -310,12 +317,12 @@
 :root[data-theme="ansiapps"] .tm-arrow {
   width: 3ch;
   text-align: center;
-  color: var(--dos-lightgreen);
+  color: var(--dos-black);
   background: var(--dos-green);
   pointer-events: none;
 }
 :root[data-theme="ansiapps"] .field > .tm-arrow { align-self: flex-end; margin-top: -16px; }
-:root[data-theme="ansiapps"] .system-row > .tm-arrow { margin-left: calc(-3ch - 8px); color: var(--dos-black); }
+:root[data-theme="ansiapps"] .system-row > .tm-arrow { margin-left: calc(-3ch - 8px); }
 :root[data-theme="ansiapps"] .field-label { color: var(--dos-lightcyan); }
 /* On a gray dialog, labels are blue like its other text accents */
 :root[data-theme="ansiapps"] .dialog-box .field-label { color: var(--dos-blue); }
@@ -396,7 +403,6 @@
   --text: var(--dos-black);
   --muted: var(--dos-black);
   --accent: var(--dos-black);
-  --warn: var(--dos-red);
   --tm-frame: var(--dos-black);
   background: var(--dos-cyan);
 }
@@ -443,7 +449,6 @@
   --muted: var(--dos-blue);
   --accent: var(--dos-blue);
   --accent-dim: var(--dos-blue);
-  --warn: var(--dos-red);
   --tm-frame: var(--dos-black);
   --tm-title: var(--dos-black);
   background: var(--dos-lightgray);
@@ -453,7 +458,7 @@
 :root[data-theme="ansiapps"] .gear-menu { padding: 16px 1ch; gap: 0; top: calc(100% + 16px); }
 :root[data-theme="ansiapps"] .menu-item { min-height: 0; padding: 0 1ch; background: none; color: var(--dos-black); }
 :root[data-theme="ansiapps"] .gear-menu .menu-item:hover:not(:disabled),
-:root[data-theme="ansiapps"] .gear-menu .menu-item:focus-visible { background: var(--dos-green) !important; color: var(--dos-black) !important; }
+:root[data-theme="ansiapps"] .gear-menu .menu-item:focus-visible { background: var(--dos-green) !important; color: var(--dos-black) !important; --muted: var(--dos-black); --accent: var(--dos-black); }
 :root[data-theme="ansiapps"] .gear-menu .menu-item:disabled { opacity: 1; color: var(--dos-darkgray); }
 :root[data-theme="ansiapps"] .gear-menu .menu-item svg { color: currentColor; }
 /* Separators join the frame: ├────┤ */
@@ -497,9 +502,9 @@
 /* ── Drop overlay ──────────────────────────────────────────────────── */
 
 :root[data-theme="ansiapps"] .drop-overlay { background: rgba(0, 0, 170, 0.9); }
-:root[data-theme="ansiapps"] .drop-box { --tm-frame: var(--dos-white); color: var(--dos-white); background: var(--dos-cyan); }
+:root[data-theme="ansiapps"] .drop-box { --text: var(--dos-black); --muted: var(--dos-black); --accent: var(--dos-black); --tm-frame: var(--dos-black); --tm-title: var(--dos-black); color: var(--dos-black); background: var(--dos-cyan); }
 :root[data-theme="ansiapps"] .drop-box small { color: var(--dos-black); }
-:root[data-theme="ansiapps"] .drop-overlay.split .drop-box { opacity: 1; background: var(--dos-blue); color: var(--dos-lightgray); }
+:root[data-theme="ansiapps"] .drop-overlay.split .drop-box { --text: var(--dos-lightgray); --muted: var(--dos-lightgray); --accent: var(--dos-lightgreen); --tm-frame: var(--dos-lightgray); --tm-title: var(--dos-lightgray); opacity: 1; background: var(--dos-blue); color: var(--dos-lightgray); }
 :root[data-theme="ansiapps"] .drop-overlay.split .drop-box small { color: var(--dos-lightgray); }
-:root[data-theme="ansiapps"] .drop-overlay.split .drop-box.active { background: var(--dos-cyan); color: var(--dos-white); }
+:root[data-theme="ansiapps"] .drop-overlay.split .drop-box.active { --text: var(--dos-black); --muted: var(--dos-black); --accent: var(--dos-black); --tm-frame: var(--dos-black); --tm-title: var(--dos-black); background: var(--dos-cyan); color: var(--dos-black); }
 :root[data-theme="ansiapps"] .drop-overlay.split .drop-box.active small { color: var(--dos-black); }

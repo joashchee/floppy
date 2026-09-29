@@ -9,7 +9,9 @@
 #
 # Arguments are passed on to `tauri build`, e.g. `--bundles app`.
 # Afterwards the built app is searched for $HOME, and the script fails if
-# it's still there. It then downloads the source of the bundled GPL
+# it's still there. On macOS, scripts/sign-macos.sh then restores the
+# emulators' symlinks and, when FLOPPY_SIGN_IDENTITY is set, signs and
+# notarizes the app and DMG. It then downloads the source of the bundled GPL
 # emulators, plus a notice for the AROS ROM inside FS-UAE
 # (scripts/fetch-sources.sh), which every release must offer alongside the
 # DMG or Linux packages it publishes on ansiapps.com. Finally, on macOS, the app is installed into
@@ -40,6 +42,12 @@ if [ -n "$LEAKS" ]; then
   exit 1
 fi
 echo "Checked: no $HOME paths in the release build."
+
+# macOS: restore the emulators' symlinks, and with FLOPPY_SIGN_IDENTITY
+# set, sign, notarize and staple the app and a rebuilt DMG.
+if [ "$(uname -s)" = Darwin ]; then
+  "$ROOT/scripts/sign-macos.sh" "$TARGET/bundle/macos/Floppy.app"
+fi
 
 # Shipping DOSBox Staging and FS-UAE binaries means shipping their source.
 "$ROOT/scripts/fetch-sources.sh" "$TARGET/bundle/source"

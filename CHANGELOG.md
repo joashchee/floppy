@@ -6,6 +6,29 @@ All notable changes to Floppy are recorded here. Format loosely follows
 Update this file whenever a change lands. A short bullet is enough, dated
 against the day the change was made.
 
+## Unreleased
+
+- **ANSIapps theme: contrast fixes and the coming theme pack**
+  (2026-09-29), from the family's new rules: every text/background pair
+  now comes from `docs/ansiapps-color-contrast.md` (Floppy's copy of the
+  ranking, with its audit). Warnings are light red on their own black
+  cell instead of light red on blue or red on cyan and gray (all too
+  faint); a select's `▼` is black on green; the drop target is black on
+  cyan instead of white; muted text on a highlighted menu item turns
+  black. `docs/ansiapps-theme.md` adds the ANSI art theme pack to be
+  drawn in Stylus, and allows frame-by-frame animation (3 Hz at most, a
+  still frame under reduced motion). CLAUDE.md: "build the macOS app"
+  means the `.app` only.
+
+- **Getting releases to ansiapps.com** (2026-09-29):
+  `scripts/sign-macos.sh` restores the emulators' symlinks in the built
+  app, and with a Developer ID signs the three emulators and Floppy,
+  then notarizes and staples the app and DMG (run by
+  `build-release.sh`). `scripts/publish-release.sh` uploads a release to
+  `downloads.ansiapps.com` without ever replacing a file, writes its
+  checksums, puts the GPL sources on the GitHub release, and prints the
+  site's download links.
+
 ## 0.4.0 (2026-09-29)
 
 - **Feedback for everything you do, and a loading screen** (2026-09-29),
