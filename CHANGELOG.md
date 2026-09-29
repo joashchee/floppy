@@ -8,6 +8,13 @@ against the day the change was made.
 
 ## Unreleased
 
+- **`--bundles app` builds no longer fail on a stale DMG folder**
+  (2026-09-29): `sign-macos.sh` rebuilt the DMG whenever `bundle/dmg/`
+  existed, so a folder left by an earlier DMG build sent an app-only
+  build to `hdiutil` and stopped it before the sources and the install.
+  It now rebuilds only a DMG Tauri made in this build (newer than the
+  app).
+
 - **ANSIapps theme: contrast fixes and the coming theme pack**
   (2026-09-29), from the family's new rules: every text/background pair
   now comes from `docs/ansiapps-color-contrast.md` (Floppy's copy of the

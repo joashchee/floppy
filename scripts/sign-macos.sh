@@ -107,12 +107,14 @@ if [ "$NOTARIZE" = 1 ]; then
   rm -f "$ZIP"
 fi
 
-# 3. The DMG, rebuilt from the finished app (only when Tauri made one).
+# 3. The DMG, rebuilt from the finished app (only when Tauri made one in
+# this build: a `--bundles app` build leaves an earlier build's dmg/ folder
+# or DMG behind, older than the app).
 DMG_DIR="$BUNDLE/dmg"
-[ -d "$DMG_DIR" ] || exit 0
 VERSION=$(defaults read "$APP/Contents/Info" CFBundleShortVersionString)
 case "$(uname -m)" in arm64) ARCH=aarch64 ;; *) ARCH=x64 ;; esac
 DMG="$DMG_DIR/Floppy_${VERSION}_${ARCH}.dmg"
+[ -f "$DMG" ] && [ "$DMG" -nt "$APP/Contents/Info.plist" ] || exit 0
 STAGE=$(mktemp -d "${TMPDIR:-/tmp}/floppy-dmg.XXXXXX")
 ditto "$APP" "$STAGE/Floppy.app"
 ln -s /Applications "$STAGE/Applications"
