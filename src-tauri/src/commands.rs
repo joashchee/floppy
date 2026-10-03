@@ -974,6 +974,17 @@ pub fn learned_folder(state: State<AppState>) -> Result<String, String> {
     Ok(dir.to_string_lossy().into_owned())
 }
 
+/// The bundled list of every third-party license Floppy ships
+/// (scripts/third-party-licenses.py), for About's Show Licenses.
+#[tauri::command]
+pub fn licenses_file(app: AppHandle) -> Result<String, String> {
+    let file = app.path().resource_dir().map_err(|e| e.to_string())?.join("licenses").join("third-party-licenses.txt");
+    if !file.is_file() {
+        return Err("This copy of Floppy has no license list. Reinstall Floppy to get it back.".into());
+    }
+    Ok(file.to_string_lossy().into_owned())
+}
+
 #[tauri::command]
 pub fn forget_learned(state: State<AppState>) -> Result<(), String> {
     learned::forget(&state.library)

@@ -5,8 +5,7 @@ Every ansiapps app ships two UI themes:
 1. **Modern**: the default, dark token-based design (IBM Plex,
    `--bg`/`--panel`/`--line`/`--text`/`--muted`/`--accent`).
 2. **ANSIapps**: an old-school DOS text-mode look, switched from the
-   **gear menu** with the checkbox "ANSIapps theme (old-school DOS
-   look)". It's remembered across launches (`localStorage`, key
+   **gear menu** with the checkbox "ANSIapps theme". It's remembered across launches (`localStorage`, key
    `floppy.theme`) and applied before first paint, so it never flashes
    the modern theme.
 
@@ -121,8 +120,14 @@ dialog (a color, like an attribute change).
 - **Frames**: panels and dialogs double (`╔═╗`), menus and boxes inside
   panels single (`┌─┐`), titles centered in the top border.
 - **Depth**: Turbo Vision shadows in text: `█` cells two columns right
-  and one row down for windows and menus, `▄`/`▀` for buttons. A pressed
-  button shifts into its shadow.
+  and one row down, for windows and menus only.
+- **Buttons are just clickable** (decided 2026-09-30, first built in
+  Coupler; it replaces Turbo Vision's `▄`/`▀` button shadow and
+  one-column press). A button is a flat green bar with no shadow that
+  never moves when pressed, since a moving button can lose the click
+  (its hit box moves with it). State shows by color alone: light green
+  (white on a primary button) under the pointer, black on cyan while
+  the mouse is down, dark gray on light gray when disabled.
 - **Selection**: list rows are borderless lines, and the selected one
   (an app, a document, the chosen guest) is a cyan bar with black
   text. Menus highlight in green.
@@ -149,8 +154,17 @@ dialog (a color, like an attribute change).
 ## Shared UI conventions (every ansiapps app)
 
 Decided 2026-09-27 across the ansiapps apps. Beyond the two themes,
-every app shares the three behaviors below, and each must look right in
+every app shares the behaviors below, and each must look right in
 both themes. `CLAUDE.md` has how Floppy does them.
+
+- **An in-development warning on first run** (decided 2026-09-30).
+  Before the window or its loading screen exists, a native dialog says
+  the app is still in development, use at your own risk. **OK** opens
+  the window and is remembered (an `in-development-accepted` marker in
+  the app-data dir); **I'll Be Back.** quits having created nothing, and
+  the warning shows again next launch. Floppy: `src-tauri/src/first_run.rs`,
+  with the main window `"create": false` in `tauri.conf.json`. The
+  dialog is native, so it doesn't follow the ANSIapps theme.
 
 - **A loading screen from the first paint.** `index.html` holds a static
   splash (mark, name, empty progress slot and label) with inline styles,

@@ -34,7 +34,13 @@ gitignored `CLAUDE.local.md`, never in committed files.
    **AGPL** and anything proprietary. Emulators (DOSBox Staging, FS-UAE,
    Basilisk II) run as separate executables (aggregation), so a
    GPLv2-only core is fine to bundle but must never be linked in. Check licenses whenever a
-   lockfile changes (`cargo metadata --offline`, `package-lock.json`).
+   lockfile changes (`cargo metadata --offline`, `package-lock.json`),
+   then rerun `scripts/third-party-licenses.py` and commit its output,
+   `src-tauri/resources/licenses/` (every bundled library's license
+   text, plus the GPL v2 as `GPL-2.0.txt`), which ships in the app and
+   About's **Show Licenses** reveals. `build-release.sh` rewrites it for
+   each platform's build. A crate that compiles a C library in needs that
+   library's license added to the script's `BUNDLED_C`.
 2. **Floppy stays a separate program from anything that feeds it.**
    Other programs talk to it only across a process boundary, through
    documented plain interfaces: `floppy import [--os
@@ -638,6 +644,16 @@ gitignored `CLAUDE.local.md`, never in committed files.
   - Shared with the other apps: `activity.ts`, `estimate.ts`,
     `ProgressBar.tsx` and `ActivityStatus.tsx` come from the design
     system; keep them in step with Diskette's.
+- **An in-development warning on first run (all ansiapps apps).**
+  Before any window or loading screen, a native dialog says Floppy is
+  still in development, use at your own risk (`first_run.rs`, the same
+  in every ansiapps app). The main window is `"create": false` in
+  `tauri.conf.json`; `lib.rs`'s `start` opens the library, runs a
+  `floppy import`/`open` from the command line, starts the old-media
+  watcher and builds the window, only once **OK** is pressed (remembered
+  by an `in-development-accepted` marker in the app-data dir). **I'll Be
+  Back.** quits having created nothing. Files opened with Floppy while
+  it's up still queue (`request::Opened` is managed first).
 - **An app loading screen, from the first paint.** The window is never
   blank or half-drawn at launch. `index.html` holds a static splash (app
   mark, name, an empty progress slot and label) whose styles are inline
@@ -670,7 +686,9 @@ gitignored `CLAUDE.local.md`, never in committed files.
   of the palette's pairs pass), icons and frames need 3:1, and a warning
   that can land on several backgrounds gets its own black cell. Motion
   is whole-cell frames only: at most 3 flashes a second, a still frame
-  under reduced motion. The how-to, with glyph tables, the exact 16-color palette and
+  under reduced motion. **Buttons are just clickable:** flat bars
+  with no shadow that never move when pressed, state by color alone
+  (decided 2026-09-30 in Coupler, the family's rule). The how-to, with glyph tables, the exact 16-color palette and
   Turbo Vision's component recipes, is `docs/ansiapps-textmode.md`;
   follow it and extend it. Every new UI element gets its text-mode form
   when it's built, and touched UI gets polished toward it. Floppy's

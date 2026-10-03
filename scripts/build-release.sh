@@ -23,6 +23,13 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd)
 cd "$ROOT"
 
 export RUSTFLAGS="${RUSTFLAGS:-} --remap-path-prefix=$HOME=~ --remap-path-prefix=$ROOT=."
+if [ -n "${CARGO_HOME:-}" ]; then
+  RUSTFLAGS="$RUSTFLAGS --remap-path-prefix=$CARGO_HOME=~/.cargo"
+fi
+
+# Every third-party license text the app ships, into its resources
+# (src-tauri/resources/licenses/), fresh for this platform's dependencies.
+python3 "$ROOT/scripts/third-party-licenses.py"
 
 npm run tauri build -- "$@"
 

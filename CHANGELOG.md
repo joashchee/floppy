@@ -8,6 +8,23 @@ against the day the change was made.
 
 ## Unreleased
 
+- **Caught up with the other ansiapps apps** (2026-10-03):
+  - **In-development warning on first run.** Before any window, a native
+    dialog says Floppy is still in development, use at your own risk.
+    **OK** opens Floppy and is remembered; **I'll Be Back.** quits having
+    created nothing (`first_run.rs`; the window is now built only after
+    OK, and a command-line import or the old-media watcher waits for it).
+  - The gear menu's theme toggle reads just **ANSIapps theme**.
+  - **Every license text ships in the app** (as in the other ansiapps
+    apps): `scripts/third-party-licenses.py` writes
+    `src-tauri/resources/licenses/third-party-licenses.txt` (each linked
+    crate's and npm package's license, plus the font's) and `GPL-2.0.txt`,
+    bundled as resources. About has **Show Licenses**. `build-release.sh`
+    regenerates it per platform and remaps a custom `CARGO_HOME` too.
+  - **ANSIapps buttons are just clickable:** flat green bars with no
+    `▄`/`▀` shadow that never move when pressed (a moving button could
+    lose the click). Pressed shows black on cyan.
+
 - **`--bundles app` builds no longer fail on a stale DMG folder**
   (2026-09-29): `sign-macos.sh` rebuilt the DMG whenever `bundle/dmg/`
   existed, so a folder left by an earlier DMG build sent an app-only

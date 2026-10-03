@@ -13,6 +13,7 @@
     "windows": [
       {
         "title": "Floppy",
+        "create": false,
         "width": 900,
         "height": 640,
         "minWidth": 480,
@@ -33,7 +34,8 @@
     "resources": {
       "resources/dosbox/": "dosbox/",
       "resources/fs-uae/": "fs-uae/",
-      "resources/basilisk/": "basilisk/"
+      "resources/basilisk/": "basilisk/",
+      "resources/licenses/": "licenses/"
     },
     "icon": [
       "icons/32x32.png",

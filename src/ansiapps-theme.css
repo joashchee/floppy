@@ -231,7 +231,15 @@
 :root[data-theme="ansiapps"] .system-note.warn,
 :root[data-theme="ansiapps"] .about-emulators li span.warn { color: var(--dos-lightred); background: var(--dos-black); }
 
-/* ── Buttons: Turbo Vision's green bar with a ▄ and ▀▀▀ shadow ─────── */
+/* ── Buttons are just clickable: flat green bars ───────────────────── */
+/* No shadow, and a pressed button never moves (docs/ansiapps-theme.md,
+   "Buttons are just clickable", decided 2026-09-30 in Coupler; it replaces
+   Turbo Vision's ▄/▀ shadow and one-column press). A button that moved
+   could lose the click (its hit box moved with it). State shows by color
+   alone: light green (white on a primary) under the pointer, black on cyan
+   while the mouse is down, dark gray on light gray when disabled. The
+   margins keep a cell between buttons in a row and a blank row under
+   stacked ones. */
 
 :root[data-theme="ansiapps"] button {
   position: relative;
@@ -243,50 +251,17 @@
   margin: 0 1ch 16px 0;
   gap: 1ch;
 }
-:root[data-theme="ansiapps"] button::after {
-  content: "▄" / "";
-  position: absolute;
-  left: 100%;
-  top: 0;
-  width: 1ch;
-  color: var(--dos-black);
-  pointer-events: none;
-}
-:root[data-theme="ansiapps"] button::before {
-  content: "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀" / "";
-  position: absolute;
-  top: 100%;
-  left: 1ch;
-  right: -1ch;
-  height: 16px;
-  overflow: hidden;
-  white-space: pre;
-  color: var(--dos-black);
-  pointer-events: none;
-}
-/* Pressed: the face moves into its shadow, which disappears */
-:root[data-theme="ansiapps"] button:active:not(:disabled) { transform: translateX(1ch); }
-:root[data-theme="ansiapps"] button:active:not(:disabled)::before,
-:root[data-theme="ansiapps"] button:active:not(:disabled)::after { content: none; }
 :root[data-theme="ansiapps"] button:hover:not(:disabled) { background: var(--dos-lightgreen); }
 :root[data-theme="ansiapps"] button.primary { background: var(--dos-lightgreen); color: var(--dos-black); }
 :root[data-theme="ansiapps"] button.primary:hover:not(:disabled) { background: var(--dos-white); }
 :root[data-theme="ansiapps"] button.danger { background: var(--dos-red); color: var(--dos-white); }
 :root[data-theme="ansiapps"] button:disabled { opacity: 1; background: var(--dos-lightgray); color: var(--dos-darkgray); }
+:root[data-theme="ansiapps"] button:active:not(:disabled) { background: var(--dos-cyan); color: var(--dos-black); }
 
-/* Rows, tiles and menu items are buttons too, but flat, with no shadow */
+/* Rows, tiles and menu items are buttons too, with no gap around them */
 :root[data-theme="ansiapps"] .menu-item,
 :root[data-theme="ansiapps"] .app-row,
 :root[data-theme="ansiapps"] .guest-tile { margin: 0; }
-:root[data-theme="ansiapps"] .menu-item::before,
-:root[data-theme="ansiapps"] .menu-item::after,
-:root[data-theme="ansiapps"] .app-row::before,
-:root[data-theme="ansiapps"] .app-row::after,
-:root[data-theme="ansiapps"] .guest-tile::before,
-:root[data-theme="ansiapps"] .guest-tile::after { content: none; }
-:root[data-theme="ansiapps"] .menu-item:active,
-:root[data-theme="ansiapps"] .app-row:active,
-:root[data-theme="ansiapps"] .guest-tile:active { transform: none !important; }
 
 /* ── Messages ──────────────────────────────────────────────────────── */
 

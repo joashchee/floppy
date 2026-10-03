@@ -890,6 +890,13 @@ function App() {
     });
   }
 
+  async function revealLicenses() {
+    await act(`${SHOW_IN_FILES}…`, async () => {
+      await revealItemInDir(await invoke<string>("licenses_file"));
+      setMessage("Showed the license list.");
+    });
+  }
+
   async function pickFindings() {
     const picked = await open({ multiple: true, title: "Learn from Floppy findings", filters: [{ name: "Findings", extensions: ["zip", "json"] }] });
     if (Array.isArray(picked)) for (const p of picked) await learnFindings(p);
@@ -1661,7 +1668,7 @@ function App() {
                   checked={theme === "ansiapps"}
                   onChange={(e) => setTheme(e.currentTarget.checked ? "ansiapps" : "modern")}
                 />
-                <span>ANSIapps theme (old-school DOS look)</span>
+                <span>ANSIapps theme</span>
               </label>
               <button
                 type="button"
@@ -2589,6 +2596,18 @@ function App() {
           The ANSIapps theme's font is IBM VGA 8x16 from The Ultimate Oldschool PC Font Pack by VileR
           (int10h.org/oldschool-pc-fonts), licensed under CC BY-SA 4.0 and included unmodified.
         </p>
+        <p>
+          Floppy is free software under the GNU GPL, version 2 or later. The license texts of every open-source
+          library it includes, and the GPL that Floppy and its bundled emulators are under, come with the app.
+        </p>
+        <div className="detail-actions">
+          <button type="button" className="icontext-btn" onClick={() => void revealLicenses()}>
+            <span className="btn-icon">
+              <FolderIcon />
+            </span>
+            Show Licenses
+          </button>
+        </div>
       </Dialog>
 
       <Dialog

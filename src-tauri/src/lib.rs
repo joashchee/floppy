@@ -12,6 +12,7 @@ mod dos;
 mod e2e;
 mod emulator;
 mod findings;
+mod first_run;
 mod handlers;
 mod iso;
 mod known_files;
@@ -32,6 +33,47 @@ use commands::{AppState, StartupImport};
 use library::Library;
 use tauri::Manager;
 
+/// Opens the library, runs a command-line import, starts the old-media
+/// watcher and opens the main window. Runs from `setup`, or once the
+/// first-run warning is accepted.
+fn start(app: &tauri::AppHandle, app_data_dir: std::path::PathBuf) {
+    let library = Library::new(app_data_dir.join("library"));
+    learned::load(&library);
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let startup = match cli::parse(&args) {
+        cli::Cli::None => None,
+        cli::Cli::Import { os, path } => Some(match library.import(os, &path) {
+            Ok(a) => StartupImport { app: Some(a), document: None, error: None },
+            Err(e) => StartupImport { app: None, document: None, error: Some(e) },
+        }),
+        cli::Cli::Open { os, path } => Some(match library.import_document(os, &path) {
+            Ok(d) => StartupImport { app: None, document: Some(d), error: None },
+            Err(e) => StartupImport { app: None, document: None, error: Some(e) },
+        }),
+        cli::Cli::Error(e) => Some(StartupImport { app: None, document: None, error: Some(e) }),
+    };
+    let media = Arc::new(media::MediaWatch::default());
+    #[cfg(target_os = "macos")]
+    {
+        use tauri::Emitter;
+        let handle = app.clone();
+        media::watch(media.clone(), move |list| {
+            let _ = handle.emit("old-media-changed", list);
+        });
+    }
+    app.manage(media);
+    app.manage(AppState {
+        library,
+        running: Arc::new(Mutex::new(HashMap::new())),
+        children: Arc::new(Mutex::new(HashMap::new())),
+        startup: Mutex::new(startup),
+    });
+    let config = &app.config().app.windows[0];
+    tauri::WebviewWindowBuilder::from_config(app, config)
+        .and_then(|builder| builder.build())
+        .expect("failed to create the main window");
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -42,38 +84,18 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let app_data_dir = app.path().app_data_dir().expect("failed to resolve app data dir");
-            let library = Library::new(app_data_dir.join("library"));
-            learned::load(&library);
-            let args: Vec<String> = std::env::args().skip(1).collect();
-            let startup = match cli::parse(&args) {
-                cli::Cli::None => None,
-                cli::Cli::Import { os, path } => Some(match library.import(os, &path) {
-                    Ok(a) => StartupImport { app: Some(a), document: None, error: None },
-                    Err(e) => StartupImport { app: None, document: None, error: Some(e) },
-                }),
-                cli::Cli::Open { os, path } => Some(match library.import_document(os, &path) {
-                    Ok(d) => StartupImport { app: None, document: Some(d), error: None },
-                    Err(e) => StartupImport { app: None, document: None, error: Some(e) },
-                }),
-                cli::Cli::Error(e) => Some(StartupImport { app: None, document: None, error: Some(e) }),
-            };
-            let media = Arc::new(media::MediaWatch::default());
-            #[cfg(target_os = "macos")]
-            {
-                use tauri::Emitter;
-                let handle = app.handle().clone();
-                media::watch(media.clone(), move |list| {
-                    let _ = handle.emit("old-media-changed", list);
-                });
-            }
-            app.manage(media);
+            // Files opened with Floppy queue here even while the first-run
+            // warning is up, so none are lost.
             app.manage(request::Opened::default());
-            app.manage(AppState {
-                library,
-                running: Arc::new(Mutex::new(HashMap::new())),
-                children: Arc::new(Mutex::new(HashMap::new())),
-                startup: Mutex::new(startup),
-            });
+            // The main window has `"create": false` in tauri.conf.json, so
+            // nothing is imported, watched or drawn until the first-run
+            // warning (first_run.rs) is answered.
+            if first_run::accepted(&app_data_dir) {
+                start(app.handle(), app_data_dir);
+            } else {
+                let dir = app_data_dir.clone();
+                first_run::ask(app.handle(), &app_data_dir, move |handle| start(handle, dir));
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -123,6 +145,7 @@ pub fn run() {
             commands::ai_info,
             commands::start_guest,
             commands::learned_folder,
+            commands::licenses_file,
             commands::take_startup_import,
             commands::launch_app,
             commands::open_document,

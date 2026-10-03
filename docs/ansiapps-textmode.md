@@ -372,7 +372,7 @@ Map the other components onto real controls **[I]**:
 | Component | Faithful text rendering | Underlying control |
 |---|---|---|
 | Window shadow | two `backdrop-filter: brightness(.35)` strips, 16 px wide on the right and 16 px tall below, offset 16 px (recolours rather than hides what's beneath); cheap version `box-shadow: 16px 16px 0 rgb(0 0 0/.6)` in exact cell multiples | none (decorative) |
-| Button | label plus `aria-hidden` `▄` and ` ▀▀▀▀`; `:active` drops the shadow and shifts the label one column right | `<button>` |
+| Button | label plus `aria-hidden` `▄` and ` ▀▀▀▀`; `:active` drops the shadow and shifts the label one column right. **Not used by the ansiapps apps:** since 2026-09-30 their buttons are flat and never move, showing state by color alone (`ansiapps-theme.md`, "Buttons are just clickable") | `<button>` |
 | Checkbox / radio | `[X]` / `(•)` in `label::before` (the 98.css pattern **[S]**: [98.css](https://github.com/jdan/98.css/blob/main/style.css)) | real input with `opacity: 0`, still focusable |
 | Scroll bar | `aria-hidden` column `▲▒▒■▒▒▼` synced on `scroll`; scroll in 16 px steps | native scrolling container, native bar hidden (WebKit scrollbar pseudo-elements can't hold text) |
 | Progress | `"█".repeat(n)+"░".repeat(cols-n)`, or WebTUI's `round(nearest, …, 1ch)` fill **[S]** | `<progress>` or `role="progressbar"` |
