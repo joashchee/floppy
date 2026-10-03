@@ -99,6 +99,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            commands::export_app_testing_report,
             commands::list_apps,
             commands::import_app,
             commands::remove_app,

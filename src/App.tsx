@@ -9,10 +9,13 @@ import { applyTheme, loadTheme, type Theme } from "./lib/theme";
 import { isLinux, SHOW_IN_FILES } from "./lib/platform";
 import { ActivityStatus } from "./components/ActivityStatus";
 import { StartupScreen } from "./components/StartupScreen";
+import { AppTesting } from "./components/AppTesting";
+import { checkGrid, installRowSnap } from "./lib/grid";
 import { type ActivityUpdate, useActivities } from "./lib/activity";
 import {
   AmigaAppIcon,
   AppMarkIcon,
+  ChecklistIcon,
   ChipIcon,
   DiscIcon,
   DosAppIcon,
@@ -390,6 +393,8 @@ function App() {
   const [backup, setBackup] = useState<BackupStatus | null>(null);
   const [backupOpen, setBackupOpen] = useState(false);
   const [theme, setTheme] = useState<Theme>(loadTheme);
+  // Dev-only (gear menu, behind import.meta.env.DEV): the App Testing checklist.
+  const [appTestingOpen, setAppTestingOpen] = useState(false);
   const gearRef = useRef<HTMLDivElement>(null);
   const [nameDraft, setNameDraft] = useState("");
 
@@ -521,6 +526,47 @@ function App() {
     setGearOpen(false);
     action();
   }
+
+  // The ANSIapps theme's scrolling rests on a whole row (lib/grid.ts).
+  useEffect(installRowSnap, []);
+
+  /**
+   * Dev-only: is everything showing on the ANSIapps theme's grid? It
+   * measures the window as it is, an open dialog included.
+   */
+  function devGridCheck() {
+    if (theme !== "ansiapps") {
+      setMessage(null);
+      setError("The grid belongs to the ANSIapps theme. Switch to it, then check.");
+      return;
+    }
+    // After the menu has closed, so it measures what's left showing.
+    requestAnimationFrame(() => {
+      const { checked, off } = checkGrid();
+      if (off.length > 0) {
+        setMessage(null);
+        setError(`Dev grid check: ${off.length} of ${checked} off the grid, outlined. ${off.slice(0, 4).join("; ")}`);
+      } else {
+        setError(null);
+        setMessage(`Dev grid check: all ${checked} texts and controls showing are on the grid.`);
+      }
+    });
+  }
+  const gridCheckRef = useRef<(() => void) | null>(null);
+  // Only in a dev build, so a production build drops the check entirely.
+  if (import.meta.env.DEV) gridCheckRef.current = devGridCheck;
+  // Its key works with a dialog open, which the gear menu can't reach.
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.metaKey && e.ctrlKey && e.key.toLowerCase() === "g") {
+        e.preventDefault();
+        gridCheckRef.current?.();
+      }
+    };
+    document.addEventListener("keydown", onKey, true);
+    return () => document.removeEventListener("keydown", onKey, true);
+  }, []);
 
   useEffect(() => {
     setNameDraft(selected?.name ?? "");
@@ -1773,6 +1819,19 @@ function App() {
                 <InfoIcon />
                 <span>About Floppy</span>
               </button>
+              {import.meta.env.DEV && (
+                <>
+                  <div className="menu-sep" />
+                  <button type="button" className="menu-item" onClick={() => fromGear(() => setAppTestingOpen(true))}>
+                    <ChecklistIcon />
+                    <span>App Testing</span>
+                  </button>
+                  <button type="button" className="menu-item" data-testid="grid-check" onClick={() => fromGear(devGridCheck)}>
+                    <ChecklistIcon />
+                    <span>Check the Grid (Ctrl+Cmd+G)</span>
+                  </button>
+                </>
+              )}
             </div>
           </div>
         </div>
@@ -2557,6 +2616,7 @@ function App() {
         <p>These are your own copies of copyrighted system software: keep the disc for yourself.</p>
       </Dialog>
 
+      {import.meta.env.DEV && <AppTesting open={appTestingOpen} onClose={() => setAppTestingOpen(false)} />}
       <Dialog open={aboutOpen} onClose={() => setAboutOpen(false)} title={`About Floppy v${__APP_VERSION__}`}>
         <p>Run the old apps your files need, in the OS they were made for.</p>
         <ul className="about-emulators">

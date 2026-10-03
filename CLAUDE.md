@@ -539,6 +539,16 @@ gitignored `CLAUDE.local.md`, never in committed files.
   copy (`rm -rf src-tauri/target/debug/dosbox`) and rebuild; it happens
   in and out of the sandbox alike.
 - `npx tsc --noEmit` for the frontend.
+- **In-app App Testing checklist, dev-only (all ansiapps apps).**
+  `src/lib/testChecklist.ts` holds `CHECKLIST_DATA` (grouped items, each
+  with an optional selector for **Go to app**); `components/AppTesting.tsx`
+  (Diskette's, the family's source) renders it from the gear menu. Mark
+  items Done or Bug with a note; **Export results…** writes a plain-text
+  report (status and notes only, nothing from the library) through
+  `export_app_testing_report`. App.tsx mounts it and its gear items only
+  behind `import.meta.env.DEV`, so a release build drops it. Edit
+  `CHECKLIST_DATA` in the same pass as the feature it covers, and drop an
+  item once it's confirmed working.
 - Run all three before calling a change done. A bug report becomes a
   failing test first, then the fix.
 - In Claude Code's sandbox, `~/.cargo` and `~/.npm` aren't writable. Use
@@ -686,7 +696,15 @@ gitignored `CLAUDE.local.md`, never in committed files.
   of the palette's pairs pass), icons and frames need 3:1, and a warning
   that can land on several backgrounds gets its own black cell. Motion
   is whole-cell frames only: at most 3 flashes a second, a still frame
-  under reduced motion. **Buttons are just clickable:** flat bars
+  under reduced motion. **The grid is the rule** (family-wide since
+  2026-09-30): every character in a cell of the 8×16 grid counted from
+  the window's top left; nothing centered by the browser (center by
+  whole cells with `round()`), rows aligned to their top, the page's
+  width rounded to whole cells, scrolling resting on a whole row
+  (`lib/grid.ts`). After any change to `ansiapps-theme.css` or UI
+  markup, run a dev build's gear → **Check the Grid** (Ctrl+Cmd+G) on
+  every tab and dialog (`docs/ansiapps-theme.md`, "The grid").
+  **Buttons are just clickable:** flat bars
   with no shadow that never move when pressed, state by color alone
   (decided 2026-09-30 in Coupler, the family's rule). The how-to, with glyph tables, the exact 16-color palette and
   Turbo Vision's component recipes, is `docs/ansiapps-textmode.md`;

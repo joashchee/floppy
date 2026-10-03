@@ -213,3 +213,16 @@ export function InfoIcon(props: IconProps) {
     </>
   );
 }
+
+/** A checklist: the dev-only App Testing overlay and grid check. */
+export function ChecklistIcon(props: IconProps) {
+  return (
+    <>
+    <svg viewBox="0 0 24 24" {...props} className={svgClass(props)}>
+      <rect {...stroke} x="4" y="3" width="16" height="18" rx="2" />
+      <path {...stroke} d="M8 8.5l1.5 1.5L12 7M14.5 9h3M8 14.5l1.5 1.5L12 13M14.5 15h3" />
+    </svg>
+    <span className="icon-glyph" aria-hidden="true">√</span>
+    </>
+  );
+}

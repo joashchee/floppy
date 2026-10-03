@@ -8,10 +8,11 @@
    screen is a grid of 8x16 cells: the font at 16px, rows 16px, spacing
    in whole cells (1ch = 8px, 16px = one row). Frames, titles and shadows
    are aria-hidden layers of CP437 box characters (lib/textmode.ts);
-   buttons draw Turbo Vision's ▄/▀ shadow and checkboxes their [X] in
-   generated text marked as empty alt text; icons are CP437 glyphs
+   buttons are flat bars; checkboxes draw their [X] in generated text
+   marked as empty alt text; icons are CP437 glyphs
    (components/icons.tsx); bars are █ over ░. No CSS borders, box
-   shadows, rounded corners, SVG or images.
+   shadows, rounded corners, SVG or images. Everything sits on the 8x16
+   grid ("The grid", at the end).
 
    Colors: the 16 CGA/VGA text-mode colors only. Blue "desktop" panels
    in the Norton Commander mold, light-gray Turbo Vision menus and
@@ -367,6 +368,28 @@
 :root[data-theme="ansiapps"] .startup-glyph { color: var(--accent); }
 :root[data-theme="ansiapps"] .startup-label { color: var(--dos-lightgray); font-family: var(--font-mono); }
 :root[data-theme="ansiapps"] .startup-progress { height: 16px; }
+/* On the grid (keep index.html's copy in step): from a whole row near the
+   middle, each line centered by whole cells, left: 50% rounded to a cell
+   and back by half its own width rounded to one, never by the browser,
+   which lands an odd width half a cell off. Four rows: glyph, name, bar,
+   label, a blank row between. */
+:root[data-theme="ansiapps"] .startup-screen {
+  align-items: flex-start;
+  justify-content: flex-start;
+  padding-top: round(down, calc(50vh - 64px), 16px);
+}
+:root[data-theme="ansiapps"] .startup-progress { margin: 0; }
+:root[data-theme="ansiapps"] .startup-glyph,
+:root[data-theme="ansiapps"] .startup-name,
+:root[data-theme="ansiapps"] .startup-progress,
+:root[data-theme="ansiapps"] .startup-label {
+  position: relative;
+  left: round(down, 50%, 8px);
+  width: max-content;
+  min-height: 16px;
+  transform: translateX(round(down, -50%, 8px));
+}
+:root[data-theme="ansiapps"] .startup-progress { width: 224px; }
 
 /* ── Guest tiles: single-line boxes; the chosen guest is the cyan bar ─ */
 
@@ -483,3 +506,153 @@
 :root[data-theme="ansiapps"] .drop-overlay.split .drop-box small { color: var(--dos-lightgray); }
 :root[data-theme="ansiapps"] .drop-overlay.split .drop-box.active { --text: var(--dos-black); --muted: var(--dos-black); --accent: var(--dos-black); --tm-frame: var(--dos-black); --tm-title: var(--dos-black); background: var(--dos-cyan); color: var(--dos-black); }
 :root[data-theme="ansiapps"] .drop-overlay.split .drop-box.active small { color: var(--dos-black); }
+
+/* ── The grid (docs/ansiapps-theme.md, "The grid") ─────────────────── */
+/* Every character sits in a cell of the 8x16 grid, counted from the
+   window's top left, the way a text-mode screen works (the family's rule,
+   decided 2026-09-30 in Coupler). What that takes here, on top of the
+   16px rows above:
+   - every width, padding, margin and gap a multiple of 8px across and
+     16px down;
+   - the page itself in whole cells from the window's left: no browser
+     centering (margin: auto), which lands it half a cell off on an odd
+     width, and a width rounded down to whole cells, so the frames' right
+     edges are whole ║ too;
+   - a row of things lines up along its top, never its middle: beside a
+     button with its blank row under it, or text that wraps, a centered
+     item sits half a row down;
+   - dialogs and the drop targets have a fixed place from the top left;
+     what's centered (the launch screen, a frame's title) is centered by
+     whole cells;
+   - scrolling rests on a whole row (lib/grid.ts, installRowSnap).
+   Dev builds check it: gear → Check the Grid (Ctrl+Cmd+G), lib/grid.ts. */
+
+:root[data-theme="ansiapps"] .app {
+  max-width: none;
+  width: round(down, 100%, 8px);
+  margin: 0;
+  /* 160 columns at most, centered by whole cells on a wider window */
+  padding: 16px max(16px, round(down, calc((100% - 1280px) / 2), 8px)) 48px;
+}
+:root[data-theme="ansiapps"] header.top { margin-bottom: 16px; gap: 0 2ch; }
+:root[data-theme="ansiapps"] .title-group { gap: 0 1ch; }
+:root[data-theme="ansiapps"] .app-mark { width: auto; height: 16px; vertical-align: top; }
+:root[data-theme="ansiapps"] .version-tag { vertical-align: top; }
+:root[data-theme="ansiapps"] .header-actions { gap: 0 1ch; }
+:root[data-theme="ansiapps"] .gear-menu-wrap { display: flex; }
+
+/* Hang from the line's top: on the baseline, a button or field makes room
+   under itself for the letters' descenders and the line grows past 16px. */
+:root[data-theme="ansiapps"] button,
+:root[data-theme="ansiapps"] input,
+:root[data-theme="ansiapps"] select,
+:root[data-theme="ansiapps"] textarea { vertical-align: top; }
+/* One row tall: WebKit sizes a field or picker by its font, not by the
+   16px line alone. */
+:root[data-theme="ansiapps"] input:not([type="checkbox"]):not([type="radio"]),
+:root[data-theme="ansiapps"] select { height: 16px; }
+
+/* Rows line up along their tops */
+:root[data-theme="ansiapps"] :is(
+  header.top, .header-actions, .title-group, .menu-item, .app-row, .guest-tile, .guest-start,
+  .system-row, .setup-source, .setup-drop, .list-heading, .session-report-head, .session-report li,
+  .verify-row, .field-check, .drop-option, button.icontext-btn, .detail-actions, .dialog-actions,
+  .testing-item, .testing-bug-draft, .testing-tally, .about-emulators li, .scan-status-row
+) { align-items: flex-start !important; }
+
+/* Vertical spacing in whole rows */
+:root[data-theme="ansiapps"] .panel { margin-bottom: 0; }
+:root[data-theme="ansiapps"] .toolbar { gap: 0 1ch; margin-bottom: 16px; }
+:root[data-theme="ansiapps"] .scan-status-row { gap: 0; margin-bottom: 16px; }
+:root[data-theme="ansiapps"] .app-details { gap: 16px; }
+:root[data-theme="ansiapps"] .details-grid { gap: 0 2ch; }
+:root[data-theme="ansiapps"] .dialog-box .field { margin-top: 16px; }
+:root[data-theme="ansiapps"] .drop-remember { margin-bottom: 16px; }
+:root[data-theme="ansiapps"] .list-heading { margin: 16px 0 0; gap: 0 1ch; }
+:root[data-theme="ansiapps"] .session-report { margin-bottom: 16px; }
+:root[data-theme="ansiapps"] .session-report ul { margin: 16px 0 0; gap: 0; }
+:root[data-theme="ansiapps"] .session-report li { gap: 0 1ch; }
+:root[data-theme="ansiapps"] .session-report-head { gap: 0 1ch; }
+:root[data-theme="ansiapps"] .verify-row { margin-top: 16px; gap: 0 1ch; }
+/* The question takes its own row, so the field and buttons after it start
+   on a whole cell rather than wherever the sentence's width ends. */
+:root[data-theme="ansiapps"] .verify-row span { flex: 1 1 100%; }
+:root[data-theme="ansiapps"] .verify-row input { flex: 0 1 25ch; }
+:root[data-theme="ansiapps"] .guest-start .system-note { flex: 1 1 100%; }
+:root[data-theme="ansiapps"] .about-section-title { margin: 16px 0 0; }
+:root[data-theme="ansiapps"] .about-emulators { margin: 0 0 16px; }
+:root[data-theme="ansiapps"] .about-emulators li { padding: 0; gap: 0 2ch; }
+:root[data-theme="ansiapps"] .setup-drop { gap: 0 1ch; margin-bottom: 16px; }
+
+/* Setup boxes: rows wrap a whole row apart, labels in whole cells */
+:root[data-theme="ansiapps"] .system-row { gap: 0 1ch; }
+:root[data-theme="ansiapps"] .system-row .system-label { width: 12ch; }
+:root[data-theme="ansiapps"] .system-row .system-value { min-width: 15ch; }
+:root[data-theme="ansiapps"] .setup-sources { gap: 0; }
+:root[data-theme="ansiapps"] .setup-sources ul { gap: 16px; }
+:root[data-theme="ansiapps"] .setup-source { gap: 0 1ch; }
+:root[data-theme="ansiapps"] .source-kind { margin-right: 1ch; }
+
+/* Guest tiles: whole-cell columns (a 1fr track is any width), contents
+   from the top */
+:root[data-theme="ansiapps"] .guest-tiles { grid-template-columns: repeat(auto-fill, 24ch); }
+:root[data-theme="ansiapps"] .guest-tile-icon { width: auto; height: 16px; }
+:root[data-theme="ansiapps"] .guest-tile-main { gap: 0; }
+
+/* The gear menu: whole cells wide */
+:root[data-theme="ansiapps"] .gear-menu { min-width: 40ch; max-width: round(down, calc(100vw - 4ch), 8px); }
+
+/* Dialogs: a fixed place and width in cells, from the window's top left,
+   not centered on the window's height (an odd height lands them half a
+   row off). The overlay scrolls a tall one. */
+:root[data-theme="ansiapps"] .dialog-overlay {
+  display: block;
+  padding: 48px 0 16px;
+}
+:root[data-theme="ansiapps"] .dialog-box {
+  width: min(58ch, round(down, calc(100% - 6ch), 8px));
+  max-width: none;
+  margin: 0 0 16px max(2ch, round(down, calc((100% - 58ch) / 2), 8px));
+}
+:root[data-theme="ansiapps"] .dialog-actions { justify-content: flex-start; }
+
+/* The drop overlay: its targets from the top left, their text at the left */
+:root[data-theme="ansiapps"] .drop-overlay { padding: 48px 4ch; align-items: flex-start; justify-content: flex-start; }
+:root[data-theme="ansiapps"] .drop-box { text-align: left; }
+:root[data-theme="ansiapps"] .drop-box small { margin-top: 16px; }
+:root[data-theme="ansiapps"] .drop-overlay.split { gap: 0 2ch; align-items: flex-start; }
+:root[data-theme="ansiapps"] .drop-overlay.split .drop-box {
+  flex: 0 0 round(down, calc((100% - 2ch) / 2), 8px);
+  justify-content: flex-start;
+}
+
+/* A frame's title, centered by whole cells: the run of ═ before it is
+   rounded down to whole cells (lib/textmode.ts sets --tm-title-cells). */
+:root[data-theme="ansiapps"] .tm-top .tm-fill:has(+ .tm-title) {
+  flex: none;
+  width: max(0px, round(down, calc((100% - 2ch - var(--tm-title-cells, 0) * 1ch) / 2), 8px));
+}
+
+/* App Testing (dev-only) */
+:root[data-theme="ansiapps"] .testing-tally { gap: 0 2ch; margin: 0 0 16px; }
+:root[data-theme="ansiapps"] .testing-item-list { gap: 16px; margin: 0 0 16px; }
+:root[data-theme="ansiapps"] .testing-item { padding: 0; gap: 0 1ch; }
+:root[data-theme="ansiapps"] .testing-item-label { flex: 1 1 100%; }
+:root[data-theme="ansiapps"] .testing-item-done { opacity: 1; --text: var(--dos-blue); color: var(--dos-blue); }
+:root[data-theme="ansiapps"] .testing-item-actions,
+:root[data-theme="ansiapps"] .testing-bug-draft { gap: 0 1ch; }
+/* A bug note: light red on its own black cell (6.7:1); on the gray dialog
+   light red alone is too faint */
+:root[data-theme="ansiapps"] .testing-item-note { color: var(--dos-lightred); background: var(--dos-black); padding: 0 1ch; margin-bottom: 16px; }
+:root[data-theme="ansiapps"] .testing-bug-draft textarea {
+  flex: 1 1 100%;
+  min-height: 32px;
+  margin-bottom: 16px;
+  padding: 0 1ch;
+  background: var(--dos-black);
+  color: var(--dos-lightgray);
+  caret-color: var(--dos-white);
+  resize: none;
+}
+:root[data-theme="ansiapps"] .testing-highlight { outline: 2px dashed var(--dos-yellow) !important; }
+:root[data-theme="ansiapps"] .grid-off { outline: 2px solid var(--dos-lightmagenta) !important; }

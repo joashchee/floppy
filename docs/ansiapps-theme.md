@@ -50,7 +50,8 @@ palette, Turbo Vision recipes, web rendering); these are its rules:
 
 - **Grid:** the font at exactly 16px, rows exactly 16px (`line-height:
   16px`), every box sized and placed in whole cells (`ch`, `lh`), so
-  every glyph starts on a whole pixel and stacked `│ ║ █` touch.
+  every glyph starts on a whole cell and stacked `│ ║ █` touch. See
+  "The grid" under Current rules.
 - **Frames:** CP437 box-drawing characters only (the 40 that exist:
   single, double, and single/double mixes; no rounded, heavy or dashed
   lines). Double for the active window or dialog, single for inactive
@@ -58,8 +59,9 @@ palette, Turbo Vision recipes, web rendering); these are its rules:
   the top border with a space each side.
 - **Shadows:** cells, not blur: 2 columns right and 1 row down, dark
   gray on black with the characters under them still showing.
-- **Buttons:** Turbo Vision style: the face on one row, its shadow `▄`
-  beside it and `▀▀▀` below; pressed moves the face and drops the shadow.
+- **Buttons:** one row, flat, no shadow, never moving when pressed
+  ("Buttons are just clickable" below; Turbo Vision's `▄`/`▀` shadow
+  and press are retired family-wide).
 - **Controls:** `[ ]`/`[X]`, `( )`/`(•)`, input lines as colored strips,
   dropdowns with `▐↓▌`, scroll bars `▲▒■▼`, progress `█▓▒░`.
 - **Icons:** CP437 glyphs (`☺ ♪ ☼ ■ ≡ ► ▲ ↕ ⌂`…), not SVG.
@@ -77,16 +79,16 @@ palette, Turbo Vision recipes, web rendering); these are its rules:
   `aria-hidden` layer of box characters: top and bottom rows of long
   `═`/`─` runs in a flex row that CSS clips to the box, `║`/`│` columns
   for the sides, the title (from the box's real heading, which stays for
-  screen readers but is visually hidden) centered in the top border, and
+  screen readers but is visually hidden) centered by whole cells in the
+  top border (the run before it is rounded down to whole cells, from
+  `--tm-title-cells`), and
   for windows and menus Turbo Vision's shadow, two cells of `█` right and
   one row below in black. Nothing is measured, so frames follow any size.
   A MutationObserver decorates boxes as React renders them;
   `stopTextMode()` removes every layer when the theme goes back to
   modern.
-- **Buttons**: Turbo Vision's green bar, with `▄` beside it and a row of
-  `▀` under it, drawn as CSS generated text with empty alt text
-  (`content: "▄" / ""`) so screen readers skip it. Pressed, the face
-  moves one cell right and the shadow goes.
+- **Buttons**: flat green bars one row tall, a cell of padding each
+  side, a cell between buttons in a row and a blank row under them.
 - **Icons**: each icon in `components/icons.tsx` renders a CP437 twin
   (`☺ ☻ ○ ■ ¶ ► » ≡ ↑ ◘ ▬ ◙ i x`), shown instead of the SVG.
 - **Rules and separators**: rows of `─`; the gear menu's separators join
@@ -95,7 +97,8 @@ palette, Turbo Vision recipes, web rendering); these are its rules:
   gets a `▼` cell (`.tm-arrow`) over its right end; status pills and
   source kinds as `[text]`.
 - **Progress**: `█` over a `░` track.
-- **Grid**: 16px font, 16px rows everywhere, spacing in whole cells.
+- **Grid**: 16px font, 16px rows everywhere, spacing in whole cells,
+  the page in whole cells from the window's left (see "The grid").
 
 What's still drawn by the platform: the page scrollbars (styled in
 text-mode colors), native tooltips, and the dimmed overlay behind a
@@ -128,6 +131,28 @@ dialog (a color, like an attribute change).
   (its hit box moves with it). State shows by color alone: light green
   (white on a primary button) under the pointer, black on cyan while
   the mouse is down, dark gray on light gray when disabled.
+- **The grid** (the family's rule, decided 2026-09-30, first built in
+  Coupler; Floppy's pass 2026-10-03): **every character sits in a cell
+  of the 8 by 16 grid**, counted from the window's top left. Every
+  width, padding, margin and gap is a multiple of 8px across and 16px
+  down. Nothing that holds text has a border (Floppy draws every frame
+  as a text layer). Buttons and fields are one row tall. **The browser
+  never centers anything**: the page has no `margin: auto` (it's placed
+  with padding rounded to whole cells, at most 160 columns wide, and its
+  width is rounded down to whole cells so frames' right edges are whole
+  `║` too), dialogs sit a fixed three rows from the top, 58 cells wide
+  at most, placed by whole cells; the drop targets start at the top
+  left; and what is centered (the launch screen's lines, a frame's
+  title) is centered by whole cells with CSS `round()`. A row of things
+  lines up along its **top**, never its middle, and a sentence that
+  ends at any width takes its own row so the controls after it start on
+  a cell. Scrolling, the page's included, comes to rest on a whole row
+  (`lib/grid.ts`, `installRowSnap`). Every character shown is one the
+  font has (no Mac key symbols: write `Ctrl+Cmd+G`). **Check it**: a
+  dev build's gear → **Check the Grid** (Ctrl+Cmd+G, which works with a
+  dialog open too; `checkGrid` in `lib/grid.ts`) measures everything
+  showing and outlines what's off in light magenta. Run it on each tab
+  and dialog after any change to the theme's CSS or to UI markup.
 - **Selection**: list rows are borderless lines, and the selected one
   (an app, a document, the chosen guest) is a cyan bar with black
   text. Menus highlight in green.

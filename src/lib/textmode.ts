@@ -16,7 +16,9 @@
  * Nothing is measured. Each border row is a flex row of long runs of `═`
  * or `─` that CSS clips to the box, and each side a clipped column of
  * `║` or `│`, so the frame follows any size and never needs redrawing on
- * resize. Buttons draw their own `▄`/`▀` shadow in CSS (ansiapps-theme.css).
+ * resize. The run before a title is rounded down to whole cells, so the
+ * title starts on one (the grid: docs/ansiapps-theme.md). Buttons are flat
+ * bars with no shadow (ansiapps-theme.css).
  *
  * A MutationObserver decorates boxes as React renders them, and
  * `stopTextMode` removes every layer, so the modern theme is untouched.
@@ -82,6 +84,9 @@ function buildFrame(rule: FrameRule, title: string): HTMLSpanElement {
   if (rule.kind !== "none") {
     const g = GLYPHS[rule.kind];
     const top = span("tm-row tm-top");
+    // The title is centered by whole cells (ansiapps-theme.css), so the
+    // run before it needs the title's width in cells: one per character.
+    if (title) top.style.setProperty("--tm-title-cells", String([...` ${title} `].length));
     top.append(span("tm-corner", g.tl), span("tm-fill", g.h.repeat(RUN)));
     if (title) top.append(span("tm-title", ` ${title} `), span("tm-fill", g.h.repeat(RUN)));
     top.append(span("tm-corner", g.tr));

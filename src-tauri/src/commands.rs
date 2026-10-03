@@ -1208,3 +1208,11 @@ pub async fn copy_old_media(app: AppHandle, device: String) -> Result<LibraryApp
     }
     result
 }
+
+/// Writes the dev-only App Testing overlay's plain-text report (checklist
+/// status and notes only) where the user chose. Compiled into every build,
+/// harmlessly: only a dev build has the overlay that calls it.
+#[tauri::command]
+pub fn export_app_testing_report(path: String, report: String) -> Result<(), String> {
+    std::fs::write(&path, report).map_err(|e| e.to_string())
+}

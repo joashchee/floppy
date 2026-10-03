@@ -6,8 +6,30 @@ All notable changes to Floppy are recorded here. Format loosely follows
 Update this file whenever a change lands. A short bullet is enough, dated
 against the day the change was made.
 
-## Unreleased
+## 0.5.0 (2026-10-03)
 
+- **Matched the rest of the ansiapps conventions** (2026-10-03):
+  - **The ANSIapps theme is on the grid**, the family's rule since
+    2026-09-30: every character in a cell of the 8×16 grid from the
+    window's top left. The page is no longer centered by the browser
+    (whole-cell padding, a width rounded to whole cells, at most 160
+    columns), rows line up along their tops, vertical spacing is in
+    whole rows, dialogs sit at a fixed place three rows down rather than
+    centered on the window's height, the drop targets start at the top
+    left, guest tiles are 24 cells wide, and the launch screen and frame
+    titles are centered by whole cells. Scrolling comes to rest on a
+    whole row (`lib/grid.ts`).
+  - **Dev builds' gear menu has App Testing** (the family's checklist
+    overlay, `testChecklist.ts`, exported through
+    `export_app_testing_report`) and **Check the Grid** (Ctrl+Cmd+G),
+    which outlines anything off the grid. Neither reaches a release build.
+  - `docs/ansiapps-theme.md` gains "The grid" and drops the retired
+    `▄`/`▀` button shadow from "How Floppy draws it".
+- **Dependencies updated** (2026-10-03): Tauri 2.12 (crates and
+  `@tauri-apps/*` packages, dialog 2.8, opener 2.7), Vite 8.3.2 and the
+  other crates within their semver ranges. Licenses re-checked (no new
+  Apache-2.0-only crates) and `third-party-licenses.txt` regenerated.
+  TypeScript stays on 6.0 (7.0 is a major upgrade).
 - **Caught up with the other ansiapps apps** (2026-10-03):
   - **In-development warning on first run.** Before any window, a native
     dialog says Floppy is still in development, use at your own risk.

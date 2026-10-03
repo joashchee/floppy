@@ -31,6 +31,21 @@
       /* Text only: the mark's CP437 twin (components/icons.tsx), not the image. */
       html[data-theme="ansiapps"] .startup-mark { display: none; }
       html[data-theme="ansiapps"] .startup-glyph { display: block; color: #55ff55; }
+      /* On the 8x16 grid, centered by whole cells (keep in step with
+         ansiapps-theme.css's "Launch screen") */
+      html[data-theme="ansiapps"] .startup-screen {
+        gap: 16px; align-items: flex-start; justify-content: flex-start; box-sizing: border-box;
+        padding-top: round(down, calc(50vh - 64px), 16px);
+      }
+      html[data-theme="ansiapps"] .startup-glyph,
+      html[data-theme="ansiapps"] .startup-name,
+      html[data-theme="ansiapps"] .startup-progress,
+      html[data-theme="ansiapps"] .startup-label {
+        position: relative; left: round(down, 50%, 8px); width: max-content; min-height: 16px;
+        font-size: 16px; line-height: 16px; font-weight: 400; letter-spacing: 0;
+        transform: translateX(round(down, -50%, 8px));
+      }
+      html[data-theme="ansiapps"] .startup-progress { width: 224px; height: 16px; margin: 0; }
     </style>
     <!-- Applies the stored theme before first paint, so the ANSIapps theme
          never flashes the modern one. Same key and value as src/lib/theme.ts. -->

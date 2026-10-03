@@ -518,3 +518,39 @@ button.icontext-btn .btn-icon { display: inline-flex; width: 14px; height: 14px;
 
 /* CP437 twins of the icons, shown only by the ANSIapps theme */
 .icon-glyph { display: none; }
+
+/* App Testing overlay (dev-only: CLAUDE.md's Testing section), the same as
+   the other ansiapps apps' */
+.testing-tally { display: flex; gap: 8px; margin: 0 0 10px; }
+.testing-item-list { list-style: none; margin: 0 0 10px; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.testing-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+.testing-item-bug { border-color: var(--warn); }
+.testing-item-done { opacity: 0.6; }
+.testing-item-label { font-size: 12px; flex: 1 1 260px; min-width: 0; }
+.testing-item-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.testing-item-note { flex: 1 1 100%; margin: 0; font-size: 11px; color: var(--warn); }
+.testing-bug-draft { flex: 1 1 100%; display: flex; flex-wrap: wrap; gap: 6px; align-items: flex-start; }
+.testing-bug-draft textarea {
+  flex: 1 1 220px;
+  min-width: 0;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  padding: 6px 8px;
+  resize: vertical;
+}
+/* "Go to app" jump target: a brief highlight ring, not a layout change. */
+.testing-highlight { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 6px; transition: outline-color 1.5s ease; }
+/* The dev grid check's outline (lib/grid.ts), in either theme. */
+.grid-off { outline: 2px solid #ff55ff !important; }
