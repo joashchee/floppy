@@ -18,6 +18,9 @@ against the day the change was made.
   still need implementation and Windows-host verification.
 - **Windows Actions runtime** (2026-10-05): upgraded checkout, Node.js and
   Python setup actions to Node 24-compatible releases.
+- **Windows test compatibility** (2026-10-05): findings tests now use and
+  scrub `USERPROFILE` when `HOME` isn't set, and Amiga import tests use a
+  portable invalid filename character.
 
 ## 0.5.0 (2026-10-03)
 

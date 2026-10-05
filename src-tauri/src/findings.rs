@@ -403,9 +403,15 @@ pub fn mark_exported(library: &Library, findings: &Findings) -> Result<(), Strin
 
 /// An Errors note as shared: the user's home folder, should they paste a
 /// path, reads `~`.
+fn home_dir() -> Option<String> {
+    std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .ok()
+}
+
 fn scrub(errors: &str) -> String {
-    match std::env::var("HOME") {
-        Ok(home) if home.len() > 1 => errors.replace(home.trim_end_matches('/'), "~"),
+    match home_dir() {
+        Some(home) if home.len() > 1 => errors.replace(home.trim_end_matches(|c| c == '/' || c == '\\'), "~"),
         _ => errors.to_string(),
     }
 }
@@ -678,7 +684,7 @@ mod tests {
         let app = lib.import(GuestOs::Dos, &src).unwrap();
         lib.set_identity(&app.id, Some((Some("WordPerfect".into()), Some("5.1".into())))).unwrap();
         lib.set_opens(&app.id, &["Q9Z".into()]).unwrap();
-        let home = std::env::var("HOME").unwrap();
+        let home = home_dir().expect("HOME or USERPROFILE is set");
         lib.set_errors(&app.id, &format!("Can't find {home}/fonts")).unwrap();
         let pending = verify::Pending {
             os: GuestOs::Dos,
@@ -738,7 +744,7 @@ mod tests {
     fn setup_reports_go_once_and_say_what_the_file_is() {
         let t = TempDir::new();
         let lib = Library::new(t.path().join("lib"));
-        let home = std::env::var("HOME").unwrap();
+        let home = home_dir().expect("HOME or USERPROFILE is set");
         add_setup_report(&lib, "Mac startup disk", "source-broken", Some("https://example.org/753"), "Gone (404)").unwrap();
         add_setup_report(&lib, "Kickstart ROM", "better-source", Some("https://example.org/roms"), "").unwrap();
         let mut rom = vec![0u8; 524_288];

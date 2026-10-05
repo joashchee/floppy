@@ -1552,7 +1552,7 @@ mod tests {
         assert_eq!((app.name.as_str(), app.dir.as_str(), app.program.as_deref()), ("Lemmings", "Lemmings", Some("Lemmings.adf")));
         assert!(app.id.starts_with("amiga-"));
 
-        let folder = t.path().join("ProTracker 2.3d: the tracker for everyone");
+        let folder = t.path().join("ProTracker 2.3d™ the tracker for everyone");
         fs::create_dir_all(&folder).unwrap();
         fs::write(folder.join("ProTracker"), [0, 0, 3, 0xF3]).unwrap();
         fs::write(folder.join("._ProTracker"), b"junk").unwrap();
