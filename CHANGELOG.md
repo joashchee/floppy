@@ -16,6 +16,8 @@ against the day the change was made.
   experimental: Basilisk II is not bundled, and old-media pickup,
   Diskette handoff, single-instance forwarding, and signed publishing
   still need implementation and Windows-host verification.
+- **Windows Actions runtime** (2026-10-05): upgraded checkout, Node.js and
+  Python setup actions to Node 24-compatible releases.
 
 ## 0.5.0 (2026-10-03)
 
