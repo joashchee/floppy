@@ -21,6 +21,9 @@ against the day the change was made.
 - **Windows test compatibility** (2026-10-05): findings tests now use and
   scrub `USERPROFILE` when `HOME` isn't set, and Amiga import tests use a
   portable invalid filename character.
+- **Windows installer build** (2026-10-05): decode Cargo metadata as UTF-8
+  when generating bundled third-party licenses, independent of the Windows
+  console code page.
 
 ## 0.5.0 (2026-10-03)
 

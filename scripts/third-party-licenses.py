@@ -74,7 +74,7 @@ PUBLIC_DOMAIN: dict[str, tuple[str, str]] = {}
 
 
 def host_target() -> str:
-    out = subprocess.run(["rustc", "-vV"], check=True, capture_output=True, text=True).stdout
+    out = subprocess.run(["rustc", "-vV"], check=True, capture_output=True, text=True, encoding="utf-8").stdout
     return next(line.split(": ", 1)[1] for line in out.splitlines() if line.startswith("host: "))
 
 
@@ -91,9 +91,9 @@ def rust(target: str):
     """(name version (license), [texts]) for each crate the app links."""
     command = ["cargo", "metadata", "--format-version", "1", "--manifest-path", str(ROOT / "src-tauri/Cargo.toml"), "--filter-platform", target]
     # Offline first: every crate the build needs is already fetched.
-    run = subprocess.run(command + ["--offline"], capture_output=True, text=True)
+    run = subprocess.run(command + ["--offline"], capture_output=True, text=True, encoding="utf-8")
     if run.returncode != 0:
-        run = subprocess.run(command, check=True, capture_output=True, text=True)
+        run = subprocess.run(command, check=True, capture_output=True, text=True, encoding="utf-8")
     out = run.stdout
     meta = json.loads(out)
     nodes = {n["id"]: n for n in meta["resolve"]["nodes"]}
