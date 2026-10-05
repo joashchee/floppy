@@ -6,7 +6,7 @@ import { open, save } from "@tauri-apps/plugin-dialog";
 import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { Dialog } from "./components/Dialog";
 import { applyTheme, loadTheme, type Theme } from "./lib/theme";
-import { isLinux, SHOW_IN_FILES } from "./lib/platform";
+import { isLinux, isWindows, SHOW_IN_FILES } from "./lib/platform";
 import { ActivityStatus } from "./components/ActivityStatus";
 import { StartupScreen } from "./components/StartupScreen";
 import { AppTesting } from "./components/AppTesting";
@@ -1230,8 +1230,9 @@ function App() {
   /** Points Floppy at an emulator that isn't where it looks (bundled, /Applications, ~/Applications or PATH). */
   async function locateEmulator(os: GuestOs) {
     const name = statuses.find((s) => s.os === os)?.emulator ?? "the emulator";
-    // Linux programs have no extension to filter on.
-    const filters = isLinux ? [] : [{ name: "Application", extensions: ["app"] }];
+    const filters = isLinux
+      ? []
+      : [{ name: "Application", extensions: isWindows ? ["exe"] : ["app"] }];
     const path = await open({ title: `Locate ${name}`, filters });
     if (typeof path !== "string") return;
     setMessage(null);

@@ -34,4 +34,9 @@ export const CHECKLIST_DATA: ChecklistItem[] = [
   { id: "flat-buttons", section: "ansiapps family", label: "ANSIapps theme: buttons are flat green bars with no ▄/▀ shadow; pressing one turns it cyan without moving it, and the click lands" },
   { id: "licenses", section: "ansiapps family", label: "About Floppy → Show Licenses reveals the bundled license texts, third-party-licenses.txt and GPL-2.0.txt among them", selector: '[data-testid="gear-button"]' },
   { id: "app-testing-export", section: "ansiapps family", label: "This overlay: Export results… saves a .txt and says where; it holds only the checklist's status and notes" },
+
+  // Windows build and platform behavior
+  { id: "windows-build", section: "Windows", label: "On Windows, run .\\scripts\\build-windows.ps1 from a clean checkout: the pinned emulator archives verify, both MSI and NSIS installers are produced, and the release executable contains no user-profile path" },
+  { id: "windows-emulators", section: "Windows", label: "Open Floppy on Windows: Locate filters for .exe files, DOSBox Staging and FS-UAE launch with bundled resources, Quit closes them normally, and Force Quit leaves no emulator process behind" },
+  { id: "windows-iso", section: "Windows", label: "Import an ISO that was not mounted before: Floppy reads it and detaches it afterward; repeat with it already mounted and confirm Floppy leaves it mounted" },
 ];

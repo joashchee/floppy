@@ -23,9 +23,12 @@ files](#finding-missing-files)).
 
 ## Status
 
-Early development, on macOS and Linux (Windows later). DOS is the most
-complete. Classic Mac and Amiga boot the guest with your library shared
-into it, but don't open a folder app for you yet.
+Early development, on macOS and Linux, with an experimental Windows build
+path. DOS and Amiga can use the bundled Windows emulators; classic Mac
+needs a separately installed or located Windows Basilisk II build. Windows
+old-media pickup and Diskette handoff are not implemented yet. DOS is the
+most complete. Classic Mac and Amiga boot the guest with your library
+shared into it, but don't open a folder app for you yet.
 
 ## Building (macOS)
 
@@ -39,6 +42,25 @@ scripts/fetch-basilisk.sh # downloads Floppy's pinned Basilisk II build into src
 npm run tauri dev         # develop
 scripts/build-release.sh  # release build: tauri build, with build-machine paths stripped
 ```
+
+## Building (Windows)
+
+Requires Node 20+, Rust, Python 3, and the
+[Tauri Windows prerequisites](https://tauri.app/start/prerequisites/).
+From PowerShell:
+
+```powershell
+npm ci
+.\scripts\build-windows.ps1
+```
+
+The script downloads the hash-pinned DOSBox Staging and FS-UAE Windows
+builds, generates the bundled library licenses, and builds the MSI and
+NSIS installers with build-machine paths remapped. The Windows Basilisk II
+executable is not bundled; install or locate a compatible build before
+using classic Mac mode. The remaining Windows gaps are tracked in
+[platform parity](docs/platform-parity.md). Build packages locally; Floppy
+is distributed only from ansiapps.com.
 
 Basilisk II (classic Mac) has no official binary release, so Floppy
 bundles its own build of a pinned kanjitalk755/macemu commit, made by

@@ -1,0 +1,39 @@
+name: Windows build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - run: npm ci
+      - name: Fetch Windows emulators
+        shell: pwsh
+        run: ./scripts/fetch-windows-emulators.ps1
+      - run: cargo test --manifest-path src-tauri/Cargo.toml
+      - run: npx tsc --noEmit
+      - name: Build Windows installers
+        shell: pwsh
+        run: ./scripts/build-windows.ps1

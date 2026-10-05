@@ -862,7 +862,8 @@ pub fn with_disc<T>(library: &Library, path: &Path, f: impl FnOnce(&Path) -> Res
 
 /// A disc image attached read-only, detached on drop: with `hdiutil` on
 /// macOS, at `at`; with udisks on Linux, where its loop device is kept
-/// too (the second field) and udisks picks the mount point.
+/// too (the second field); or with Windows' disk-image API, where the
+/// image path is kept only when this import attached it.
 struct Mount(PathBuf, Option<String>);
 
 impl Mount {
@@ -905,7 +906,46 @@ impl Mount {
         Ok(mount)
     }
 
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    #[cfg(target_os = "windows")]
+    fn attach(image: &Path, _at: &Path) -> Result<Self, String> {
+        let path = powershell_literal(&image.to_string_lossy());
+        let script = format!(
+            "$ErrorActionPreference = 'Stop'; \
+             $path = {path}; \
+             $disk = Get-DiskImage -ImagePath $path -ErrorAction SilentlyContinue; \
+             $owned = $null -eq $disk -or -not $disk.Attached; \
+             if ($owned) {{ $disk = Mount-DiskImage -ImagePath $path -Access ReadOnly -PassThru }}; \
+             $volume = Get-Volume -DiskImage $disk | Where-Object DriveLetter | Select-Object -First 1; \
+             if ($null -eq $volume) {{ \
+               if ($owned) {{ Dismount-DiskImage -ImagePath $path -ErrorAction SilentlyContinue }}; \
+               throw 'The image has no mounted volume.' \
+             }}; \
+             [Console]::Out.WriteLine($volume.DriveLetter + ':\\'); \
+             [Console]::Out.WriteLine($(if ($owned) {{ 'owned' }} else {{ 'existing' }}))"
+        );
+        let output = powershell(&script)?;
+        let mut lines = output
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty());
+        let ownership = lines.next_back();
+        let root = lines.next_back();
+        match (root, ownership) {
+            (Some(root), Some("owned")) if root.ends_with(":\\") => Ok(Mount(
+                PathBuf::from(root),
+                Some(image.to_string_lossy().into_owned()),
+            )),
+            (Some(root), Some("existing")) if root.ends_with(":\\") => {
+                Ok(Mount(PathBuf::from(root), None))
+            }
+            _ => Err(format!(
+                "Couldn't find a mounted volume in {}.",
+                file_name(image)
+            )),
+        }
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
     fn attach(_image: &Path, _at: &Path) -> Result<Self, String> {
         Err("Opening a disc image isn't supported here yet. Mount it and choose its folder instead.".into())
     }
@@ -925,6 +965,48 @@ impl Drop for Mount {
             }
             let _ = udisksctl(&["loop-delete", "--no-user-interaction", "-b", dev], None);
         }
+        #[cfg(target_os = "windows")]
+        if let Some(image) = &self.1 {
+            let path = powershell_literal(image);
+            let script = format!("Dismount-DiskImage -ImagePath {path} -ErrorAction Stop");
+            let _ = powershell(&script);
+        }
+    }
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn powershell_literal(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
+}
+
+#[cfg(target_os = "windows")]
+fn powershell(script: &str) -> Result<String, String> {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let output = std::process::Command::new("powershell.exe")
+        .args([
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            script,
+        ])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+        .map_err(|e| format!("Couldn't open the disc image with Windows: {e}"))?;
+    if output.status.success() {
+        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    } else {
+        let detail = String::from_utf8_lossy(&output.stderr);
+        let detail = detail.trim();
+        Err(if detail.is_empty() {
+            format!(
+                "Couldn't open the disc image with Windows ({}).",
+                output.status
+            )
+        } else {
+            format!("Couldn't open the disc image with Windows: {detail}")
+        })
     }
 }
 
@@ -991,6 +1073,14 @@ mod tests {
                     Device /dev/loop7 is already mounted at `/media/me/MY DISC'.\n";
         assert_eq!(already_mounted_at(busy), Some(PathBuf::from("/media/me/MY DISC")));
         assert_eq!(already_mounted_at("Error mounting /dev/loop7: Not authorized"), None);
+    }
+
+    #[test]
+    fn quotes_windows_paths_as_powershell_literals() {
+        assert_eq!(
+            powershell_literal(r"C:\My 'old' files\disc.iso"),
+            r"'C:\My ''old'' files\disc.iso'"
+        );
     }
 
     fn kickstart(version: u16, valid: bool) -> Vec<u8> {

@@ -85,15 +85,52 @@ impl Emulator {
     /// bundles all three, so there the fix is reinstalling Floppy; a
     /// development build needs the fetch script.
     pub fn missing_message(self) -> String {
+        if self.bundled().is_none() && cfg!(target_os = "windows") {
+            return format!(
+                "{} isn't bundled for Windows. Install a compatible Windows build or use Locate {}….",
+                self.name(),
+                self.name()
+            );
+        }
         let (script, install) = match self {
-            Emulator::DosboxStaging => ("fetch-dosbox.sh", if cfg!(target_os = "linux") { "install dosbox-staging" } else { "install it in /Applications" }),
-            Emulator::FsUae => ("fetch-fs-uae.sh", if cfg!(target_os = "linux") { "install fs-uae" } else { "install it in /Applications" }),
+            Emulator::DosboxStaging => (
+                "fetch-dosbox.sh",
+                if cfg!(target_os = "linux") {
+                    "install dosbox-staging"
+                } else if cfg!(target_os = "windows") {
+                    "install it under Program Files"
+                } else {
+                    "install it in /Applications"
+                },
+            ),
+            Emulator::FsUae => (
+                "fetch-fs-uae.sh",
+                if cfg!(target_os = "linux") {
+                    "install fs-uae"
+                } else if cfg!(target_os = "windows") {
+                    "install it under Program Files"
+                } else {
+                    "install it in /Applications"
+                },
+            ),
             Emulator::BasiliskII => (
                 "fetch-basilisk.sh",
-                if cfg!(target_os = "linux") { "install BasiliskII so it's on your PATH" } else { "install BasiliskII.app in /Applications" },
+                if cfg!(target_os = "linux") {
+                    "install BasiliskII so it's on your PATH"
+                } else if cfg!(target_os = "windows") {
+                    "locate BasiliskII.exe"
+                } else {
+                    "install BasiliskII.app in /Applications"
+                },
             ),
         };
-        let bundled = if cfg!(debug_assertions) { format!("Run scripts/{script}") } else { "Reinstall Floppy (it includes one)".into() };
+        let bundled = if cfg!(debug_assertions) && cfg!(target_os = "windows") {
+            "Run scripts/fetch-windows-emulators.ps1".to_string()
+        } else if cfg!(debug_assertions) {
+            format!("Run scripts/{script}")
+        } else {
+            "Reinstall Floppy (it includes one)".into()
+        };
         format!("{} wasn't found. {bundled}, {install}, or use Locate {}….", self.name(), self.name())
     }
 
@@ -155,10 +192,33 @@ impl Emulator {
 /// key: the Mac asks whether to shut down, and Basilisk II quits once it
 /// has. Only `force` stops a Mac that can't answer.
 pub fn stop(child: &mut Child, force: bool) -> std::io::Result<()> {
+    #[cfg(not(target_os = "windows"))]
     if force {
         return child.kill();
     }
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let mut cmd = Command::new("taskkill");
+        cmd.args(["/PID", &child.id().to_string(), "/T"]);
+        if force {
+            cmd.arg("/F");
+        }
+        let status = cmd
+            .creation_flags(CREATE_NO_WINDOW)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()?;
+        if status.success() {
+            return Ok(());
+        }
+        return Err(std::io::Error::other(format!("taskkill exited with {status}")));
+    }
+    #[cfg(not(target_os = "windows"))]
     let status = Command::new("kill").arg("-TERM").arg(child.id().to_string()).stdin(Stdio::null()).status()?;
+    #[cfg(not(target_os = "windows"))]
     if status.success() {
         Ok(())
     } else {
@@ -332,9 +392,104 @@ fn is_dosbox_staging(bin: &Path) -> bool {
         .is_ok_and(|out| String::from_utf8_lossy(&out.stdout).to_ascii_lowercase().contains("staging"))
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+#[cfg(target_os = "windows")]
+fn installed_paths(emu: Emulator) -> Vec<PathBuf> {
+    let roots: Vec<PathBuf> = ["ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"]
+        .into_iter()
+        .filter_map(std::env::var_os)
+        .map(PathBuf::from)
+        .collect();
+    windows_installed_paths(emu, &roots, &std::env::var_os("PATH").unwrap_or_default())
+}
+
+#[cfg(target_os = "windows")]
+fn windows_installed_paths(
+    emu: Emulator,
+    roots: &[PathBuf],
+    path: &std::ffi::OsStr,
+) -> Vec<PathBuf> {
+    match emu {
+        Emulator::DosboxStaging => roots
+            .iter()
+            .flat_map(|root| {
+                [
+                    root.join("DOSBox Staging/dosbox.exe"),
+                    root.join("DOSBox Staging/dosbox-staging.exe"),
+                ]
+            })
+            .filter(|p| p.is_file())
+            .collect(),
+        Emulator::FsUae => roots
+            .iter()
+            .flat_map(|root| {
+                [
+                    root.join("FS-UAE/fs-uae.exe"),
+                    root.join("FS-UAE/Windows/x86-64/fs-uae.exe"),
+                ]
+            })
+            .filter(|p| p.is_file())
+            .collect(),
+        Emulator::BasiliskII => {
+            let mut candidates = on_path(path, "BasiliskII.exe");
+            candidates.extend(roots.iter().flat_map(|root| {
+                [
+                    root.join("BasiliskII/BasiliskII.exe"),
+                    root.join("Basilisk II/BasiliskII.exe"),
+                ]
+            }));
+            candidates.retain(|p| p.is_file());
+            candidates
+        }
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
 fn installed_paths(_emu: Emulator) -> Vec<PathBuf> {
     Vec::new()
+}
+
+#[cfg(target_os = "windows")]
+fn on_path(path: &std::ffi::OsStr, name: &str) -> Vec<PathBuf> {
+    std::env::split_paths(path)
+        .map(|dir| dir.join(name))
+        .filter(|p| p.is_file())
+        .collect()
+}
+
+#[cfg(all(test, target_os = "windows"))]
+mod windows_tests {
+    use super::*;
+    use crate::testutil::TempDir;
+
+    fn program(path: &Path) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, b"windows executable").unwrap();
+    }
+
+    #[test]
+    fn finds_emulators_in_windows_install_roots_and_path() {
+        let root = TempDir::new();
+        let path_root = TempDir::new();
+        program(&root.path().join("DOSBox Staging/dosbox.exe"));
+        program(&root.path().join("FS-UAE/Windows/x86-64/fs-uae.exe"));
+        program(&root.path().join("Basilisk II/BasiliskII.exe"));
+        program(&path_root.path().join("BasiliskII.exe"));
+        let path = std::env::join_paths([path_root.path()]).unwrap();
+        let roots = [root.path().to_path_buf()];
+
+        assert_eq!(
+            windows_installed_paths(Emulator::DosboxStaging, &roots, &path),
+            vec![root.path().join("DOSBox Staging/dosbox.exe")]
+        );
+        assert_eq!(
+            windows_installed_paths(Emulator::FsUae, &roots, &path),
+            vec![root.path().join("FS-UAE/Windows/x86-64/fs-uae.exe")]
+        );
+        assert_eq!(
+            windows_installed_paths(Emulator::BasiliskII, &roots, &path),
+            vec![path_root.path().join("BasiliskII.exe"), root.path().join("Basilisk II/BasiliskII.exe")]
+        );
+    }
 }
 
 #[cfg(all(test, unix))]

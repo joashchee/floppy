@@ -6,6 +6,17 @@ All notable changes to Floppy are recorded here. Format loosely follows
 Update this file whenever a change lands. A short bullet is enough, dated
 against the day the change was made.
 
+## 0.6.0 (2026-10-05)
+
+- **Windows build groundwork** (2026-10-05): added a native Windows build
+  script and CI build, hash-verified DOSBox Staging and FS-UAE fetches,
+  Windows emulator discovery and quit handling, read-only ISO mounting,
+  Windows-specific file-manager and emulator-picker labels, and Windows
+  build/runtime checks in App Testing. Windows support remains
+  experimental: Basilisk II is not bundled, and old-media pickup,
+  Diskette handoff, single-instance forwarding, and signed publishing
+  still need implementation and Windows-host verification.
+
 ## 0.5.0 (2026-10-03)
 
 - **Matched the rest of the ansiapps conventions** (2026-10-03):

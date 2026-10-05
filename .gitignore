@@ -16,11 +16,9 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
-# Fetched by scripts/fetch-dosbox.sh — a third-party binary, not source.
+# Fetched by the emulator scripts — third-party binaries, not source.
 /src-tauri/resources/dosbox/
-# Fetched by scripts/fetch-fs-uae.sh — also third-party.
 /src-tauri/resources/fs-uae/
-# Fetched by scripts/fetch-basilisk.sh — also third-party.
 /src-tauri/resources/basilisk/
 
 # Deep-research working files; the distilled reference lives in docs/.
