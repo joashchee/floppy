@@ -10,12 +10,21 @@ try {
     & (Join-Path $PSScriptRoot "fetch-windows-emulators.ps1")
 
     $cargoHome = if ($env:CARGO_HOME) { $env:CARGO_HOME } else { Join-Path $env:USERPROFILE ".cargo" }
-    $remaps = @(
-        "--remap-path-prefix=`"$env:USERPROFILE=~`""
-        "--remap-path-prefix=`"$root=.`""
-        "--remap-path-prefix=`"$cargoHome=~/.cargo`""
+    $flags = @()
+    if ($env:CARGO_ENCODED_RUSTFLAGS) {
+        $flags += $env:CARGO_ENCODED_RUSTFLAGS.Split([char]31, [StringSplitOptions]::RemoveEmptyEntries)
+    } elseif ($env:RUSTFLAGS) {
+        $flags += @(
+            [regex]::Matches($env:RUSTFLAGS, '(?:"[^"]*"|\S)+') |
+                ForEach-Object { $_.Value.Trim('"') }
+        )
+    }
+    $flags += @(
+        "--remap-path-prefix=$env:USERPROFILE=~"
+        "--remap-path-prefix=$root=."
+        "--remap-path-prefix=$cargoHome=~/.cargo"
     )
-    $env:RUSTFLAGS = (@($env:RUSTFLAGS) + $remaps | Where-Object { $_ }) -join " "
+    $env:CARGO_ENCODED_RUSTFLAGS = $flags -join [char]31
 
     python (Join-Path $root "scripts/third-party-licenses.py")
     if ($LASTEXITCODE -ne 0) {

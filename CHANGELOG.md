@@ -24,6 +24,9 @@ against the day the change was made.
 - **Windows installer build** (2026-10-05): decode Cargo metadata as UTF-8
   when generating bundled third-party licenses, independent of the Windows
   console code page.
+- **Windows build privacy check** (2026-10-05): pass Rust path remapping
+  flags through Cargo's encoded-flags interface so Windows paths are
+  preserved exactly.
 
 ## 0.5.0 (2026-10-03)
 
