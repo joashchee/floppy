@@ -864,7 +864,7 @@ pub fn with_disc<T>(library: &Library, path: &Path, f: impl FnOnce(&Path) -> Res
 /// macOS, at `at`; with udisks on Linux, where its loop device is kept
 /// too (the second field); or with Windows' disk-image API, where the
 /// image path is kept only when this import attached it.
-struct Mount(PathBuf, Option<String>);
+struct Mount(PathBuf, #[cfg_attr(target_os = "macos", allow(dead_code))] Option<String>);
 
 impl Mount {
     #[cfg(target_os = "macos")]

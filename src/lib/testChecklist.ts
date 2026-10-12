@@ -39,4 +39,10 @@ export const CHECKLIST_DATA: ChecklistItem[] = [
   { id: "windows-build", section: "Windows", label: "On Windows, run .\\scripts\\build-windows.ps1 from a clean checkout: the pinned emulator archives verify, both MSI and NSIS installers are produced, and the release executable contains no user-profile path" },
   { id: "windows-emulators", section: "Windows", label: "Open Floppy on Windows: Locate filters for .exe files, DOSBox Staging and FS-UAE launch with bundled resources, Quit closes them normally, and Force Quit leaves no emulator process behind" },
   { id: "windows-iso", section: "Windows", label: "Import an ISO that was not mounted before: Floppy reads it and detaches it afterward; repeat with it already mounted and confirm Floppy leaves it mounted" },
+  { id: "windows-mac-tab", section: "Windows", label: "On Windows, open the Mac tab: the missing-emulator strip says classic Mac apps don't run on Windows yet and offers Locate Basilisk II…" },
+  // Public beta releases
+  { id: "release-mac-zip", section: "Releases", label: "Download Floppy_<version>_universal.app.zip from the release on a Mac that never had Floppy: it unzips and opens with no Gatekeeper warning, and DOSBox, FS-UAE and Basilisk II all start" },
+  { id: "release-mac-intel", section: "Releases", label: "Open the universal app on an Intel Mac (or under Rosetta): Floppy, DOSBox, FS-UAE and Basilisk II all start" },
+  { id: "release-windows", section: "Releases", label: "Install the Windows release (installer, then MSI on another machine): SmartScreen's Run anyway works, Floppy opens past the first-run warning, and a DOS app launches" },
+  { id: "release-linux", section: "Releases", label: "Install the .deb on Ubuntu 22.04 or newer and the .rpm on Fedora: Floppy opens and DOSBox, FS-UAE and Basilisk II start" },
 ];

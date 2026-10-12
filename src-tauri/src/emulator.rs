@@ -87,7 +87,8 @@ impl Emulator {
     pub fn missing_message(self) -> String {
         if self.bundled().is_none() && cfg!(target_os = "windows") {
             return format!(
-                "{} isn't bundled for Windows. Install a compatible Windows build or use Locate {}….",
+                "Classic Mac apps don't run in Floppy on Windows yet: {} isn't included in the Windows beta. If you have a Windows build of {}, use Locate {}… to use it.",
+                self.name(),
                 self.name(),
                 self.name()
             );

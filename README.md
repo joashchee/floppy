@@ -10,8 +10,12 @@ Mac OS 8.1) apps in Basilisk II, using ROMs and system disks you supply.
 
 ## Get Floppy
 
-Floppy is free, and always will be. Download it from
-[ansiapps.com](https://ansiapps.com), the only place it's published.
+Floppy is free, and always will be. Get it from
+[ansiapps.com](https://ansiapps.com): it's in public beta for macOS
+(Apple Silicon and Intel, signed and notarized), Windows (x64, DOS and
+Amiga so far) and Linux (x86-64, `.deb` and `.rpm`). The builds are
+this repository's [releases](https://github.com/joashchee/floppy/releases),
+each with the source of the emulators it bundles.
 
 Floppy is the heart of ansiapps. Diskette (an offline catalog of your
 drives that finds the old apps and setup files you already own) and
@@ -23,12 +27,12 @@ files](#finding-missing-files)).
 
 ## Status
 
-Early development, on macOS and Linux, with an experimental Windows build
-path. DOS and Amiga can use the bundled Windows emulators; classic Mac
-needs a separately installed or located Windows Basilisk II build. Windows
-old-media pickup and Diskette handoff are not implemented yet. DOS is the
-most complete. Classic Mac and Amiga boot the guest with your library
-shared into it, but don't open a folder app for you yet.
+Public beta, on macOS, Linux and Windows. DOS is the most complete.
+Classic Mac and Amiga boot the guest with your library shared into it,
+but don't open a folder app for you yet. On Windows, DOS and Amiga use
+the bundled emulators; classic Mac needs a Windows Basilisk II build you
+locate yourself, and old-media pickup and the Diskette handoff aren't
+there yet.
 
 ## Building (macOS)
 

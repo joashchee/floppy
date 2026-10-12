@@ -24,7 +24,7 @@
 set -eu
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
-APP=${1:-"$ROOT/src-tauri/target/release/bundle/macos/Floppy.app"}
+APP=${1:-"$ROOT/src-tauri/target/universal-apple-darwin/release/bundle/macos/Floppy.app"}
 IDENTITY=${FLOPPY_SIGN_IDENTITY:-}
 PROFILE=${FLOPPY_NOTARY_PROFILE:-floppy-notary}
 ENTS="$ROOT/src-tauri/macos"
@@ -112,9 +112,9 @@ fi
 # or DMG behind, older than the app).
 DMG_DIR="$BUNDLE/dmg"
 VERSION=$(defaults read "$APP/Contents/Info" CFBundleShortVersionString)
-case "$(uname -m)" in arm64) ARCH=aarch64 ;; *) ARCH=x64 ;; esac
-DMG="$DMG_DIR/Floppy_${VERSION}_${ARCH}.dmg"
-[ -f "$DMG" ] && [ "$DMG" -nt "$APP/Contents/Info.plist" ] || exit 0
+# Tauri names it for the build's target: _universal, _aarch64 or _x64.
+DMG=$(ls -t "$DMG_DIR"/Floppy_"${VERSION}"_*.dmg 2>/dev/null | head -n 1)
+[ -n "$DMG" ] && [ "$DMG" -nt "$APP/Contents/Info.plist" ] || exit 0
 STAGE=$(mktemp -d "${TMPDIR:-/tmp}/floppy-dmg.XXXXXX")
 ditto "$APP" "$STAGE/Floppy.app"
 ln -s /Applications "$STAGE/Applications"

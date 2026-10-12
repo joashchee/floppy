@@ -6,7 +6,30 @@ All notable changes to Floppy are recorded here. Format loosely follows
 Update this file whenever a change lands. A short bullet is enough, dated
 against the day the change was made.
 
-## 0.6.0 (2026-10-05)
+## 0.6.0 (2026-10-12)
+
+- **Public betas for macOS, Windows and Linux** (2026-10-12), published
+  the way Coupler is: each version is a release of Floppy's GitHub
+  repository, which ansiapps.com's download buttons link to (rule 8
+  changed from the never-built R2 plan).
+  - **Windows and Linux on GitHub Actions**: `windows.yml` (renamed from
+    `windows-build.yml`) builds the NSIS installer and MSI and
+    `linux.yml` the `.deb` and `.rpm` (Ubuntu 22.04; no AppImage), each
+    after the unit tests and type check, on free standard runners only.
+    Every successful run on `main` or a `v*` tag is published by
+    `scripts/publish-release.sh` (rewritten): to the version's release,
+    titled "(public beta)" with a beta notice and the CHANGELOG section,
+    or to a `dev` prerelease between versions. The emulators' GPL source
+    and the AROS notice go on every release.
+  - **The Mac download is universal** (Apple Silicon and Intel):
+    `fetch-fs-uae.sh` merges FS-UAE's two builds into one app with
+    `lipo`, and `build-release.sh` builds `universal-apple-darwin`,
+    finds the Developer ID by itself, checks the notarytool profile up
+    front, fails unless Gatekeeper accepts the result, and zips it as
+    `Floppy_<version>_universal.app.zip` for `publish-release.sh` to
+    upload. `FLOPPY_UNSIGNED=1` tries a build without an Apple account.
+  - On Windows, the Mac tab's missing-emulator strip now says plainly
+    that classic Mac apps don't run on Windows yet.
 
 - **Windows build groundwork** (2026-10-05): added a native Windows build
   script and CI build, hash-verified DOSBox Staging and FS-UAE fetches,

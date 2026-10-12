@@ -68,18 +68,23 @@ gitignored `CLAUDE.local.md`, never in committed files.
    app-data folder (the whole library) on it.
 6. **All user data lives under Tauri's app-data dir** (`library/`), never
    a hardcoded path.
-7. **macOS and Linux supported, Windows later.** A feature built for one
-   of macOS or Linux gets the other side too, or a parity row saying
-   what's missing.
-8. **Always free, downloaded only from ansiapps.com.** Floppy is the hero
-   app of ansiapps.com and costs nothing, ever: no price, no
-   pay-what-you-want, no paid tier or unlock. The app (the DMG, and the
-   Linux `.deb`/AppImage) is published only on ansiapps.com: not itch.io,
-   not the Mac App Store (whose terms are incompatible with the GPL), and
-   not as GitHub release downloads. GitHub keeps the source, the
-   emulator source bundles and AROS notice each release must offer
-   (linked from the download page), and the `basilisk-ii-*` build
-   releases the fetch script pins. Diskette and Crunchy are ansiapps' paid
+7. **macOS and Linux supported; Windows in public beta** (since 0.6.0,
+   2026-10-12: DOS and Amiga run, the classic Mac doesn't yet). A
+   feature built for one of macOS or Linux gets the other side too, or a
+   parity row saying what's missing. Windows gets its side where it's
+   cheap, else a parity row.
+8. **Always free, offered from ansiapps.com.** Floppy is the hero app
+   of ansiapps.com and costs nothing, ever: no price, no
+   pay-what-you-want, no paid tier or unlock. The builds (the Mac's
+   notarized `.app.zip`, Windows' installer and MSI, Linux's `.deb` and
+   `.rpm`) are published as **releases of Floppy's public GitHub
+   repository**, and ansiapps.com's download buttons link those files,
+   as for Coupler (decided 2026-10-12; this replaced the never-built R2
+   plan). Not itch.io, not the Mac App Store (whose terms are
+   incompatible with the GPL). Each release carries, beside the builds,
+   the emulators' exact source and the AROS notice (GPL), and the
+   `basilisk-ii-*` build releases the fetch script pins stay too.
+   Diskette and Crunchy are ansiapps' paid
    extensions to Floppy: separate apps that work with it only through the
    interfaces in rule 2, so Floppy never needs them and never nags about
    them.
@@ -505,6 +510,12 @@ gitignored `CLAUDE.local.md`, never in committed files.
   for folder apps, and the library as the non-booting `Floppy:` drive.
 - FS-UAE comes from `scripts/fetch-fs-uae.sh` (pinned version and per-arch
   SHA-256, macOS and Linux x86-64) into the gitignored `src-tauri/resources/fs-uae/`.
+  On macOS it fetches both the Apple Silicon and Intel builds and merges
+  every Mach-O file with `lipo` into one universal `FS-UAE.app` (the
+  other files must match, `fs-uae.dat` aside, whose zip differs only in
+  timestamps), then signs it ad hoc. On Windows,
+  `scripts/fetch-windows-emulators.ps1` fetches DOSBox Staging's and
+  FS-UAE's Windows zips (pinned SHA-256s).
 - **AROS fallback:** with no Kickstart, the setup offers **Use AROS for
   Now** (`GuestSystem.aros`, `Library::set_aros`), with its caveats: it
   runs some bootable-disk games and demos, many programs fail, and it
@@ -562,7 +573,8 @@ gitignored `CLAUDE.local.md`, never in committed files.
   `src-tauri/resources/dosbox/`, `src-tauri/resources/fs-uae/` and
   `src-tauri/resources/basilisk/`), and dependency licenses whenever
   `Cargo.lock` or `package-lock.json` changes (rule 1).
-- **Build releases with `scripts/build-release.sh`**, never a bare
+- **Build releases with `scripts/build-release.sh`** on macOS and Linux
+  (`scripts/build-windows.ps1` on Windows), never a bare
   `tauri build`. rustc bakes source paths (including every dependency's
   under `~/.cargo/registry`) into panic messages, which would publish the
   builder's home folder and user name. The script remaps them with
@@ -570,17 +582,26 @@ gitignored `CLAUDE.local.md`, never in committed files.
   Arguments pass through to `tauri build` (`--bundles app` skips the DMG,
   which needs `hdiutil`). **"Build the macOS app" means the `.app`
   only** (`scripts/build-release.sh --bundles app`): build the DMG only
-  when asked for it (all ansiapps apps). It then downloads the bundled GPL emulators'
-  source into `src-tauri/target/release/bundle/source/`, and writes
+  when asked for it (all ansiapps apps). On macOS it builds
+  **universal** (`--target universal-apple-darwin`, so the bundle is
+  under `src-tauri/target/universal-apple-darwin/release/bundle/`; every
+  emulator is universal too, FS-UAE by `fetch-fs-uae.sh` merging its
+  two builds with `lipo`), finds the Developer ID in the keychain by
+  itself (or `FLOPPY_SIGN_IDENTITY`), checks the notarytool profile
+  before the long build, signs and notarizes (`sign-macos.sh`, below),
+  fails unless the app is universal and Gatekeeper says "Notarized
+  Developer ID", and zips it as `Floppy_<version>_universal.app.zip`,
+  the Mac download. `FLOPPY_UNSIGNED=1` tries a build without an Apple
+  account (ad hoc, no zip), never for a release. It then downloads the bundled GPL emulators'
+  source into `bundle/source/`, and writes
   `AROS-SOURCE.txt` there too: which AROS build FS-UAE's `fs-uae.dat`
   carries (read from the ROM itself), its licence and where its source
-  is. Publish all of it on the Floppy repo's GitHub release for that
-  version, and link it from the ansiapps.com download page next to the
-  DMG and Linux packages (rule 8): shipping their binaries means offering
-  their source.
+  is. Every release carries them beside the builds (rule 8): shipping
+  their binaries means offering their source.
   Last, it copies the new `Floppy.app` into `~/Applications/`, replacing
   the old one, so the installed app is always the latest release build.
-  Outside the sandbox only: `~/Applications` isn't writable in it.
+  Outside the sandbox only: `~/Applications` isn't writable in it, and
+  signing needs the keychain.
 - **macOS signing (`scripts/sign-macos.sh`)**, run by
   `build-release.sh`: it always restores the symlinks Tauri's resource
   copy flattens (every symlink under `src-tauri/resources/`, today
@@ -591,26 +612,54 @@ gitignored `CLAUDE.local.md`, never in committed files.
   FS-UAE and Basilisk II `allow-unsigned-executable-memory`), then
   Floppy.app, and notarizes and staples both the app and the DMG
   (notarytool keychain profile `FLOPPY_NOTARY_PROFILE`, default
-  `floppy-notary`), so they open offline. `FLOPPY_SIGN_IDENTITY=-` signs
+  `floppy-notary`; another ansiapps app's profile for the same Apple
+  account works too), so they open offline. `FLOPPY_SIGN_IDENTITY=-` signs
   ad hoc without the runtime, to test the script without an Apple
   account (checked 2026-09-29: `codesign --verify --deep --strict`
   passes and all three emulators start). Not yet run with a real
   Developer ID. `hdiutil` doesn't work in the sandbox.
-- **Publish with `scripts/publish-release.sh`** after building, on each
-  platform (`docs/floppy-downloads.md` in the site repo is the plan). It
-  refuses a dirty tree and, on macOS, a DMG that isn't notarized
-  (`--allow-unsigned`), writes `SHA256SUMS-macOS`/`-Linux`, uploads to
-  the R2 bucket behind `downloads.ansiapps.com` under
-  `floppy/<version>/` (curl's own SigV4, credentials from the
-  environment or the keychain / secret service under `ansiapps-r2`,
-  never a repo) without ever replacing a file, adds the sources to the
-  `v<version>` GitHub release, and prints the site's `_redirects`
-  lines. `--dry-run` checks it all without uploading. The R2 upload is
-  untested until the bucket exists.
+- **Windows and Linux builds: GitHub Actions**,
+  `.github/workflows/windows.yml` (tests, then the NSIS installer and
+  MSI by `build-windows.ps1`) and `linux.yml` (tests, then the `.deb` and
+  `.rpm` by `build-release.sh` on Ubuntu 22.04, plus the emulators'
+  source; never an AppImage, which would carry LGPL WebKitGTK and GTK
+  whose source each release would then owe). Run by Run workflow, a `v*`
+  tag, or a change to the workflow (and, for Windows, its scripts), each
+  run's artifact unsigned. Every successful run on `main` or a `v*` tag
+  is published by **`scripts/publish-release.sh`**: to the version's own
+  release (`v` + `tauri.conf.json`'s version, "Floppy <v> (public
+  beta)", made at that commit if missing, its notes the beta notice and
+  the version's CHANGELOG section), or to the `dev` prerelease once
+  that tag marks an earlier commit. Installers are replaced by name;
+  sources are added only when missing.
+- **The Mac's zip is published by hand**, after `build-release.sh
+  --bundles app` on the maintainer's Mac: `scripts/publish-release.sh`
+  with no files uploads `Floppy_<version>_universal.app.zip` and the
+  sources to the same release (needs `gh` signed in, a clean tree, the
+  commit on `origin/main`, and Gatekeeper accepting the app).
+- **Releasing is pushing the tag**: a push to a branch runs a workflow
+  only when its own files changed, so a version bump on `main` builds
+  nothing. Bump the version (`package.json`, `tauri.conf.json`,
+  `Cargo.toml`), date the CHANGELOG section, commit, push, then push
+  `v<version>` on that commit (`git tag -a v0.6.0 -m ...`); both
+  workflows build and publish the release. Then build and publish the
+  Mac zip, and deploy the site (its `scripts/app-releases.mjs` picks the
+  newest file per platform at each build).
+- **GitHub Actions only where it's free and unlimited** (Coupler's rule,
+  2026-10-06): GitHub bills nothing for a **public** repository on
+  **standard GitHub-hosted runners** (`ubuntu-*`, `windows-*`,
+  `macos-*` by their plain labels), artifacts and caches included. So:
+  never a larger runner (any label with cores, `-large`, `-xlarge`, GPU,
+  or an organization's runner group: billed even in public
+  repositories) nor a self-hosted one; no paid marketplace action or
+  outside service; the cache stays at the free 10 GB default. If the
+  repository ever goes private, the workflows stop first. A new workflow
+  or runner label is checked against GitHub's Actions billing page
+  before it lands.
 - **Track platform parity** in `docs/platform-parity.md` whenever a
   feature uses a platform-specific mechanism. Build the macOS and Linux
-  sides together where you can, and don't implement the Windows side
-  early.
+  sides together where you can, and the Windows side when it's cheap
+  (rule 7).
 - Dev server port is **1430**, kept in sync between `vite.config.ts` and
   `tauri.conf.json`'s `devUrl`.
 - UI follows the shared ansiapps design system: same tokens, with
@@ -724,18 +773,21 @@ gitignored `CLAUDE.local.md`, never in committed files.
   run with a real Developer ID, so the first signed build must be
   checked: that notarization accepts it, and that DOSBox, FS-UAE and
   Basilisk II all launch from the signed app under the hardened runtime
-  (Basilisk II's entitlements are a guess, since upstream's is ad hoc).
+  (Basilisk II's entitlements are a guess, since upstream's is ad hoc),
+  on Apple Silicon and on Intel. Windows installers are unsigned
+  (Authenticode would stop SmartScreen's warning).
+- Windows, beyond the beta: Basilisk II for Windows (a job in
+  `basilisk.yml`), old-media pickup, the Diskette handoff,
+  single-instance forwarding, and checking the beta on a real Windows
+  desktop (CI only builds and unit-tests it).
 - Auto-opening a Mac app (alias in the startup disk's Startup Items) or
   an Amiga folder app (`user-startup`). Today the guest boots and the
   user opens the app.
 - SheepShaver for PowerPC-only Mac apps (Mac OS 8.5 to 9.0.4).
-- Windows: Mac fork handling, FS-UAE paths, Basilisk II detection
-  (`docs/platform-parity.md`).
 - Linux, still to do: the old-media
   watcher (udev and a polkit prompt), the Diskette handoff, files opened
   from the desktop (`.desktop` MIME types plus single-instance
   forwarding), and checking udisks disc mounting on a real desktop.
-- A universal (arm64 + x86-64) build: the FS-UAE fetch is per-arch.
 - More known-good hashes as users report copies that aren't listed (the
   IIci's single-file ROM dump, for one). `known_files.rs` is generated:
   edit `scripts/update-known-hashes.py` and run it, never the `.rs`.

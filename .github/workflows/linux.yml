@@ -1,0 +1,129 @@
+# Builds Floppy for Linux: the .deb and the .rpm, after the unit tests and
+# the frontend's type check, uploaded as the run's artifact with the
+# bundled emulators' GPL source, and published to a release
+# (scripts/publish-release.sh), which ansiapps.com links to. By hand
+# (Actions -> Linux build -> Run workflow), on a version tag, and on a
+# change to this file. Ubuntu 22.04, so the packages run on its glibc and
+# newer.
+# No AppImage: it would carry WebKitGTK and GTK (LGPL) inside, and each
+# release would then have to offer their source too. The .deb and .rpm
+# use the system's own.
+# Standard GitHub-hosted runners only, in this public repository, so it
+# stays free and unlimited (CLAUDE.md, "GitHub Actions only where it's
+# free and unlimited").
+name: Linux build
+
+on:
+  workflow_dispatch:
+  push:
+    # Path filters don't apply to tags: every v* tag builds.
+    branches: ["**"]
+    tags: ["v*"]
+    paths: [".github/workflows/linux.yml"]
+  pull_request:
+    paths: [".github/workflows/linux.yml"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      # Tauri's system libraries (CLAUDE.md, Testing), and rpm for the .rpm.
+      - name: Install system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev \
+            libayatana-appindicator3-dev librsvg2-dev libsoup-3.0-dev \
+            libssl-dev libxdo-dev patchelf rpm
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - run: npm ci
+
+      # The pinned Linux x86-64 emulators, each checked against its SHA-256.
+      - run: scripts/fetch-dosbox.sh
+      - run: scripts/fetch-fs-uae.sh
+      - run: scripts/fetch-basilisk.sh
+
+      - run: cargo test --manifest-path src-tauri/Cargo.toml
+      - run: npx tsc --noEmit
+
+      # The script remaps rustc's paths; these do the same for C code a
+      # crate compiles in (its __FILE__).
+      - name: Remap C source paths
+        run: |
+          echo "CFLAGS=-ffile-prefix-map=$HOME=~ -ffile-prefix-map=$GITHUB_WORKSPACE=." >> "$GITHUB_ENV"
+          echo "CXXFLAGS=-ffile-prefix-map=$HOME=~ -ffile-prefix-map=$GITHUB_WORKSPACE=." >> "$GITHUB_ENV"
+
+      # Remaps the runner's paths (and checks none is left), writes the
+      # licenses this build links, builds, and gathers the emulators'
+      # source and AROS-SOURCE.txt into bundle/source/.
+      - name: Build Linux packages
+        run: scripts/build-release.sh --bundles deb,rpm
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: floppy-linux
+          path: |
+            src-tauri/target/release/bundle/deb/*.deb
+            src-tauri/target/release/bundle/rpm/*.rpm
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: floppy-sources
+          path: src-tauri/target/release/bundle/source/*
+          if-no-files-found: error
+
+  # Every successful build on main or a v* tag goes to a release: the
+  # version's own, or the dev prerelease between versions
+  # (scripts/publish-release.sh says which). Not pull requests, nor other
+  # branches: they'd replace main's files.
+  publish:
+    needs: build
+    if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: publish-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: floppy-linux
+          path: dist
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: floppy-sources
+          path: sources
+
+      - name: Publish to a release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          shopt -s globstar
+          scripts/publish-release.sh --sources sources dist/**/*.deb dist/**/*.rpm
