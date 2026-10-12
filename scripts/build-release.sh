@@ -94,8 +94,13 @@ case "$(uname -s)" in
   Darwin) BUNDLES="$TARGET/bundle/macos" ;;
   *) BUNDLES="$TARGET/bundle/deb $TARGET/bundle/rpm $TARGET/bundle/appimage" ;;
 esac
+# The bundled emulators are skipped: they're third-party builds made on
+# other machines, never this one, and DOSBox Staging's and Basilisk II's
+# Linux builds do carry their own CI's /home/runner, which is this
+# machine's $HOME on a GitHub runner.
 # shellcheck disable=SC2086 # BUNDLES is a list of folders.
-LEAKS=$(grep -r -l -a -F "$HOME" "$TARGET/floppy" $BUNDLES 2>/dev/null || true)
+LEAKS=$(grep -r -l -a -F --exclude-dir=dosbox --exclude-dir=fs-uae --exclude-dir=basilisk \
+  "$HOME" "$TARGET/floppy" $BUNDLES 2>/dev/null || true)
 if [ -n "$LEAKS" ]; then
   echo "The build still contains $HOME in:" >&2
   echo "$LEAKS" >&2
