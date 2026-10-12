@@ -78,8 +78,17 @@ jobs:
       # Remaps the runner's paths (and checks none is left), writes the
       # licenses this build links, builds, and gathers the emulators'
       # source and AROS-SOURCE.txt into bundle/source/.
+      # On failure, the last lines become the run's annotation, which
+      # anyone can read without signing in (the log needs an account).
       - name: Build Linux packages
-        run: scripts/build-release.sh --bundles deb,rpm
+        run: |
+          set -o pipefail
+          scripts/build-release.sh --bundles deb,rpm 2>&1 | tee "$RUNNER_TEMP/build.log" || {
+            status=$?
+            tail -n 30 "$RUNNER_TEMP/build.log" | sed 's/%/%25/g' | awk 'BEGIN { ORS = "%0A" } { print }' | sed 's/^/::error title=Linux build::/'
+            echo
+            exit $status
+          }
 
       - uses: actions/upload-artifact@v7
         with:
