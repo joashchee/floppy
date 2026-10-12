@@ -6,6 +6,15 @@ All notable changes to Floppy are recorded here. Format loosely follows
 Update this file whenever a change lands. A short bullet is enough, dated
 against the day the change was made.
 
+## 0.6.1 (2026-10-12)
+
+- **Linux packages build on GitHub Actions** (2026-10-12): the release
+  build's `$HOME` leak check now skips the bundled emulators. DOSBox
+  Staging's and Basilisk II's Linux builds carry their own CI's
+  `/home/runner`, which is the build machine's `$HOME` on a GitHub
+  runner, so 0.6.0 shipped for Windows only. A failed Linux build now
+  shows its last lines as annotations, readable without signing in.
+
 ## 0.6.0 (2026-10-12)
 
 - **Public betas for macOS, Windows and Linux** (2026-10-12), published
