@@ -27,9 +27,23 @@ lists.
   telemetry found; network calls are fixed-URL and opt-in except the
   update check; `cargo audit` clean on a 2 Oct advisory DB; emulation
   core, `unsafe` blocks and binary-vs-source match NOT audited.
-  Built-in Windows itself is untested. Fallbacks if it fails: 86Box or DOSBox-X with a
-  user-supplied Win9x image (a new `cd::SLOTS` entry). Detail:
-  `docs/emulators.md`.
+  Built-in Windows results (2026-11-25, logs in the gitignored `win9x/`):
+  Windows Media Player 6.4 opens its windows, then quits by itself when
+  `CoCreateInstance` for its ActiveMovie control returns 0x80040154 (class
+  not registered): COM-based apps are out of reach for now. Winamp 2.95's
+  installer runs and installs; `winamp.exe` starts, then ends with exit
+  code FF because a plugin calls `KERNEL32.GetPrivateProfileStructA`,
+  which the built-in Windows lacks (also missing: `wmaudsdk.dll`,
+  `RichEd20.dll`). With only `IN_MP3`, `IN_WAVE` and `OUT_WAVE` left in
+  `PLUGINS`, `winamp.exe` runs (confirmed by the maintainer, 2026-11-25):
+  plain Win32 apps are viable. Next: play `DEMO.MP3` and note whether
+  sound reaches the Mac, put the parked plugins back one at a time to
+  name the one that needs `GetPrivateProfileStructA`, then try FruityLoops
+  or Buzz and a Win9x app that opens an obsolete format (Word Pro,
+  Publisher); an upstream issue is drafted, not posted (the maintainer
+  decides). Fallbacks if it
+  fails: 86Box or DOSBox-X with a user-supplied Win9x image (a new
+  `cd::SLOTS` entry). Detail: `docs/emulators.md`.
 - [ ] [L] If the spike passes: add the `win9x` guest (fetch script with
   pinned hashes, launch config, `docs/emulators.md` entry, platform-parity
   row, handler rows marked Win9x). Blocked on the spike.
