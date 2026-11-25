@@ -36,8 +36,9 @@ lists.
   which the built-in Windows lacks (also missing: `wmaudsdk.dll`,
   `RichEd20.dll`). With only `IN_MP3`, `IN_WAVE` and `OUT_WAVE` left in
   `PLUGINS`, `winamp.exe` runs (confirmed by the maintainer, 2026-11-25):
-  plain Win32 apps are viable. Next: play `DEMO.MP3` and note whether
-  sound reaches the Mac, put the parked plugins back one at a time to
+  plain Win32 apps are viable, and `DEMO.MP3` plays through the Mac's
+  speakers (confirmed by the maintainer, 2026-11-25). Next: put the
+  parked plugins back one at a time to
   name the one that needs `GetPrivateProfileStructA`, then try FruityLoops
   or Buzz and a Win9x app that opens an obsolete format (Word Pro,
   Publisher); an upstream issue is drafted, not posted (the maintainer
