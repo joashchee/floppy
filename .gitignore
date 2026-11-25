@@ -28,3 +28,6 @@ yarn-error.log*
 # Signing keys (examples/ai-pack-key.rs): the Floppy AI pack key's secret
 # never enters a repo.
 *.key
+
+# Guest software for the Win9x spike: never committed (rule 3)
+/win9x/

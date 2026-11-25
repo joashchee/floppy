@@ -20,8 +20,14 @@ lists.
   zips are thin arm64/x86_64 and ad hoc signed (needs `lipo` merge plus
   hardened-runtime signing, as FS-UAE), and it writes
   `~/Library/Application Support/rust-dos/run-lock/` even with
-  `--no-config` (redirect `HOME` to stay within rule 6). Built-in Windows
-  itself is untested. Fallbacks if it fails: 86Box or DOSBox-X with a
+  `--no-config` (redirect `HOME` to stay within rule 6). Rule 4: even with
+  `--no-config` it asks rust-dos.com for a newer version at startup; a
+  config with `version_check=never` stops it (set up in the gitignored
+  `win9x/`). Targeted source audit of v1.9.3 (2026-11-25): no malicious code or
+  telemetry found; network calls are fixed-URL and opt-in except the
+  update check; `cargo audit` clean on a 2 Oct advisory DB; emulation
+  core, `unsafe` blocks and binary-vs-source match NOT audited.
+  Built-in Windows itself is untested. Fallbacks if it fails: 86Box or DOSBox-X with a
   user-supplied Win9x image (a new `cd::SLOTS` entry). Detail:
   `docs/emulators.md`.
 - [ ] [L] If the spike passes: add the `win9x` guest (fetch script with
