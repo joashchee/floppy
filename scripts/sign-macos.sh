@@ -13,8 +13,9 @@
 #                        with them). "-" signs ad hoc, for testing the
 #                        script without an Apple account (no notarizing).
 # FLOPPY_NOTARY_PROFILE  notarytool keychain profile (default
-#                        floppy-notary), made once with
-#                        `xcrun notarytool store-credentials floppy-notary
+#                        scorelessmusic, shared by every Scoreless Music
+#                        app), made once with
+#                        `xcrun notarytool store-credentials scorelessmusic
 #                        --apple-id … --team-id …`. FLOPPY_NOTARIZE=0 skips
 #                        notarizing.
 #
@@ -26,7 +27,7 @@ set -eu
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 APP=${1:-"$ROOT/src-tauri/target/universal-apple-darwin/release/bundle/macos/Floppy.app"}
 IDENTITY=${FLOPPY_SIGN_IDENTITY:-}
-PROFILE=${FLOPPY_NOTARY_PROFILE:-floppy-notary}
+PROFILE=${FLOPPY_NOTARY_PROFILE:-scorelessmusic}
 ENTS="$ROOT/src-tauri/macos"
 RES="$APP/Contents/Resources"
 # The bundle folder the app is in (bundle/macos/..), which holds dmg/.

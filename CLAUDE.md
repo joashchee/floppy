@@ -612,8 +612,8 @@ gitignored `CLAUDE.local.md`, never in committed files.
   FS-UAE and Basilisk II `allow-unsigned-executable-memory`), then
   Floppy.app, and notarizes and staples both the app and the DMG
   (notarytool keychain profile `FLOPPY_NOTARY_PROFILE`, default
-  `floppy-notary`; another ansiapps app's profile for the same Apple
-  account works too), so they open offline. `FLOPPY_SIGN_IDENTITY=-` signs
+  `scorelessmusic`, shared by every Scoreless Music app), so they open
+  offline. `FLOPPY_SIGN_IDENTITY=-` signs
   ad hoc without the runtime, to test the script without an Apple
   account (checked 2026-09-29: `codesign --verify --deep --strict`
   passes and all three emulators start). Not yet run with a real

@@ -28,12 +28,12 @@
 #   1. A "Developer ID Application" certificate in the login keychain.
 #      Found by itself; with more than one, name it in
 #      FLOPPY_SIGN_IDENTITY.
-#   2. notarytool's credentials in the keychain, under a profile:
-#        xcrun notarytool store-credentials floppy-notary \
+#   2. notarytool's credentials in the keychain, under the profile every
+#      Scoreless Music app shares:
+#        xcrun notarytool store-credentials scorelessmusic \
 #          --apple-id you@example.com --team-id TEAMID
 #      (it asks for an app-specific password from account.apple.com).
-#      Another profile, e.g. one another ansiapps app already made for
-#      the same Apple account: FLOPPY_NOTARY_PROFILE.
+#      Another profile name: FLOPPY_NOTARY_PROFILE.
 # FLOPPY_UNSIGNED=1 builds without them (ad hoc, not notarized, no zip):
 # for trying the build only, never for a release, as Gatekeeper blocks it
 # on any other Mac. No Apple credential is ever in the repo or the
@@ -46,7 +46,7 @@ cd "$ROOT"
 TARGET="$ROOT/src-tauri/target/release"
 if [ "$(uname -s)" = Darwin ]; then
   TARGET="$ROOT/src-tauri/target/universal-apple-darwin/release"
-  PROFILE=${FLOPPY_NOTARY_PROFILE:-floppy-notary}
+  PROFILE=${FLOPPY_NOTARY_PROFILE:-scorelessmusic}
   # The signing identity and notarytool profile, checked before the long
   # build.
   if [ -n "${FLOPPY_UNSIGNED:-}" ]; then
@@ -137,8 +137,9 @@ fi
 "$ROOT/scripts/fetch-sources.sh" "$TARGET/bundle/source"
 
 # Install the new build for everyday use (macOS; on Linux, install the
-# package the usual way).
+# package the usual way). Skipped on CI, or with FLOPPY_NO_INSTALL=1.
 [ "$(uname -s)" = Darwin ] || exit 0
+[ -z "${CI:-}" ] && [ -z "${FLOPPY_NO_INSTALL:-}" ] || exit 0
 APPS="$HOME/Applications"
 mkdir -p "$APPS"
 rm -rf "$APPS/Floppy.app"
