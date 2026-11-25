@@ -6,6 +6,15 @@ All notable changes to Floppy are recorded here. Format loosely follows
 Update this file whenever a change lands. A short bullet is enough, dated
 against the day the change was made.
 
+## Unreleased
+
+- **Windows 9x research** (2026-11-25): `docs/app-handlers.md` gains a
+  "Windows 9x" section: candidate apps and legacy players still
+  downloadable. Research only, not read by Floppy.
+- **Roadmap started** (2026-11-25): `ROADMAP.md` lists the unfinished work
+  from `CLAUDE.md`'s "Not built yet", plus a rust-dos spike for running
+  Windows 9x-only handlers.
+
 ## 0.6.1 (2026-10-12)
 
 - **Linux packages build on GitHub Actions** (2026-10-12): the release

@@ -141,6 +141,65 @@ yet.
 | PageStream | `PageStream` | its own documents | believed |
 | MultiView | `MultiView` | IFF `ILBM` `8SVX` `FTXT`, AmigaGuide | believed (part of Workbench 3) |
 
+## Windows 9x (candidates, no guest yet)
+
+Floppy has no Windows 9x guest, so nothing here is in `HANDLERS` and
+Floppy doesn't read this section: it's research for the rust-dos spike
+(`ROADMAP.md`). These are 32-bit (or 16-bit) Windows 95/98-era apps that
+open formats the DOS, Mac and Amiga apps above don't. "Win9x-only" here
+means no DOS or Mac OS build of that version exists; none is blocked from
+Windows NT/2000 by anything but its installer, so *9x-era* is the honest
+label. Researched 2026-11-25 from search results only: platform and
+extension facts come from the source named, everything else is *believed*.
+Floppy never downloads or ships any of it (rule 3).
+
+### Apps
+
+| App | Opens | Platform | Confidence | Source |
+|---|---|---|---|---|
+| Lotus Word Pro 97 | `.LWP` (Ami Pro's successor, also reads `.SAM`) | Win95, NT 4 | verified (platform, `.LWP`) | [PRONOM fmt/340](https://www.nationalarchives.gov.uk/PRONOM/fmt/340), [WinWorld: Word Pro 97](https://winworldpc.com/product/lotus-word-pro/97) |
+| Lotus Freelance Graphics 97 | `.PRZ` | Win95, NT 4 | verified (platform), believed (`.PRZ` version) | [Wikipedia: SmartSuite](https://www.wikipedia.org/wiki/Smartsuite), [WinWorld: SmartSuite 97](https://winworldpc.com/product/lotus-smartsuite/97) |
+| Lotus Approach 97 | `.APR` | Win95, NT 4 | verified | [PRONOM x-fmt/333](https://www.nationalarchives.gov.uk/PRONOM/x-fmt/333) |
+| Corel WordPerfect Suite 8 | `.WPD`, Quattro Pro `.QPW`, Presentations `.SHW` | Win95/NT | believed (formats), verified (it exists) | [WinWorld: WordPerfect 8.x](https://winworldpc.com/product/wordperfect/8x) |
+| Microsoft Publisher 97 | `.PUB` | Win95 | believed (`.PUB`), verified (Win95) | [Microsoft, 1996](https://news.microsoft.com/source/1996/09/09/best-selling-microsoft-publisher-program-now-brings-easy-web-publishing-to-small-businesses-and-home-users/) |
+| Paint Shop Pro 4/5 | `.PSP` and many bitmap formats | Win95/98 | believed (the source is weak) | [WinWorld: Paint Shop Pro 4.x](https://winworldpc.com/product/paint-shop-pro/4x) |
+| Micrografx Picture Publisher 5 to 8 | its own bitmap files (`.PP4`) | Windows | believed (extension) | [WinWorld: Picture Publisher 5.0](https://winworldpc.com/product/micrografx-picture-publisher/50) |
+| FruityLoops 1 to 3 | `.FLP` | Win9x | believed (`.FLP` and 1997 origin verified) | [Image-Line history](https://www.image-line.com/company-history) |
+| Jeskola Buzz | `.BMX` tracker songs | Win9x-era, freeware | believed (the old builds' platform) | [Wikipedia: Jeskola Buzz](https://wikipedia.com/wiki/Jeskola_buzz) |
+| Cakewalk Pro Audio | `.WRK` | Windows | believed (no source found) | |
+
+Not yet researched, worth a pass: Microsoft Access 97 (`.MDB`) and Works 4,
+Corel Draw 7 (`.CDR`), Adobe PageMaker 6.5 (`.PM6`), Macromedia Flash 3/4
+(`.FLA`) and Director, Sound Forge and ACID, Fractal Design Painter.
+
+### Players still available for download
+
+Where each can be had legally (or from a long-standing archive). Floppy
+points at these like "Where Floppy points you" does, and downloads
+nothing. Verify hashes: several are third-party mirrors.
+
+| Player | Plays | Win9x status | Where | Confidence |
+|---|---|---|---|---|
+| Windows Media Player 6.4 | `.ASF`, `.WMA`, `.AVI`, `.MPG`, `.MID` | Win95, 98, NT 4 | [Microsoft's archived page](https://msdn.microsoft.com/en-us/bb676150.aspx) (`Mpie4ful.exe`, about 2.3 MB) | verified |
+| Winamp 2.95 | `.MP3`, `.MOD`, `.XM`, `.IT` and plug-ins | runs on Win9x (last official 9x line is 5.35 per a forum claim) | archive.org copies of nullsoft.com ([VOGONS](https://www.vogons.org/viewtopic.php?p=330687)); has known code-execution holes ([Hydrogenaudio](https://hydrogenaudio.org/index.php?msg=904231)) | believed |
+| MusicMatch Jukebox 1.0 to 10 | `.MP3`, `.WMA` | Win9x for the early builds | [OldVersion.com](https://www.oldversion.com/windows/musicmatch-jukebox/) (1.0 lists an MD5) | believed |
+| VLC 0.8.6i | most video and audio | the last line for Win95/98/ME; needs MSLU (unicows) | [VLC's Windows page](https://videolan.org/vlc/download-windows.php) points to its archives, or KernelEx for newer ones ([VLC wiki](https://wiki.videolan.org/VLC_Features_OS)) | verified (status), the mirror's MD5 unchecked |
+| QuickTime 6.5.2 | `.MOV` | Win98/ME | an Apple support page named in 2006 ([Apple thread](https://discussions.apple.com/thread/620843)); may be gone, so try the Internet Archive | believed |
+| RealPlayer 5 and G2 | `.RM`, `.RA`, `.RAM` | Win95/NT (32-bit) and Win3.1/95 (16-bit) for 5.0 | RealNetworks' Real Legacy Software Archive, as of 2008 ([snapshot](https://webarchive.library.unt.edu/eot2008/20080921153913mp_/http:/forms.real.com/real/player/blackjack.html)); the old ones carried adware | believed |
+| XMPlay | modules, MP3 and more | 3.x on Win98 or later per Wikipedia; a Win95/98 fix exists for 4.0.0.1 | [un4seen.com](https://un4seen.com/xmplay.html) | believed |
+| foobar2000 0.8.3 | common audio | claimed the last for Win9x | [foobar2000's old versions](https://foobar2000.org/old) (does not list it) | unverified (one forum post) |
+
+Gaps: no source for Sonique (nothing found), and none says whether any
+of these players' installers run under rust-dos's built-in Windows.
+
+### What the spike needs
+
+The test set for `ROADMAP.md`'s rust-dos spike should be a few of the
+free ones above, since they need no purchase: Windows Media Player 6.4,
+Winamp 2.95, FruityLoops 3 or Jeskola Buzz, and VLC 0.8.6i. All are
+Win32, so they test rust-dos's built-in Windows (`--win32`) rather than
+its DOS side. The maintainer supplies the copies (rule 3).
+
 ## Known versions
 
 Handler versions known by their program's fingerprint: size in bytes and
@@ -270,6 +329,7 @@ WP.EXE
 
 | Date | What was checked | Result |
 |---|---|---|
+| 2026-11-25 | Windows 9x candidates and legacy players, by web search only (PRONOM, WinWorld, Microsoft, VOGONS, VLC wiki, Apple and OldVersion pages) | New "Windows 9x" section. Apps mostly *believed*; WMP 6.4 and VLC 0.8.6i's status verified. Not read by Floppy. |
 | 2026-09-27 | Added version tracking: the Known versions table, and a Version column in Tested in Floppy | No versions known yet. They arrive with version 2 test reports, which carry fingerprints. |
 | 2026-09-26 | Mac type/creator codes (whitefiles.org list), Amiga IFF FORM registry (AmigaOS wiki), DOS program names (DOS Days, WPDOS, PCjs, Internet Archive, WinWorld), Quattro Pro and OctaMED formats | Table above. DOS programs for Word, Works, dBASE, Paradox, Deluxe Paint, PC Paintbrush, AutoCAD, Turbo Pascal and Quattro Pro, and most Amiga program names, are still *believed*. |
 
