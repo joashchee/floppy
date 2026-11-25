@@ -79,6 +79,7 @@ pub const HANDLERS: &[Handler] = &[
     dos("PC Paintbrush", &["PBRUSH.EXE"], &["PCX"]),
     dos("AutoCAD", &["ACAD.EXE"], &["DWG"]),
     dos("Turbo Pascal", &["TURBO.EXE"], &["PAS"]),
+    dos("NerdTracker II", &["NT2.EXE"], &["NED"]),
     mac("MacWrite", &["MacWrite"], "MACA", &["WORD"]),
     mac("MacWrite II", &["MacWrite II"], "MWII", &["MW2D"]),
     mac("MacPaint", &["MacPaint"], "MPNT", &["PNTG"]),
@@ -123,6 +124,10 @@ pub const HANDLERS: &[Handler] = &[
     amiga("Wordworth", &["Wordworth"], &[]),
     amiga("PageStream", &["PageStream"], &[]),
     amiga("MultiView", &["MultiView"], &["ILBM", "8SVX", "FTXT"]),
+    amiga("EaglePlayer", &["EaglePlayer"], &[]),
+    amiga("DeliTracker", &["DeliTracker"], &[]),
+    amiga("HippoPlayer", &["HiP"], &[]),
+    amiga("mdxplay", &["mdxplay"], &[]),
 ];
 
 /// The handler called `name`.

@@ -15,6 +15,13 @@ against the day the change was made.
   from `CLAUDE.md`'s "Not built yet", plus a rust-dos spike for running
   Windows 9x-only handlers.
 
+- **Music players as app handlers** (2026-10-15): EaglePlayer,
+  DeliTracker, HippoPlayer and mdxplay (Amiga) and NerdTracker II (DOS)
+  join the handlers list, for old music formats that today's players
+  mostly can't play. They reach the library through the wanted-apps list
+  and Import Apps Disc; opening Amiga music by its name prefix isn't
+  built yet.
+
 ## 0.6.1 (2026-10-12)
 
 - **Linux packages build on GitHub Actions** (2026-10-12): the release

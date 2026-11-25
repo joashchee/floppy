@@ -49,6 +49,7 @@ wanted-apps list asks for.
 | PC Paintbrush | `PBRUSH.EXE` | .PCX | believed | [WinWorld: PC Paintbrush IV](https://winworldpc.com/product/pc-paintbrush/iv-dos) |
 | AutoCAD | `ACAD.EXE` | .DWG | believed | |
 | Turbo Pascal | `TURBO.EXE` | .PAS | believed | |
+| NerdTracker II | `NT2.EXE` | .NED | verified (program) | [NerdTracker II source mirror](https://github.com/et1999cc/Nerdtracker-II) |
 
 A document whose extension several apps open (`.DOC`: WordPerfect and
 Word) is offered to each of them.
@@ -140,6 +141,10 @@ yet.
 | Wordworth | `Wordworth` | its own documents | believed |
 | PageStream | `PageStream` | its own documents | believed |
 | MultiView | `MultiView` | IFF `ILBM` `8SVX` `FTXT`, AmigaGuide | believed (part of Workbench 3) |
+| EaglePlayer | `EaglePlayer` | music in the formats its external players cover, by name prefix; with Wanted Team's players `FP.` (Future Player), `SDR.` (Synth Dream), `OSP.` (Synth Pack), `DNS.` (Dynamic Synthesizer), `BSS.` (Beathoven Synthesizer), `MK2.` (Mark II), `TME.`, `SPL.` (Sound Programming Language), Quartet | verified (players) ([Aminet: Eagleplayer](https://aminet.net/package/mus/play/Eagleplayer), [UADE eagleplayer.conf](https://gitlab.com/uade-music-player/uade/-/blob/master/eagleplayer.conf)) |
+| DeliTracker | `DeliTracker` | music by its players, by name prefix: `MK2.` (Mark II), `MSO.` (Medley), `TME.`, `MED.` | verified (players in 2.32) ([Aminet: DeliTracker232](https://aminet.net/package/mus/play/DeliTracker232)) |
+| HippoPlayer | `HiP` | modules, and by its players `MK2.`, `BSS.`, `MSO.`, `OSP.`, `FP.`, `TME.` | believed (program), verified (players) ([HippoPlayer](https://github.com/koobo/HippoPlayer)) |
+| mdxplay | `mdxplay` | X68000 `.MDX` music (with its `.PDX`), through AHI | believed (program) ([Aminet: mdxplay_68k](https://m68k.aminet.net/package/mus/play/mdxplay_68k)) |
 
 ## Windows 9x (candidates, no guest yet)
 
@@ -330,6 +335,7 @@ WP.EXE
 | Date | What was checked | Result |
 |---|---|---|
 | 2026-11-25 | Windows 9x candidates and legacy players, by web search only (PRONOM, WinWorld, Microsoft, VOGONS, VLC wiki, Apple and OldVersion pages) | New "Windows 9x" section. Apps mostly *believed*; WMP 6.4 and VLC 0.8.6i's status verified. Not read by Floppy. |
+| 2026-10-15 | Music players for formats today's players mostly don't cover: EaglePlayer's and DeliTracker's player lists, HippoPlayer's, mdxplay's (Aminet, UADE's eagleplayer.conf, HippoPlayer's source), NerdTracker II's program (its source mirror) | Rows above. Opening Amiga music by name prefix isn't built, so these reach Floppy through the wanted-apps list and Import Apps Disc. |
 | 2026-09-27 | Added version tracking: the Known versions table, and a Version column in Tested in Floppy | No versions known yet. They arrive with version 2 test reports, which carry fingerprints. |
 | 2026-09-26 | Mac type/creator codes (whitefiles.org list), Amiga IFF FORM registry (AmigaOS wiki), DOS program names (DOS Days, WPDOS, PCjs, Internet Archive, WinWorld), Quattro Pro and OctaMED formats | Table above. DOS programs for Word, Works, dBASE, Paradox, Deluxe Paint, PC Paintbrush, AutoCAD, Turbo Pascal and Quattro Pro, and most Amiga program names, are still *believed*. |
 
